@@ -1,0 +1,8 @@
+{
+  "recommendations": [
+    "eta.eta-vscode",
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode"
+  ],
+  "unwantedRecommendations": []
+}

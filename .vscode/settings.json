@@ -1,0 +1,14 @@
+{
+  "files.associations": {
+    "*.tsp": "html",
+    "*.jsp": "html"
+  },
+  "emmet.includeLanguages": {
+    "*.tsp": "html",
+    "*.jsp": "html"
+  },
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  "editor.tabSize": 2,
+  "editor.formatOnSave": false
+}
