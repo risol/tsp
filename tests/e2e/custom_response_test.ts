@@ -5,11 +5,16 @@
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
 
+const TEST_ROOT = "./tests/tmp";
+const TEST_PORT = 9105;
+
+// 确保测试目录存在
+async function ensureTestDir() {
+  await Deno.mkdir(TEST_ROOT, { recursive: true });
+}
+
 // 启动测试服务器
 async function startTestServer() {
-  const port = 9105;
-  const root = "./www";
-
   const process = new Deno.Command("deno", {
     args: [
       "run",
@@ -17,9 +22,9 @@ async function startTestServer() {
       "--allow-read",
       "src/main.ts",
       "--root",
-      root,
+      TEST_ROOT,
       "--port",
-      port.toString(),
+      TEST_PORT.toString(),
     ],
     stdout: "piped",
     stderr: "piped",
@@ -30,16 +35,15 @@ async function startTestServer() {
   // 等待服务器启动
   await new Promise((resolve) => setTimeout(resolve, 2000));
 
-  return { child, port };
+  return { child, port: TEST_PORT };
 }
 
 // 辅助函数：发送 HTTP 请求
 async function makeRequest(
-  port: number,
   path: string,
   options: RequestInit = {}
 ): Promise<Response> {
-  const url = `http://localhost:${port}${path}`;
+  const url = `http://localhost:${TEST_PORT}${path}`;
   return await fetch(url, options);
 }
 
@@ -56,15 +60,16 @@ async function cleanup(child: Deno.ChildProcess) {
 }
 
 Deno.test("E2E: 自定义 Response 对象 - JSON API", async (t) => {
+  await ensureTestDir();
   const { child, port } = await startTestServer();
 
   try {
     // 创建一个返回 JSON 的页面
-    const apiPagePath = "./www/json-api.tsx";
+    const apiPagePath = `${TEST_ROOT}/json-api.tsx`;
     await Deno.writeTextFile(
       apiPagePath,
       `
-      import type { PageContext } from "../src/cache.ts";
+      import type { PageContext } from "../../src/cache.ts";
 
       export default async function (context: PageContext) {
         const { method } = context;
@@ -89,7 +94,7 @@ Deno.test("E2E: 自定义 Response 对象 - JSON API", async (t) => {
 
     try {
       await t.step("应该返回 JSON 响应", async () => {
-        const response = await makeRequest(port, "/json-api");
+        const response = await makeRequest("/json-api");
         assertEquals(response.status, 200);
         const contentType = response.headers.get("content-type");
         assertEquals(contentType, "application/json");
@@ -100,7 +105,7 @@ Deno.test("E2E: 自定义 Response 对象 - JSON API", async (t) => {
       });
 
       await t.step("应该返回正确的 Content-Type", async () => {
-        const response = await makeRequest(port, "/json-api");
+        const response = await makeRequest("/json-api");
         const contentType = response.headers.get("content-type");
         assertEquals(contentType?.includes("application/json"), true);
         // 消费响应体
@@ -115,14 +120,15 @@ Deno.test("E2E: 自定义 Response 对象 - JSON API", async (t) => {
 });
 
 Deno.test("E2E: 自定义 Response 对象 - 不同的状态码", async (t) => {
+  await ensureTestDir();
   const { child, port } = await startTestServer();
 
   try {
-    const statusPagePath = "./www/status-test.tsx";
+    const statusPagePath = `${TEST_ROOT}/status-test.tsx`;
     await Deno.writeTextFile(
       statusPagePath,
       `
-      import type { PageContext } from "../src/cache.ts";
+      import type { PageContext } from "../../src/cache.ts";
 
       export default async function (context: PageContext) {
         const { query } = context;
@@ -138,28 +144,28 @@ Deno.test("E2E: 自定义 Response 对象 - 不同的状态码", async (t) => {
 
     try {
       await t.step("应该支持 200 状态码", async () => {
-        const response = await makeRequest(port, "/status-test?status=200");
+        const response = await makeRequest("/status-test?status=200");
         assertEquals(response.status, 200);
         const text = await response.text();
         assertStringIncludes(text, "Status code: 200");
       });
 
       await t.step("应该支持 201 Created 状态码", async () => {
-        const response = await makeRequest(port, "/status-test?status=201");
+        const response = await makeRequest("/status-test?status=201");
         assertEquals(response.status, 201);
         // 消费响应体
         await response.text();
       });
 
       await t.step("应该支持 404 Not Found 状态码", async () => {
-        const response = await makeRequest(port, "/status-test?status=404");
+        const response = await makeRequest("/status-test?status=404");
         assertEquals(response.status, 404);
         // 消费响应体
         await response.text();
       });
 
       await t.step("应该支持自定义状态码", async () => {
-        const response = await makeRequest(port, "/status-test?status=418");
+        const response = await makeRequest("/status-test?status=418");
         assertEquals(response.status, 418); // I'm a teapot
         // 消费响应体
         await response.text();
@@ -173,14 +179,15 @@ Deno.test("E2E: 自定义 Response 对象 - 不同的状态码", async (t) => {
 });
 
 Deno.test("E2E: 自定义 Response 对象 - 自定义 Headers", async (t) => {
+  await ensureTestDir();
   const { child, port } = await startTestServer();
 
   try {
-    const headerPagePath = "./www/headers-test.tsx";
+    const headerPagePath = `${TEST_ROOT}/headers-test.tsx`;
     await Deno.writeTextFile(
       headerPagePath,
       `
-      import type { PageContext } from "../src/cache.ts";
+      import type { PageContext } from "../../src/cache.ts";
 
       export default async function (_context: PageContext) {
         return new Response("Headers test", {
@@ -198,7 +205,7 @@ Deno.test("E2E: 自定义 Response 对象 - 自定义 Headers", async (t) => {
 
     try {
       await t.step("应该包含自定义 header", async () => {
-        const response = await makeRequest(port, "/headers-test");
+        const response = await makeRequest("/headers-test");
         const customHeader = response.headers.get("x-custom-header");
         assertEquals(customHeader, "custom-value");
         // 消费响应体
@@ -206,7 +213,7 @@ Deno.test("E2E: 自定义 Response 对象 - 自定义 Headers", async (t) => {
       });
 
       await t.step("应该包含 Cache-Control header", async () => {
-        const response = await makeRequest(port, "/headers-test");
+        const response = await makeRequest("/headers-test");
         const cacheControl = response.headers.get("cache-control");
         assertEquals(cacheControl, "no-cache");
         // 消费响应体
@@ -214,7 +221,7 @@ Deno.test("E2E: 自定义 Response 对象 - 自定义 Headers", async (t) => {
       });
 
       await t.step("应该包含多个自定义 headers", async () => {
-        const response = await makeRequest(port, "/headers-test");
+        const response = await makeRequest("/headers-test");
         const customHeader = response.headers.get("x-custom-header");
         const requestId = response.headers.get("x-request-id");
         assertEquals(customHeader, "custom-value");
@@ -231,14 +238,15 @@ Deno.test("E2E: 自定义 Response 对象 - 自定义 Headers", async (t) => {
 });
 
 Deno.test("E2E: 自定义 Response 对象 - 不同内容类型", async (t) => {
+  await ensureTestDir();
   const { child, port } = await startTestServer();
 
   try {
-    const contentPagePath = "./www/content-test.tsx";
+    const contentPagePath = `${TEST_ROOT}/content-test.tsx`;
     await Deno.writeTextFile(
       contentPagePath,
       `
-      import type { PageContext } from "../src/cache.ts";
+      import type { PageContext } from "../../src/cache.ts";
 
       export default async function (context: PageContext) {
         const { query } = context;
@@ -281,7 +289,7 @@ Deno.test("E2E: 自定义 Response 对象 - 不同内容类型", async (t) => {
 
     try {
       await t.step("应该返回 JSON 内容", async () => {
-        const response = await makeRequest(port, "/content-test?type=json");
+        const response = await makeRequest("/content-test?type=json");
         assertEquals(response.status, 200);
         const contentType = response.headers.get("content-type");
         assertEquals(contentType, "application/json");
@@ -290,7 +298,7 @@ Deno.test("E2E: 自定义 Response 对象 - 不同内容类型", async (t) => {
       });
 
       await t.step("应该返回纯文本内容", async () => {
-        const response = await makeRequest(port, "/content-test?type=text");
+        const response = await makeRequest("/content-test?type=text");
         assertEquals(response.status, 200);
         const contentType = response.headers.get("content-type");
         assertEquals(contentType, "text/plain");
@@ -299,7 +307,7 @@ Deno.test("E2E: 自定义 Response 对象 - 不同内容类型", async (t) => {
       });
 
       await t.step("应该返回 XML 内容", async () => {
-        const response = await makeRequest(port, "/content-test?type=xml");
+        const response = await makeRequest("/content-test?type=xml");
         assertEquals(response.status, 200);
         const contentType = response.headers.get("content-type");
         assertEquals(contentType, "application/xml");
@@ -308,7 +316,7 @@ Deno.test("E2E: 自定义 Response 对象 - 不同内容类型", async (t) => {
       });
 
       await t.step("应该处理未知类型", async () => {
-        const response = await makeRequest(port, "/content-test?type=unknown");
+        const response = await makeRequest("/content-test?type=unknown");
         assertEquals(response.status, 400);
         // 消费响应体
         await response.text();
@@ -322,14 +330,15 @@ Deno.test("E2E: 自定义 Response 对象 - 不同内容类型", async (t) => {
 });
 
 Deno.test("E2E: 自定义 Response 对象 - 响应体", async (t) => {
+  await ensureTestDir();
   const { child, port } = await startTestServer();
 
   try {
-    const bodyPagePath = "./www/body-test.tsx";
+    const bodyPagePath = `${TEST_ROOT}/body-test.tsx`;
     await Deno.writeTextFile(
       bodyPagePath,
       `
-      import type { PageContext } from "../src/cache.ts";
+      import type { PageContext } from "../../src/cache.ts";
 
       export default async function (context: PageContext) {
         const { query } = context;
@@ -351,14 +360,14 @@ Deno.test("E2E: 自定义 Response 对象 - 响应体", async (t) => {
 
     try {
       await t.step("应该返回有内容的响应体", async () => {
-        const response = await makeRequest(port, "/body-test");
+        const response = await makeRequest("/body-test");
         assertEquals(response.status, 200);
         const text = await response.text();
         assertStringIncludes(text, "Response body content");
       });
 
       await t.step("应该支持空响应体 (204 No Content)", async () => {
-        const response = await makeRequest(port, "/body-test?empty=true");
+        const response = await makeRequest("/body-test?empty=true");
         assertEquals(response.status, 204);
         const text = await response.text();
         assertEquals(text, "");

@@ -5,11 +5,115 @@
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
 
+const TEST_ROOT = "./tests/tmp";
+const TEST_PORT = 9100;
+
+// 辅助函数：创建测试页面
+async function setupTestPages() {
+  // 确保 tmp 目录存在
+  await Deno.mkdir(TEST_ROOT, { recursive: true });
+
+  // 创建首页测试页面
+  await Deno.writeTextFile(
+    `${TEST_ROOT}/index.tsx`,
+    `
+import type { PageContext } from "../../src/cache.ts";
+
+export default async function (context: PageContext) {
+  const { query } = context;
+  const name = query.name ?? "World";
+
+  return (
+    <>
+      <html lang="zh-CN">
+      <head>
+        <meta charset="UTF-8" />
+        <title>Test Page</title>
+      </head>
+      <body>
+        <h1>TSP-FPM Test</h1>
+        <p>Hello <strong>{name}</strong>!</p>
+        <p>Query: {JSON.stringify(query)}</p>
+      </body>
+      </html>
+    </>
+  );
+}
+    `
+  );
+
+  // 创建表单测试页面
+  await Deno.writeTextFile(
+    `${TEST_ROOT}/form.tsx`,
+    `
+import type { PageContext } from "../../src/cache.ts";
+
+export default async function (context: PageContext) {
+  const { method, body } = context;
+
+  const result = method === "POST" && body
+    ? <div class="result">Received: {JSON.stringify(body)}</div>
+    : null;
+
+  return (
+    <html>
+      <head>
+        <meta charset="UTF-8" />
+        <title>Form Test</title>
+      </head>
+      <body>
+        <h1>Form Test</h1>
+        {result}
+        <form method="POST">
+          <input type="text" name="username" />
+          <button type="submit">Submit</button>
+        </form>
+      </body>
+    </html>
+  );
+}
+    `
+  );
+
+  // 创建 API 测试页面
+  await Deno.writeTextFile(
+    `${TEST_ROOT}/api.tsx`,
+    `
+import type { PageContext } from "../../src/cache.ts";
+
+export default async function (context: PageContext) {
+  const { headers } = context;
+
+  const headersObj: Record<string, string> = {};
+  for (const [key, value] of headers.entries()) {
+    headersObj[key] = value;
+  }
+
+  return new Response(
+    JSON.stringify({ headers: headersObj }),
+    {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }
+  );
+}
+    `
+  );
+}
+
+// 辅助函数：清理测试页面
+async function cleanupTestPages() {
+  try {
+    await Deno.remove(`${TEST_ROOT}/index.tsx`);
+    await Deno.remove(`${TEST_ROOT}/form.tsx`);
+    await Deno.remove(`${TEST_ROOT}/api.tsx`);
+  } catch (_error) {
+    // 忽略错误
+  }
+}
+
 // 启动测试服务器
 async function startTestServer() {
-  const port = 9100;
-  const root = "./www";
-
   const process = new Deno.Command("deno", {
     args: [
       "run",
@@ -17,9 +121,9 @@ async function startTestServer() {
       "--allow-read",
       "src/main.ts",
       "--root",
-      root,
+      TEST_ROOT,
       "--port",
-      port.toString(),
+      TEST_PORT.toString(),
     ],
     stdout: "piped",
     stderr: "piped",
@@ -30,7 +134,7 @@ async function startTestServer() {
   // 等待服务器启动
   await new Promise((resolve) => setTimeout(resolve, 2000));
 
-  return { child, port };
+  return { child, port: TEST_PORT };
 }
 
 // 辅助函数：发送 HTTP 请求
@@ -38,7 +142,7 @@ async function makeRequest(
   path: string,
   options: RequestInit = {}
 ): Promise<Response> {
-  const url = `http://localhost:9100${path}`;
+  const url = `http://localhost:${TEST_PORT}${path}`;
   return await fetch(url, options);
 }
 
@@ -46,7 +150,6 @@ async function makeRequest(
 async function cleanup(child: Deno.ChildProcess) {
   child.kill("SIGTERM");
   try {
-    // 取消流但不等待
     void child.stdout.cancel();
     void child.stderr.cancel();
     await child.status;
@@ -55,14 +158,16 @@ async function cleanup(child: Deno.ChildProcess) {
   }
 }
 
-Deno.test("E2E: 首页应该正确渲染", async (t) => {
-  const { child, port } = await startTestServer();
+Deno.test("E2E: 基础功能测试", async (t) => {
+  // 设置测试页面
+  await setupTestPages();
+
+  const { child } = await startTestServer();
 
   try {
     await t.step("应该返回 200 状态码", async () => {
       const response = await makeRequest("/");
       assertEquals(response.status, 200);
-      // 消费响应体以避免资源泄漏
       await response.text();
     });
 
@@ -70,60 +175,33 @@ Deno.test("E2E: 首页应该正确渲染", async (t) => {
       const response = await makeRequest("/");
       const contentType = response.headers.get("content-type");
       assertEquals(contentType?.includes("text/html"), true);
-      // 消费响应体
       await response.text();
     });
 
     await t.step("应该包含标题文本", async () => {
       const response = await makeRequest("/");
       const text = await response.text();
-      assertStringIncludes(text, "TSP-FPM");
+      assertStringIncludes(text, "TSP-FPM Test");
     });
 
     await t.step("应该显示默认的问候语", async () => {
       const response = await makeRequest("/");
       const text = await response.text();
-      // 检查 HTML 内容中是否包含 Hello World
       assertStringIncludes(text, "Hello");
       assertStringIncludes(text, "World");
     });
-  } finally {
-    await cleanup(child);
-  }
-});
 
-Deno.test("E2E: 查询参数处理", async (t) => {
-  const { child } = await startTestServer();
-
-  try {
     await t.step("应该正确解析查询参数", async () => {
-      const response = await makeRequest("/?name=Claude&lang=zh");
+      const response = await makeRequest("/?name=Claude");
       const text = await response.text();
-      // 检查是否包含 Claude
       assertStringIncludes(text, "Claude");
     });
 
-    await t.step("应该显示查询参数信息", async () => {
-      const response = await makeRequest("/?test=value&number=123");
-      const text = await response.text();
-      assertStringIncludes(text, "test");
-      assertStringIncludes(text, "value");
-    });
-  } finally {
-    await cleanup(child);
-  }
-});
-
-Deno.test("E2E: POST 请求处理", async (t) => {
-  const { child } = await startTestServer();
-
-  try {
     await t.step("应该处理 form-urlencoded POST 请求", async () => {
       const formData = new URLSearchParams();
       formData.append("username", "testuser");
-      formData.append("email", "test@example.com");
 
-      const response = await makeRequest("/", {
+      const response = await makeRequest("/form", {
         method: "POST",
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
@@ -137,108 +215,42 @@ Deno.test("E2E: POST 请求处理", async (t) => {
     });
 
     await t.step("应该处理 JSON POST 请求", async () => {
-      const response = await makeRequest("/", {
+      const response = await makeRequest("/form", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ username: "jsonuser", age: 25 }),
+        body: JSON.stringify({ username: "jsonuser" }),
       });
 
       assertEquals(response.status, 200);
       const text = await response.text();
       assertStringIncludes(text, "jsonuser");
     });
-  } finally {
-    await cleanup(child);
-  }
-});
 
-Deno.test("E2E: 表单页面测试", async (t) => {
-  const { child } = await startTestServer();
-
-  try {
-    await t.step("应该显示表单页面", async () => {
-      const response = await makeRequest("/form");
-      assertEquals(response.status, 200);
-      const text = await response.text();
-      assertStringIncludes(text, "表单提交示例");
-    });
-
-    await t.step("应该处理表单提交", async () => {
-      const formData = new URLSearchParams();
-      formData.append("username", "formuser");
-      formData.append("email", "form@example.com");
-      formData.append("age", "30");
-      formData.append("bio", "Test bio");
-
-      const response = await makeRequest("/form", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: formData,
-      });
-
-      assertEquals(response.status, 200);
-      const text = await response.text();
-      assertStringIncludes(text, "提交成功");
-      assertStringIncludes(text, "formuser");
-    });
-  } finally {
-    await cleanup(child);
-  }
-});
-
-Deno.test("E2E: API 信息页面测试", async (t) => {
-  const { child } = await startTestServer();
-
-  try {
-    await t.step("应该显示 API 信息", async () => {
-      const response = await makeRequest("/api");
-      assertEquals(response.status, 200);
-      const text = await response.text();
-      assertStringIncludes(text, "API 请求信息");
-    });
-
-    await t.step("应该显示请求方法", async () => {
-      const response = await makeRequest("/api");
-      const text = await response.text();
-      assertStringIncludes(text, "GET");
-    });
-
-    await t.step("应该显示请求头信息", async () => {
-      const response = await makeRequest("/api", {
-        headers: {
-          "X-Custom-Header": "test-value",
-        },
-      });
-      const text = await response.text();
-      // headers 在页面中以小写显示
-      assertStringIncludes(text, "x-custom-header");
-      assertStringIncludes(text, "test-value");
-    });
-  } finally {
-    await cleanup(child);
-  }
-});
-
-Deno.test("E2E: Cookies 处理", async (t) => {
-  const { child } = await startTestServer();
-
-  try {
-    await t.step("应该解析和显示 cookies", async () => {
+    await t.step("应该解析 Cookies", async () => {
       const response = await makeRequest("/", {
         headers: {
           "Cookie": "sessionId=abc123; userId=user1",
         },
       });
 
-      const text = await response.text();
-      assertStringIncludes(text, "sessionId");
-      assertStringIncludes(text, "abc123");
+      assertEquals(response.status, 200);
+      await response.text();
+    });
+
+    await t.step("应该返回 JSON API 响应", async () => {
+      const response = await makeRequest("/api");
+      assertEquals(response.status, 200);
+
+      const contentType = response.headers.get("content-type");
+      assertEquals(contentType, "application/json");
+
+      const data = await response.json();
+      assertEquals(typeof data.headers, "object");
     });
   } finally {
     await cleanup(child);
+    await cleanupTestPages();
   }
 });

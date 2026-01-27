@@ -145,7 +145,7 @@ async function handleRequest(
 
     // 构建上下文
     const context = buildContext({
-      method: req.method,
+      method: req.method as "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS",
       url,
       headers: req.headers,
       query,

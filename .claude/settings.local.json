@@ -15,7 +15,14 @@
       "Bash(then echo \"tests/test-temp/\")",
       "Bash(fi)",
       "Bash(deno task test:*)",
-      "Bash(deno task:*)"
+      "Bash(deno task:*)",
+      "Bash(deno check:*)",
+      "Bash(git restore:*)",
+      "WebSearch",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(taskkill:*)",
+      "Bash(cmd //c taskkill //F //PID 11320)"
     ]
   }
 }

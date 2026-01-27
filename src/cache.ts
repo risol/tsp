@@ -3,8 +3,14 @@
  * 实现基于文件修改时间的 TSX 模块缓存
  */
 
-import { join } from "std/path";
+import { join, toFileUrl } from "std/path";
 import { render } from "preact-render-to-string";
+import {
+  Workspace,
+  ResolutionMode,
+  type LoadResponse,
+  RequestedModuleType,
+} from "@deno/loader";
 import type { PageContext } from "./context.ts";
 
 // 重新导出 PageContext 类型，供页面使用
@@ -51,6 +57,17 @@ interface CacheEntry {
 // 模块缓存 Map
 const moduleCache = new Map<string, CacheEntry>();
 
+// 创建全局 loader 实例
+let globalLoader: Awaited<ReturnType<typeof Workspace.prototype.createLoader>> | null = null;
+
+async function getGlobalLoader() {
+  if (!globalLoader) {
+    const workspace = new Workspace();
+    globalLoader = await workspace.createLoader();
+  }
+  return globalLoader;
+}
+
 /**
  * 获取页面函数
  * 如果缓存有效则使用缓存，否则重新加载
@@ -72,9 +89,32 @@ export async function getPage(
     return cached.module;
   }
 
-  // 缓存无效或不存在，动态导入模块
-  const moduleUrl = `file://${join(Deno.cwd(), filepath)}`;
-  const module = await import(moduleUrl);
+  // 获取 loader
+  const loader = await getGlobalLoader();
+
+  // 将相对路径转换为绝对路径，然后转为 file URL
+  const absolutePath = join(Deno.cwd(), filepath);
+  const fileUrl = toFileUrl(absolutePath).href;
+
+  // 添加入口点
+  const diagnostics = await loader.addEntrypoints([fileUrl]);
+  if (diagnostics.length > 0) {
+    throw new Error(diagnostics[0].message);
+  }
+
+  // 加载模块
+  const response = await loader.load(fileUrl, RequestedModuleType.Default);
+
+  if (response.kind !== "module") {
+    throw new Error(`Failed to load module: ${filepath}`);
+  }
+
+  // 将 Uint8Array 转换为字符串
+  const code = new TextDecoder().decode(response.code);
+
+  // 使用 data URL 导入转译后的代码
+  const dataUrl = `data:application/javascript,${encodeURIComponent(code)}`;
+  const module = await import(dataUrl);
 
   // 检查模块是否导出默认函数
   if (typeof module.default !== 'function') {
@@ -87,7 +127,7 @@ export async function getPage(
     module: module.default as PageFunction,
   });
 
-  return module.default as ModuleFunction;
+  return module.default as PageFunction;
 }
 
 /**
@@ -111,7 +151,7 @@ export function getCacheSize(): number {
  * @returns HTML 字符串
  */
 export function renderJSX(jsx: JSXResult): string {
-  const html = render(jsx);
+  const html = render(jsx as unknown as Parameters<typeof render>[0]);
   // 添加 DOCTYPE 声明
   return "<!DOCTYPE html>\n" + html;
 }

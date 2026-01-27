@@ -1,6 +1,7 @@
 {
   "version": "5",
   "specifiers": {
+    "jsr:@deno/loader@~0.3.11": "0.3.11",
     "jsr:@std/assert@1": "1.0.17",
     "jsr:@std/cli@^1.0.25": "1.0.26",
     "jsr:@std/encoding@^1.0.10": "1.0.10",
@@ -18,6 +19,9 @@
     "npm:preact@10.25.4": "10.25.4"
   },
   "jsr": {
+    "@deno/loader@0.3.11": {
+      "integrity": "7c62f4f09cdfc34e66ba25b5a775a1830cbb5266b3e39f67b0f620c75484df8d"
+    },
     "@std/assert@1.0.17": {
       "integrity": "df5ebfffe77c03b3fa1401e11c762cc8f603d51021c56c4d15a8c7ab45e90dbe",
       "dependencies": [
@@ -104,6 +108,7 @@
   },
   "workspace": {
     "dependencies": [
+      "jsr:@deno/loader@~0.3.11",
       "jsr:@std/assert@1",
       "jsr:@std/path@1.0.0",
       "npm:preact-render-to-string@6.6.3",

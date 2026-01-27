@@ -3,13 +3,15 @@
     "dev": "deno run --watch --allow-net --allow-read src/main.ts",
     "start": "deno run --allow-net --allow-read src/main.ts",
     "test": "deno test --allow-net --allow-read --allow-run --allow-write tests/e2e/",
-    "test:basic": "deno test --allow-net --allow-read --allow-run tests/e2e/basic_test.ts",
-    "test:routing": "deno test --allow-net --allow-read --allow-run tests/e2e/routing_test.ts",
-    "test:redirect": "deno test --allow-net --allow-read --allow-run tests/e2e/redirect_test.ts",
+    "test:basic": "deno test --allow-net --allow-read --allow-run --allow-write tests/e2e/basic_test.ts",
+    "test:routing": "deno test --allow-net --allow-read --allow-run --allow-write tests/e2e/routing_test.ts",
+    "test:redirect": "deno test --allow-net --allow-read --allow-run --allow-write tests/e2e/redirect_test.ts",
     "test:error": "deno test --allow-net --allow-read --allow-run --allow-write tests/e2e/error_test.ts",
-    "test:custom": "deno test --allow-net --allow-read --allow-run --allow-write tests/e2e/custom_response_test.ts"
+    "test:custom": "deno test --allow-net --allow-read --allow-run --allow-write tests/e2e/custom_response_test.ts",
+    "test:compiled": "deno test --allow-net --allow-read --allow-run --allow-write tests/e2e/compiled_binary_test.ts"
   },
   "imports": {
+    "@deno/loader": "jsr:@deno/loader@^0.3.11",
     "@std/assert": "jsr:@std/assert@1",
     "std/path": "jsr:@std/path@1.0.0",
     "preact": "npm:preact@10.25.4",

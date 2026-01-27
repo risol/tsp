@@ -5,10 +5,11 @@
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
 
+const TEST_ROOT = "./tests/tmp";
+
 // 启动测试服务器
 async function startTestServer(devMode: boolean = false) {
   const port = devMode ? 9104 : 9103;
-  const root = "./www";
 
   const args = [
     "run",
@@ -16,7 +17,7 @@ async function startTestServer(devMode: boolean = false) {
     "--allow-read",
     "src/main.ts",
     "--root",
-    root,
+    TEST_ROOT,
     "--port",
     port.toString(),
   ];
@@ -37,6 +38,11 @@ async function startTestServer(devMode: boolean = false) {
   await new Promise((resolve) => setTimeout(resolve, 2000));
 
   return { child, port };
+}
+
+// 确保测试目录存在
+async function ensureTestDir() {
+  await Deno.mkdir(TEST_ROOT, { recursive: true });
 }
 
 // 辅助函数：发送 HTTP 请求
@@ -62,16 +68,17 @@ async function cleanup(child: Deno.ChildProcess) {
 }
 
 Deno.test("E2E: 生产模式错误处理", async (t) => {
+  await ensureTestDir();
   const { child, port } = await startTestServer(false);
 
   try {
     await t.step("服务器错误应该返回 500", async () => {
       // 创建一个会抛出错误的页面
-      const errorPagePath = "./www/error-test.tsx";
+      const errorPagePath = `${TEST_ROOT}/error-test.tsx`;
       await Deno.writeTextFile(
         errorPagePath,
         `
-        import type { PageContext } from "../src/cache.ts";
+        import type { PageContext } from "../../src/cache.ts";
         export default async function (_context: PageContext) {
           throw new Error("Test error");
         }
@@ -91,7 +98,7 @@ Deno.test("E2E: 生产模式错误处理", async (t) => {
       await Deno.writeTextFile(
         errorPagePath,
         `
-        import type { PageContext } from "../src/cache.ts";
+        import type { PageContext } from "../../src/cache.ts";
         export default async function (_context: PageContext) {
           throw new Error("Secret error details");
         }
@@ -114,7 +121,7 @@ Deno.test("E2E: 生产模式错误处理", async (t) => {
       await Deno.writeTextFile(
         errorPagePath,
         `
-        import type { PageContext } from "../src/cache.ts";
+        import type { PageContext } from "../../src/cache.ts";
         export default async function (_context: PageContext) {
           throw new Error("Any error");
         }
@@ -136,6 +143,7 @@ Deno.test("E2E: 生产模式错误处理", async (t) => {
 });
 
 Deno.test("E2E: 开发模式错误处理", async (t) => {
+  await ensureTestDir();
   const { child, port } = await startTestServer(true);
 
   try {
@@ -144,7 +152,7 @@ Deno.test("E2E: 开发模式错误处理", async (t) => {
       await Deno.writeTextFile(
         errorPagePath,
         `
-        import type { PageContext } from "../src/cache.ts";
+        import type { PageContext } from "../../src/cache.ts";
         export default async function (_context: PageContext) {
           throw new Error("Development error");
         }
@@ -164,7 +172,7 @@ Deno.test("E2E: 开发模式错误处理", async (t) => {
       await Deno.writeTextFile(
         errorPagePath,
         `
-        import type { PageContext } from "../src/cache.ts";
+        import type { PageContext } from "../../src/cache.ts";
         export default async function (_context: PageContext) {
           throw new Error("Detailed error message");
         }
@@ -187,7 +195,7 @@ Deno.test("E2E: 开发模式错误处理", async (t) => {
       await Deno.writeTextFile(
         errorPagePath,
         `
-        import type { PageContext } from "../src/cache.ts";
+        import type { PageContext } from "../../src/cache.ts";
         export default async function (_context: PageContext) {
           throw new Error("Stack trace test");
         }
@@ -209,6 +217,7 @@ Deno.test("E2E: 开发模式错误处理", async (t) => {
 });
 
 Deno.test("E2E: 模块加载错误", async (t) => {
+  await ensureTestDir();
   const { child, port } = await startTestServer(false);
 
   try {
@@ -217,7 +226,7 @@ Deno.test("E2E: 模块加载错误", async (t) => {
       await Deno.writeTextFile(
         errorPagePath,
         `
-        import type { PageContext } from "../src/cache.ts";
+        import type { PageContext } from "../../src/cache.ts";
         export default async function (_context: PageContext) {
           // 故意的语法错误
           const x = ;
@@ -241,7 +250,7 @@ Deno.test("E2E: 模块加载错误", async (t) => {
       await Deno.writeTextFile(
         errorPagePath,
         `
-        import type { PageContext } from "../src/cache.ts";
+        import type { PageContext } from "../../src/cache.ts";
         // 没有默认导出
         export const something = "test";
         `
@@ -260,7 +269,7 @@ Deno.test("E2E: 模块加载错误", async (t) => {
       await Deno.writeTextFile(
         errorPagePath,
         `
-        import type { PageContext } from "../src/cache.ts";
+        import type { PageContext } from "../../src/cache.ts";
         export default "not a function";
         `
       );
@@ -278,6 +287,7 @@ Deno.test("E2E: 模块加载错误", async (t) => {
 });
 
 Deno.test("E2E: 边缘情况测试", async (t) => {
+  await ensureTestDir();
   const { child, port } = await startTestServer(false);
 
   try {
@@ -319,6 +329,7 @@ Deno.test("E2E: 边缘情况测试", async (t) => {
 });
 
 Deno.test("E2E: HTTP 方法测试", async (t) => {
+  await ensureTestDir();
   const { child, port } = await startTestServer(false);
 
   try {
@@ -355,6 +366,7 @@ Deno.test("E2E: HTTP 方法测试", async (t) => {
 });
 
 Deno.test("E2E: 大文件和性能测试", async (t) => {
+  await ensureTestDir();
   const { child, port } = await startTestServer(false);
 
   try {
