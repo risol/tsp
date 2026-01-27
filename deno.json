@@ -1,18 +1,24 @@
 {
   "tasks": {
-    "dev": "deno run --watch --allow-net --allow-read src/main.ts",
-    "start": "deno run --allow-net --allow-read src/main.ts",
-    "test": "deno test --allow-net --allow-read --allow-run --allow-write tests/e2e/",
-    "test:basic": "deno test --allow-net --allow-read --allow-run --allow-write tests/e2e/basic_test.ts",
-    "test:routing": "deno test --allow-net --allow-read --allow-run --allow-write tests/e2e/routing_test.ts",
-    "test:redirect": "deno test --allow-net --allow-read --allow-run --allow-write tests/e2e/redirect_test.ts",
-    "test:error": "deno test --allow-net --allow-read --allow-run --allow-write tests/e2e/error_test.ts",
-    "test:custom": "deno test --allow-net --allow-read --allow-run --allow-write tests/e2e/custom_response_test.ts",
-    "test:compiled": "deno test --allow-net --allow-read --allow-run --allow-write tests/e2e/compiled_binary_test.ts"
+    "dev": "deno run --watch --allow-net --allow-read --allow-env src/main.ts --dev",
+    "start": "deno run --allow-net --allow-read --allow-env src/main.ts",
+    "compile": "deno compile --allow-net --allow-read --allow-env --output tsp-fpm src/main.ts",
+
+    "test": "deno run --allow-all tests/run_all_tests.ts",
+    "test:basic": "deno test --allow-net --allow-read tests/basic_test.ts",
+    "test:binary": "deno test --allow-all tests/binary_build_test.ts",
+    "test:all": "deno test --allow-all tests/",
+
+    "check": "deno check src/main.ts src/cache.ts src/context.ts src/router.ts",
+    "fmt": "deno fmt src/ www/ tests/",
+    "fmt:check": "deno fmt --check src/ www/ tests/",
+    "lint": "deno lint src/ www/ tests/",
+    "clean": "rm -rf tsp-fpm tsp-fpm.exe tests/tsp-fpm-test tests/tsp-fpm-test.exe"
   },
   "imports": {
     "@deno/loader": "jsr:@deno/loader@^0.3.11",
     "@std/assert": "jsr:@std/assert@1",
+    "@std/path": "jsr:@std/path@1.0.0",
     "std/path": "jsr:@std/path@1.0.0",
     "preact": "npm:preact@10.25.4",
     "preact-render-to-string": "npm:preact-render-to-string@6.6.3"

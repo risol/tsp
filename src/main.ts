@@ -101,8 +101,21 @@ async function handleRequest(
     // 安全检查
     const securityResult = await securityCheck(filepath, config.root);
     if (!securityResult.success) {
-      return new Response(securityResult.error, {
-        status: 403,
+      // 根据错误类型决定状态码
+      const error = securityResult.error || "";
+
+      // 文件不存在 → 404
+      // 权限拒绝 → 403
+      // 其他错误 → 500
+      let status = 500;
+      if (error.includes("File not found") || error.includes("not found") || error.includes("Directory index")) {
+        status = 404;
+      } else if (error.includes("Access denied") || error.includes("File type not allowed")) {
+        status = 403;
+      }
+
+      return new Response(error, {
+        status,
         headers: { "Content-Type": "text/plain; charset=utf-8" },
       });
     }
@@ -161,20 +174,25 @@ async function handleRequest(
 
     // 检查是否是重定向对象
     if (result && typeof result === "object" && "redirect" in result) {
-      const redirectResult = result as RedirectResult;
-      const targetUrl = redirectResult.redirect;
-      const status = redirectResult.status ?? 302;
+      // 更严格地检查：确保不是 VNode
+      const isVNode = "type" in result || "props" in result || "__k" in result || "__" in result;
 
-      // 验证重定向状态码
-      const validStatuses = [301, 302, 303, 307, 308];
-      const finalStatus = validStatuses.includes(status) ? status : 302;
+      if (!isVNode) {
+        const redirectResult = result as RedirectResult;
+        const targetUrl = redirectResult.redirect;
+        const status = redirectResult.status ?? 302;
 
-      return new Response(null, {
-        status: finalStatus,
-        headers: {
-          "Location": targetUrl,
-        },
-      });
+        // 验证重定向状态码
+        const validStatuses = [301, 302, 303, 307, 308];
+        const finalStatus = validStatuses.includes(status) ? status : 302;
+
+        return new Response(null, {
+          status: finalStatus,
+          headers: {
+            "Location": targetUrl,
+          },
+        });
+      }
     }
 
     // 检查是否是 Response 对象（直接返回）

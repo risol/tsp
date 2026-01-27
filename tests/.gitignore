@@ -1,0 +1,7 @@
+# 测试生成的二进制文件
+tsp-fpm-test
+tsp-fpm-test.exe
+
+# 测试输出
+*.log
+test-output/
