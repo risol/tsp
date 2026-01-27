@@ -61,11 +61,9 @@ const moduleCache = new Map<string, CacheEntry>();
 let globalLoader: Awaited<ReturnType<typeof Workspace.prototype.createLoader>> | null = null;
 
 async function getGlobalLoader() {
-  if (!globalLoader) {
-    const workspace = new Workspace();
-    globalLoader = await workspace.createLoader();
-  }
-  return globalLoader;
+  // 总是创建新的 loader 实例，避免内部缓存问题
+  const workspace = new Workspace();
+  return await workspace.createLoader();
 }
 
 /**
@@ -86,8 +84,13 @@ export async function getPage(
 
   if (cached && cached.mtimeMs === currentMtimeMs) {
     // 缓存有效，使用缓存的模块
+    console.log(`[CACHE HIT] ${filepath} (mtime: ${currentMtimeMs})`);
     return cached.module;
   }
+
+  // 缓存失效，重新加载
+  console.log(`[CACHE MISS] ${filepath} (old: ${cached?.mtimeMs || 'none'}, new: ${currentMtimeMs})`);
+
 
   // 获取 loader
   const loader = await getGlobalLoader();

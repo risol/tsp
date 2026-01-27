@@ -202,9 +202,22 @@ async function handleRequest(
 
     // 默认：渲染 JSX 为 HTML
     const html = renderJSX(result);
+
+    // 设置响应头
+    const headers: HeadersInit = {
+      "Content-Type": "text/html; charset=utf-8",
+    };
+
+    // 开发模式：禁用浏览器缓存
+    if (config.dev) {
+      headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+      headers["Pragma"] = "no-cache";
+      headers["Expires"] = "0";
+    }
+
     return new Response(html, {
       status: 200,
-      headers: { "Content-Type": "text/html; charset=utf-8" },
+      headers,
     });
   } catch (error) {
     // 错误处理
