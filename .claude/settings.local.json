@@ -8,7 +8,9 @@
       "Bash(./tsp-fpm.exe:*)",
       "Bash(curl:*)",
       "Bash(timeout:*)",
-      "Bash(dir D:GitHubtspwww)"
+      "Bash(dir D:GitHubtspwww)",
+      "Bash(git -C:*)",
+      "Bash(done)"
     ]
   }
 }

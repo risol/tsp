@@ -5,45 +5,61 @@
 
 import { join } from "std/path";
 import { render } from "preact-render-to-string";
+import type { PageContext } from "./context.ts";
 
-// 上下文类型（从 context.ts 导入）
-export interface TemplateContext {
-  method: string;
-  url: URL;
-  headers: Headers;
-  query: Record<string, string>;
-  body: unknown;
-  cookies: Record<string, string>;
-  file: string;
-  root: string;
-}
+// 重新导出 PageContext 类型，供页面使用
+export type { PageContext };
 
 // JSX 返回类型
 export type JSXResult = unknown;
 
-// 模块函数类型
-export type ModuleFunction = (
-  context: TemplateContext
-) => Promise<JSXResult> | JSXResult;
+/**
+ * 页面返回值类型
+ * 可以是 JSX 元素、重定向对象或 Response 对象
+ */
+export type PageResult = unknown;
+
+/**
+ * 重定向结果
+ * 页面返回此对象将触发 HTTP 重定向
+ */
+export interface RedirectResult {
+  /** 重定向的目标 URL */
+  redirect: string;
+  /** 重定向状态码，默认 302 */
+  status?: 301 | 302 | 303 | 307 | 308;
+}
+
+/**
+ * 页面函数类型
+ * 每个 TSX 页面应该导出符合此类型的默认函数
+ * 返回值可以是：
+ * - JSX 元素：渲染为 HTML
+ * - RedirectResult 对象：触发重定向
+ * - Response 对象：直接返回
+ */
+export type PageFunction = (
+  context: PageContext
+) => Promise<PageResult> | PageResult;
 
 // 缓存条目类型
 interface CacheEntry {
   mtimeMs: number;
-  module: ModuleFunction;
+  module: PageFunction;
 }
 
 // 模块缓存 Map
 const moduleCache = new Map<string, CacheEntry>();
 
 /**
- * 获取模块函数
+ * 获取页面函数
  * 如果缓存有效则使用缓存，否则重新加载
- * @param filepath 模块文件路径
- * @returns 模块函数
+ * @param filepath 页面文件路径
+ * @returns 页面函数
  */
-export async function getTemplate(
+export async function getPage(
   filepath: string
-): Promise<ModuleFunction> {
+): Promise<PageFunction> {
   // 获取文件修改时间
   const stat = await Deno.stat(filepath);
   const currentMtimeMs = stat.mtime?.getTime() || 0;
@@ -68,7 +84,7 @@ export async function getTemplate(
   // 更新缓存
   moduleCache.set(filepath, {
     mtimeMs: currentMtimeMs,
-    module: module.default as ModuleFunction,
+    module: module.default as PageFunction,
   });
 
   return module.default as ModuleFunction;

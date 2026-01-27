@@ -1,8 +1,7 @@
-import type { TemplateContext } from "../src/cache.ts";
+import type { PageContext } from "../src/cache.ts";
 
-export default async function (context: TemplateContext) {
+export default async function (context: PageContext) {
   const { method, url, query, body, cookies, file, root } = context;
-
   const name = query.name ?? "World";
   const queryParams = Object.keys(query).length > 0
     ? JSON.stringify(query, null, 2)
@@ -97,12 +96,92 @@ export default async function (context: TemplateContext) {
   `;
 
   return (
-    <html lang="zh-CN">
+    <>
+      <html lang="zh-CN">
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>TSP-FPM 示例</title>
-        <style>{style}</style>
+        <style>{`
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+          }
+          .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+          }
+          h1 {
+            color: #333;
+            margin-bottom: 10px;
+          }
+          .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+          }
+          .section {
+            margin: 30px 0;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+          }
+          .section h2 {
+            color: #444;
+            font-size: 18px;
+            margin-bottom: 15px;
+          }
+          .info-item {
+            margin: 10px 0;
+            padding: 10px;
+            background: white;
+            border-radius: 4px;
+            border-left: 3px solid #667eea;
+          }
+          .label {
+            font-weight: bold;
+            color: #667eea;
+          }
+          pre {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 13px;
+            line-height: 1.5;
+          }
+          form {
+            margin-top: 15px;
+          }
+          input[type="text"] {
+            padding: 10px 15px;
+            border: 2px solid #e2e8f0;
+            border-radius: 6px;
+            font-size: 14px;
+            width: 300px;
+          }
+          button {
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-left: 10px;
+          }
+          button:hover {
+            background: #5568d3;
+          }
+        `}</style>
       </head>
       <body>
         <div class="container">
@@ -167,6 +246,7 @@ export default async function (context: TemplateContext) {
           </div>
         </div>
       </body>
-    </html>
+      </html>
+    </>
   );
 }

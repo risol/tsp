@@ -7,7 +7,7 @@
 
 import { resolvePath, securityCheck } from "./router.ts";
 import { buildContext } from "./context.ts";
-import { getTemplate, renderJSX } from "./cache.ts";
+import { getPage, renderJSX, type RedirectResult } from "./cache.ts";
 
 // 配置接口
 interface Config {
@@ -155,11 +155,35 @@ async function handleRequest(
       root: config.root,
     });
 
-    // 获取并执行模块函数
-    const renderFn = await getTemplate(filepath);
-    const jsx = await renderFn(context);
-    const html = renderJSX(jsx);
+    // 获取并执行页面函数
+    const pageFn = await getPage(filepath);
+    const result = await pageFn(context);
 
+    // 检查是否是重定向对象
+    if (result && typeof result === "object" && "redirect" in result) {
+      const redirectResult = result as RedirectResult;
+      const targetUrl = redirectResult.redirect;
+      const status = redirectResult.status ?? 302;
+
+      // 验证重定向状态码
+      const validStatuses = [301, 302, 303, 307, 308];
+      const finalStatus = validStatuses.includes(status) ? status : 302;
+
+      return new Response(null, {
+        status: finalStatus,
+        headers: {
+          "Location": targetUrl,
+        },
+      });
+    }
+
+    // 检查是否是 Response 对象（直接返回）
+    if (result instanceof Response) {
+      return result;
+    }
+
+    // 默认：渲染 JSX 为 HTML
+    const html = renderJSX(result);
     return new Response(html, {
       status: 200,
       headers: { "Content-Type": "text/html; charset=utf-8" },

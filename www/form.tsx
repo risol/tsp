@@ -1,6 +1,6 @@
-import type { TemplateContext } from "../src/cache.ts";
+import type { PageContext } from "../src/cache.ts";
 
-export default async function (context: TemplateContext) {
+export default async function (context: PageContext) {
   const { method, body } = context;
 
   const hasPostData = method === "POST" && body;
