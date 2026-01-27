@@ -1,18 +1,18 @@
 # TSP-FPM
 
-类 PHP-FPM 模板执行引擎 - 使用 Deno + Eta 实现
+类 PHP-FPM 模板执行引擎 - 使用 Deno + TypeScript/TSX 实现
 
 ## 简介
 
-TSP-FPM 是一个类似 PHP-FPM 的模板执行引擎，让 `.tsp/.jsp` 文件能够像 PHP 一样直接执行并输出 HTML。
+TSP-FPM 是一个类似 PHP-FPM 的模板执行引擎，让 `.tsp` 文件能够像 PHP 一样直接执行并输出 HTML。
 
 ### 特点
 
 - 🚀 简单易用，像 PHP 一样无需预编译
-- ⚡ 基于文件修改时间的智能缓存
+- ⚡ 基于文件修改时间的智能模块缓存
 - 🔒 安全的路径检查和权限控制
 - 📦 支持查询参数、POST 数据、Cookies
-- 🎨 使用 Eta 模板语法，功能强大
+- 🎨 使用 TypeScript/JavaScript，灵活强大
 - 📦 使用 Deno 原生 API，无第三方框架依赖
 
 ## 快速开始
@@ -59,28 +59,43 @@ deno compile --allow-net --allow-read --output tsp-fpm src/main.ts
 ### URL 路由规则
 
 ```
-/                → index.tsp | index.jsp
+/                → index.tsp
 /a               → a.tsp | a/index.tsp
 /a/b             → a/b.tsp
 ```
 
 ### 模板语法
 
-`.tsp` 文件使用 Eta 模板语法：
+`.tsp` 文件使用 TypeScript/JavaScript 导出默认函数：
 
-```eta
-<!-- 输出变量 -->
-<h1>Hello <%= it.query.name ?? "World" %></h1>
+```typescript
+export default async function (context: {
+  method: string;
+  url: URL;
+  headers: Headers;
+  query: Record<string, string>;
+  body: unknown;
+  cookies: Record<string, string>;
+  file: string;
+  root: string;
+}): Promise<string> {
+  const { method, query, body } = context;
 
-<!-- JavaScript 代码 -->
-<% if (it.method === "POST") { %>
-  <pre><%= JSON.stringify(it.body) %></pre>
-<% } %>
+  // 处理逻辑
+  const name = query.name ?? "World";
 
-<!-- 循环 -->
-<% for (const item of it.items) { %>
-  <div><%= item.name %></div>
-<% } %>
+  // 返回 HTML 字符串
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head><title>示例</title></head>
+    <body>
+      <h1>Hello ${name}</h1>
+      <p>请求方法: ${method}</p>
+    </body>
+    </html>
+  `;
+}
 ```
 
 ## 上下文对象
@@ -132,42 +147,58 @@ tsp/
 
 ### GET 请求处理
 
-```eta
-<p>用户名: <%= it.query.name ?? "游客" %></p>
-<a href="?name=张三">设置名字为张三</a>
+```typescript
+export default async function (context) {
+  const { query } = context;
+  const name = query.name ?? "游客";
+
+  return `
+    <p>用户名: ${name}</p>
+    <a href="?name=张三">设置名字为张三</a>
+  `;
+}
 ```
 
 ### POST 请求处理
 
-```eta
-<% if (it.method === "POST") { %>
-  <% if (it.body && it.body.username) { %>
-    <p>欢迎, <%= it.body.username %>!</p>
-  <% } %>
-<% } %>
+```typescript
+export default async function (context) {
+  const { method, body } = context;
+  let message = "";
 
-<form method="POST">
-  <input type="text" name="username">
-  <button type="submit">提交</button>
-</form>
+  if (method === "POST" && body?.username) {
+    message = `<p>欢迎, ${body.username}!</p>`;
+  }
+
+  return `
+    ${message}
+    <form method="POST">
+      <input type="text" name="username">
+      <button type="submit">提交</button>
+    </form>
+  `;
+}
 ```
 
 ### Cookie 读取
 
-```eta
-<% if (it.cookies.session) { %>
-  <p>Session ID: <%= it.cookies.session %></p>
-<% } else { %>
-  <p>未登录</p>
-<% } %>
+```typescript
+export default async function (context) {
+  const { cookies } = context;
+  let sessionInfo = cookies.session
+    ? `<p>Session ID: ${cookies.session}</p>`
+    : "<p>未登录</p>";
+
+  return sessionInfo;
+}
 ```
 
 ## 技术栈
 
 - **Runtime**: Deno
-- **模板引擎**: Eta
-- **语言**: TypeScript
+- **语言**: TypeScript/JavaScript
 - **HTTP 服务**: Deno std/http
+- **模块系统**: ES Modules (动态导入)
 
 ## 开发与生产模式
 

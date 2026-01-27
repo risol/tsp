@@ -19,7 +19,7 @@ interface SecurityResult {
 }
 
 // 允许的文件扩展名
-const ALLOWED_EXTENSIONS = [".tsp", ".jsp"];
+const ALLOWED_EXTENSIONS = [".tsp"];
 
 /**
  * 解析 URL 路径到文件系统路径

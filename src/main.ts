@@ -2,10 +2,9 @@
 
 /**
  * TSP-FPM: 类 PHP-FPM 模板执行引擎
- * 使用 Deno + Eta 实现的模板服务器
+ * 使用 Deno + TSX 实现的模板服务器
  */
 
-import { Eta } from "https://deno.land/x/eta@v3.2.0/src/index.ts";
 import { resolvePath, securityCheck } from "./router.ts";
 import { buildContext } from "./context.ts";
 import { getTemplate, clearCache } from "./cache.ts";
@@ -82,8 +81,7 @@ TSP-FPM: 类 PHP-FPM 模板执行引擎
 // 处理请求
 async function handleRequest(
   req: Request,
-  config: Config,
-  eta: Eta
+  config: Config
 ): Promise<Response> {
   try {
     const url = new URL(req.url);
@@ -157,8 +155,8 @@ async function handleRequest(
       root: config.root,
     });
 
-    // 获取并执行模板
-    const renderFn = await getTemplate(filepath, eta);
+    // 获取并执行模块函数
+    const renderFn = await getTemplate(filepath);
     const html = await renderFn(context);
 
     return new Response(html, {
@@ -225,12 +223,6 @@ Mode: ${config.dev ? "Development" : "Production"}
 Starting server...
   `);
 
-  // 初始化 Eta
-  const eta = new Eta({
-    views: config.root,
-    cache: false, // 我们自己实现缓存
-  });
-
   // 启动 HTTP 服务器
   Deno.serve({
     port: config.port,
@@ -238,7 +230,7 @@ Starting server...
       console.log(`✓ Server running at http://${hostname}:${port}/`);
       console.log("Press Ctrl+C to stop.\n");
     },
-  }, (req) => handleRequest(req, config, eta));
+  }, (req) => handleRequest(req, config));
 }
 
 // 启动程序

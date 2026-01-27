@@ -1,3 +1,23 @@
+export default async function (context) {
+  const { method, url, query, body, cookies, file, root, headers } = context;
+
+  // 处理 headers
+  const headersObj = {};
+  for (const [key, value] of headers.entries()) {
+    headersObj[key] = value;
+  }
+
+  const queryParams = Object.keys(query).length > 0
+    ? JSON.stringify(query, null, 2)
+    : "暂无查询参数";
+
+  const bodyData = body ? JSON.stringify(body, null, 2) : "暂无 POST 数据";
+
+  const cookiesData = Object.keys(cookies).length > 0
+    ? JSON.stringify(cookies, null, 2)
+    : "暂无 Cookies";
+
+  return `
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -40,6 +60,7 @@
     .string { color: #ce9178; }
     .number { color: #b5cea8; }
     .boolean { color: #569cd6; }
+    a { color: #4ec9b0; }
   </style>
 </head>
 <body>
@@ -47,71 +68,56 @@
 
   <div class="section">
     <h2>请求方法</h2>
-    <pre><span class="string"><%= it.method %></span></pre>
+    <pre><span class="string">${method}</span></pre>
   </div>
 
   <div class="section">
     <h2>URL 信息</h2>
     <pre>{
-  <span class="key">"href"</span>: <span class="string">"<%= it.url.href %>"</span>,
-  <span class="key">"origin"</span>: <span class="string">"<%= it.url.origin %>"</span>,
-  <span class="key">"pathname"</span>: <span class="string">"<%= it.url.pathname %>"</span>,
-  <span class="key">"search"</span>: <span class="string">"<%= it.url.search %>"</span>
+  <span class="key">"href"</span>: <span class="string">"${url.href}"</span>,
+  <span class="key">"origin"</span>: <span class="string">"${url.origin}"</span>,
+  <span class="key">"pathname"</span>: <span class="string">"${url.pathname}"</span>,
+  <span class="key">"search"</span>: <span class="string">"${url.search}"</span>
 }</pre>
   </div>
 
   <div class="section">
     <h2>查询参数 (Query)</h2>
-    <% if (Object.keys(it.query).length > 0) { %>
-      <pre><%= JSON.stringify(it.query, null, 2) %></pre>
-    <% } else { %>
-      <pre><span class="string">暂无查询参数</span></pre>
-    <% } %>
+    <pre>${queryParams}</pre>
   </div>
 
   <div class="section">
     <h2>请求头 (Headers)</h2>
-    <pre><%
-      const headers = {};
-      for (const [key, value] of it.headers.entries()) {
-        headers[key] = value;
-      }
-    %><%= JSON.stringify(headers, null, 2) %></pre>
+    <pre>${JSON.stringify(headersObj, null, 2)}</pre>
   </div>
 
   <div class="section">
     <h2>POST 数据 (Body)</h2>
-    <% if (it.body) { %>
-      <pre><%= JSON.stringify(it.body, null, 2) %></pre>
-    <% } else { %>
-      <pre><span class="string">暂无 POST 数据</span></pre>
-    <% } %>
+    <pre>${bodyData}</pre>
   </div>
 
   <div class="section">
     <h2>Cookies</h2>
-    <% if (Object.keys(it.cookies).length > 0) { %>
-      <pre><%= JSON.stringify(it.cookies, null, 2) %></pre>
-    <% } else { %>
-      <pre><span class="string">暂无 Cookies</span></pre>
-    <% } %>
+    <pre>${cookiesData}</pre>
   </div>
 
   <div class="section">
     <h2>文件路径</h2>
     <pre>{
-  <span class="key">"template"</span>: <span class="string">"<%= it.file %>"</span>,
-  <span class="key">"root"</span>: <span class="string">"<%= it.root %>"</span>
+  <span class="key">"template"</span>: <span class="string">"${file}"</span>,
+  <span class="key">"root"</span>: <span class="string">"${root}"</span>
 }</pre>
   </div>
 
   <div class="section">
     <h2>测试链接</h2>
     <ul>
-      <li><a href="?name=test&lang=zh" style="color: #4ec9b0;">?name=test&lang=zh</a></li>
-      <li><a href="?debug=true&verbose=1" style="color: #4ec9b0;">?debug=true&verbose=1</a></li>
-      <li><a href="../index.tsp" style="color: #4ec9b0;">返回首页</a></li>
+      <li><a href="?name=test&lang=zh">?name=test&lang=zh</a></li>
+      <li><a href="?debug=true&verbose=1">?debug=true&verbose=1</a></li>
+      <li><a href="../index.tsp">返回首页</a></li>
     </ul>
   </div>
 </body>
 </html>
+  `.trim();
+}

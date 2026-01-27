@@ -1,3 +1,16 @@
+export default async function (context) {
+  const { method, body } = context;
+
+  const hasPostData = method === "POST" && body;
+  const resultHtml = hasPostData
+    ? `
+    <div class="result">
+      <h3>✅ 提交成功！</h3>
+      <pre>${JSON.stringify(body, null, 2)}</pre>
+    </div>`
+    : "";
+
+  return `
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -55,12 +68,7 @@
   <div class="card">
     <h1>📝 表单提交示例</h1>
 
-    <% if (it.method === "POST" && it.body) { %>
-      <div class="result">
-        <h3>✅ 提交成功！</h3>
-        <pre><%= JSON.stringify(it.body, null, 2) %></pre>
-      </div>
-    <% } %>
+    ${resultHtml}
 
     <form method="POST">
       <div class="form-group">
@@ -88,3 +96,5 @@
   </div>
 </body>
 </html>
+  `.trim();
+}
