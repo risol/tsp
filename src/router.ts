@@ -19,7 +19,7 @@ interface SecurityResult {
 }
 
 // 允许的文件扩展名
-const ALLOWED_EXTENSIONS = [".tsp"];
+const ALLOWED_EXTENSIONS = [".tsx"];
 
 /**
  * 解析 URL 路径到文件系统路径
@@ -32,11 +32,11 @@ export function resolvePath(pathname: string, root: string): PathResult {
     // 移除开头的斜杠并解码
     const decoded = decodeURIComponent(pathname.slice(1));
 
-    // 如果路径为空，尝试 index.tsp
+    // 如果路径为空，尝试 index.tsx
     if (!decoded) {
       return {
         success: true,
-        filepath: join(root, "index.tsp"),
+        filepath: join(root, "index.tsx"),
       };
     }
 
@@ -50,10 +50,10 @@ export function resolvePath(pathname: string, root: string): PathResult {
         filepath: join(root, decoded),
       };
     } else {
-      // 添加 .tsp 扩展名
+      // 添加 .tsx 扩展名
       return {
         success: true,
-        filepath: join(root, decoded + ".tsp"),
+        filepath: join(root, decoded + ".tsx"),
       };
     }
   } catch (error) {
@@ -80,8 +80,8 @@ async function findFile(basePath: string): Promise<string | null> {
     // 文件不存在，继续尝试其他路径
   }
 
-  // 尝试目录下的 index.tsp
-  const indexPath = join(basePath, "index.tsp");
+  // 尝试目录下的 index.tsx
+  const indexPath = join(basePath, "index.tsx");
   try {
     const stat = await Deno.stat(indexPath);
     if (stat.isFile) {

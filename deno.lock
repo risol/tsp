@@ -1,11 +1,27 @@
 {
   "version": "5",
   "specifiers": {
-    "jsr:@std/path@1.0.0": "1.0.0"
+    "jsr:@std/path@1.0.0": "1.0.0",
+    "npm:preact-render-to-string@6.6.3": "6.6.3_preact@10.28.2",
+    "npm:preact@10.25.4": "10.25.4"
   },
   "jsr": {
     "@std/path@1.0.0": {
       "integrity": "77fcb858b6e38777d1154df0f02245ba0b07e2c40ca3c0eec57c9233188c2d21"
+    }
+  },
+  "npm": {
+    "preact-render-to-string@6.6.3_preact@10.28.2": {
+      "integrity": "sha512-7oHG7jzjriqsFPkSPiPnzrQ0GcxFm6wOkYWNdStK5Ks9YlWSQQXKGBRAX4nKDdqX7HAQuRvI4pZNZMycK4WwDw==",
+      "dependencies": [
+        "preact@10.28.2"
+      ]
+    },
+    "preact@10.25.4": {
+      "integrity": "sha512-jLdZDb+Q+odkHJ+MpW/9U5cODzqnB+fy2EiHSZES7ldV5LK7yjlVzTp7R8Xy6W6y75kfK8iWYtFVH7lvjwrCMA=="
+    },
+    "preact@10.28.2": {
+      "integrity": "sha512-lbteaWGzGHdlIuiJ0l2Jq454m6kcpI1zNje6d8MlGAFlYvP2GO4ibnat7P74Esfz4sPTdM6UxtTwh/d3pwM9JA=="
     }
   },
   "remote": {
@@ -23,7 +39,10 @@
   },
   "workspace": {
     "dependencies": [
-      "jsr:@std/assert@1"
+      "jsr:@std/assert@1",
+      "jsr:@std/path@1.0.0",
+      "npm:preact-render-to-string@6.6.3",
+      "npm:preact@10.25.4"
     ]
   }
 }

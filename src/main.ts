@@ -7,7 +7,7 @@
 
 import { resolvePath, securityCheck } from "./router.ts";
 import { buildContext } from "./context.ts";
-import { getTemplate, clearCache } from "./cache.ts";
+import { getTemplate, renderJSX } from "./cache.ts";
 
 // 配置接口
 interface Config {
@@ -157,7 +157,8 @@ async function handleRequest(
 
     // 获取并执行模块函数
     const renderFn = await getTemplate(filepath);
-    const html = await renderFn(context);
+    const jsx = await renderFn(context);
+    const html = renderJSX(jsx);
 
     return new Response(html, {
       status: 200,

@@ -3,7 +3,8 @@
  * 实现基于文件修改时间的 TSX 模块缓存
  */
 
-import { join } from "jsr:@std/path@1.0.0";
+import { join } from "std/path";
+import { render } from "preact-render-to-string";
 
 // 上下文类型（从 context.ts 导入）
 export interface TemplateContext {
@@ -17,10 +18,13 @@ export interface TemplateContext {
   root: string;
 }
 
+// JSX 返回类型
+export type JSXResult = unknown;
+
 // 模块函数类型
 export type ModuleFunction = (
   context: TemplateContext
-) => Promise<string> | string;
+) => Promise<JSXResult> | JSXResult;
 
 // 缓存条目类型
 interface CacheEntry {
@@ -83,4 +87,15 @@ export function clearCache(): void {
  */
 export function getCacheSize(): number {
   return moduleCache.size;
+}
+
+/**
+ * 渲染 JSX 到字符串
+ * @param jsx JSX 元素
+ * @returns HTML 字符串
+ */
+export function renderJSX(jsx: JSXResult): string {
+  const html = render(jsx);
+  // 添加 DOCTYPE 声明
+  return "<!DOCTYPE html>\n" + html;
 }
