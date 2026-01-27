@@ -53,6 +53,89 @@ async function cleanupBinary(): Promise<void> {
 }
 
 /**
+ * 检查端口是否被占用，如果占用则kill掉进程
+ */
+async function killProcessOnPort(port: number): Promise<void> {
+  console.log(`\n=== 检查端口 ${port} 占用情况 ===`);
+
+  try {
+    let pids: number[] = [];
+
+    if (Deno.build.os === "windows") {
+      // Windows: 使用 netstat 查找占用端口的进程
+      const netstatCommand = new Deno.Command("netstat", {
+        args: ["-ano"],
+        stdout: "piped",
+        stderr: "piped",
+      });
+
+      const { stdout } = await netstatCommand.output();
+      const output = new TextDecoder().decode(stdout);
+
+      // 解析 netstat 输出，找到占用指定端口的 PID
+      const lines = output.split("\n");
+      for (const line of lines) {
+        // 查找包含端口号的行 (格式: TCP    0.0.0.0:9100    0.0.0.0:0    LISTENING    1234)
+        if (line.includes(`:${port}`) && line.includes("LISTENING")) {
+          const parts = line.trim().split(/\s+/);
+          const pid = parseInt(parts[parts.length - 1]);
+          if (!isNaN(pid)) {
+            pids.push(pid);
+          }
+        }
+      }
+    } else {
+      // Linux/Mac: 使用 lsof 查找占用端口的进程
+      const lsofCommand = new Deno.Command("lsof", {
+        args: ["-ti", `:${port}`],
+        stdout: "piped",
+        stderr: "piped",
+      });
+
+      const { stdout, code } = await lsofCommand.output();
+
+      if (code === 0) {
+        const output = new TextDecoder().decode(stdout);
+        const pidsStr = output.trim().split("\n");
+        pids = pidsStr
+          .map((pid) => parseInt(pid))
+          .filter((pid) => !isNaN(pid));
+      }
+    }
+
+    // Kill 掉找到的进程
+    if (pids.length > 0) {
+      console.log(`⚠ 发现 ${pids.length} 个进程占用端口 ${port}: ${pids.join(", ")}`);
+
+      for (const pid of pids) {
+        try {
+          if (Deno.build.os === "windows") {
+            const killCommand = new Deno.Command("taskkill", {
+              args: ["/PID", pid.toString(), "/F"],
+              stdout: "piped",
+              stderr: "piped",
+            });
+            await killCommand.output();
+          } else {
+            Deno.kill(pid, "SIGKILL");
+          }
+          console.log(`✓ 已终止进程 PID: ${pid}`);
+        } catch (error) {
+          console.warn(`⚠ 无法终止进程 PID ${pid}:`, error);
+        }
+      }
+
+      // 等待一下让进程完全退出
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    } else {
+      console.log(`✓ 端口 ${port} 未被占用`);
+    }
+  } catch (error) {
+    console.warn("⚠ 检查端口占用时出错:", error);
+  }
+}
+
+/**
  * 编译二进制文件
  */
 async function compileBinary(): Promise<void> {
@@ -236,7 +319,10 @@ async function runTests(): Promise<void> {
     // 2. 编译二进制
     await compileBinary();
 
-    // 3. 启动服务器
+    // 3. 清理端口占用
+    await killProcessOnPort(TEST_PORT);
+
+    // 4. 启动服务器
     serverProcess = await startServer();
 
     // 4. 测试各种 HTTP 请求
