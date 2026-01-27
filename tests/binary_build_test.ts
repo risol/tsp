@@ -14,7 +14,7 @@ import { assertEquals, assertExists } from "https://deno.land/std@0.210.0/testin
 
 const OUTPUT_BINARY = "tsp-fpm-test";
 const TEST_PORT = 9100; // 使用不同的端口避免冲突
-const TEST_ROOT = "./www";
+const TEST_ROOT = "./tests/test_www";
 
 // 测试配置
 const TEST_TIMEOUT = 30000; // 30秒超时
@@ -173,7 +173,12 @@ async function stopServer(process: Deno.ChildProcess): Promise<void> {
 /**
  * 测试 HTTP 请求
  */
-async function testHttpRequest(url: string, expectedStatus: number = 200): Promise<void> {
+async function testHttpRequest(
+  url: string,
+  expectedStatus: number = 200,
+  expectedContentType?: string,
+  expectErrorInBody = false
+): Promise<void> {
   console.log(`\n测试请求: ${url}`);
 
   try {
@@ -189,8 +194,23 @@ async function testHttpRequest(url: string, expectedStatus: number = 200): Promi
     const contentType = response.headers.get("content-type");
     console.log(`✓ Content-Type: ${contentType}`);
 
-    if (expectedStatus === 200) {
-      assertExists(contentType?.includes("text/html"), "应该是 HTML 响应");
+    // 检查 Content-Type（如果指定了期望值）
+    if (expectedContentType) {
+      assertExists(contentType?.includes(expectedContentType), `期望 Content-Type 包含 ${expectedContentType}`);
+    }
+
+    // 对于错误响应，检查错误信息
+    if (expectedStatus >= 400 && expectErrorInBody) {
+      // 生产模式：错误页面不显示堆栈
+      // 开发模式：应该显示错误详情
+      assertExists(text.includes("500") || text.includes("Error"), "应该包含错误信息");
+
+      // 检查不应该包含堆栈信息（生产模式）
+      const hasStackTrace = text.includes("at ") && text.includes(".ts:");
+      console.log(hasStackTrace ? "⚠ 发现堆栈信息" : "✓ 无堆栈信息（生产模式）");
+    }
+
+    if (expectedStatus === 200 && (!expectedContentType || expectedContentType.includes("text/html"))) {
       assertExists(text.includes("<html") || text.includes("<!DOCTYPE"), "应该包含 HTML 标签");
     }
   } catch (error) {
@@ -226,8 +246,9 @@ async function runTests(): Promise<void> {
     await testHttpRequest(`http://localhost:${TEST_PORT}/index.tsx`, 200);
     await testHttpRequest(`http://localhost:${TEST_PORT}/form.tsx`, 200);
     await testHttpRequest(`http://localhost:${TEST_PORT}/api.tsx`, 200);
-    // 注释掉 example.tsx（组件导入在编译后有问题）
-    // await testHttpRequest(`http://localhost:${TEST_PORT}/example.tsx`, 200);
+    await testHttpRequest(`http://localhost:${TEST_PORT}/custom_response.tsx`, 200); // 自定义 Response
+    await testHttpRequest(`http://localhost:${TEST_PORT}/custom_response.tsx?format=json`, 200, "application/json"); // JSON Response
+    await testHttpRequest(`http://localhost:${TEST_PORT}/error.tsx`, 500); // 错误处理测试
     await testHttpRequest(`http://localhost:${TEST_PORT}/nonexistent.tsx`, 404); // 404
 
     console.log("\n╔════════════════════════════════════════════╗");
