@@ -10,7 +10,12 @@
       "Bash(timeout:*)",
       "Bash(dir D:GitHubtspwww)",
       "Bash(git -C:*)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(if:*)",
+      "Bash(then echo \"tests/test-temp/\")",
+      "Bash(fi)",
+      "Bash(deno task test:*)",
+      "Bash(deno task:*)"
     ]
   }
 }
