@@ -1,0 +1,5 @@
+{
+  "root": "./www",
+  "port": 9000,
+  "dev": false
+}

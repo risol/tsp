@@ -23,14 +23,106 @@ const DEFAULT_CONFIG: Config = {
   dev: false,
 };
 
-// 解析命令行参数
-function parseArgs(): Config {
-  const args = Deno.args;
-  const config = { ...DEFAULT_CONFIG };
+// 配置文件接口（与 Config 相同，但所有字段都是可选的）
+interface ConfigFile {
+  root?: string;
+  port?: number;
+  dev?: boolean;
+}
 
+/**
+ * 移除 JSONC 注释
+ * @param content JSONC 内容
+ * @returns 纯 JSON 内容
+ */
+function stripJsonComments(content: string): string {
+  // 移除单行注释 //
+  content = content.replace(/\/\/.*$/gm, '');
+  // 移除多行注释 /* */
+  content = content.replace(/\/\*[\s\S]*?\*\//g, '');
+  return content;
+}
+
+/**
+ * 从配置文件加载配置
+ * @param filepath 配置文件路径
+ * @returns 配置对象
+ */
+async function loadConfigFile(filepath: string): Promise<Config> {
+  try {
+    let content = await Deno.readTextFile(filepath);
+
+    // 如果是 JSONC 文件，移除注释
+    if (filepath.endsWith('.jsonc')) {
+      content = stripJsonComments(content);
+    }
+
+    const config: ConfigFile = JSON.parse(content);
+
+    // 合并默认配置和文件配置
+    return {
+      ...DEFAULT_CONFIG,
+      ...config,
+    };
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) {
+      console.error(`配置文件不存在: ${filepath}`);
+      Deno.exit(1);
+    } else if (error instanceof SyntaxError) {
+      console.error(`配置文件格式错误: ${error.message}`);
+      Deno.exit(1);
+    } else {
+      throw error;
+    }
+  }
+}
+
+// 解析命令行参数
+async function parseArgs(): Promise<Config> {
+  const args = Deno.args;
+  let config = { ...DEFAULT_CONFIG };
+  let configFile: string | null = null;
+
+  // 第一遍解析：查找 --config 参数
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--config" || arg === "-c") {
+      configFile = args[++i];
+      break;
+    }
+  }
+
+  // 如果指定了配置文件，先加载配置文件
+  if (configFile) {
+    config = await loadConfigFile(configFile);
+  } else {
+    // 尝试自动查找默认配置文件
+    const defaultConfigFiles = [
+      "config.jsonc",
+      "config.json",
+    ];
+
+    for (const filename of defaultConfigFiles) {
+      try {
+        await Deno.stat(filename);
+        console.log(`✓ 找到配置文件: ${filename}`);
+        config = await loadConfigFile(filename);
+        break;
+      } catch {
+        // 文件不存在，继续查找
+      }
+    }
+  }
+
+  // 第二遍解析：命令行参数覆盖配置文件（优先级更高）
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     switch (arg) {
+      case "--config":
+      case "-c":
+        // 跳过配置文件路径（已在第一遍处理）
+        i++;
+        break;
       case "--root":
       case "-r":
         config.root = args[++i];
@@ -47,11 +139,9 @@ function parseArgs(): Config {
       case "-h":
         printHelp();
         Deno.exit(0);
-        break;
       default:
-        console.error(`Unknown option: ${arg}`);
-        printHelp();
-        Deno.exit(1);
+        // 忽略未知参数，继续处理
+        break;
     }
   }
 
@@ -67,14 +157,38 @@ TSP-FPM: 类 PHP-FPM 模板执行引擎
   ./tsp-fpm [options]
 
 选项:
-  --root, -r <path>   文档根目录 (默认: ./www)
-  --port, -p <port>   监听端口 (默认: 9000)
-  --dev, -d           开发模式 (显示错误详情)
-  --help, -h          显示帮助信息
+  --config, -c <file>  配置文件路径 (默认: 自动查找 config.json)
+  --root, -r <path>    文档根目录 (默认: ./www)
+  --port, -p <port>    监听端口 (默认: 9000)
+  --dev, -d            开发模式 (显示错误详情)
+  --help, -h           显示帮助信息
+
+配置文件:
+  支持的配置文件名（按优先级）:
+    - config.jsonc
+    - config.json
+
+  配置文件格式 (JSON):
+  {
+    "root": "./www",
+    "port": 9000,
+    "dev": false
+  }
+
+  优先级: 命令行参数 > 配置文件 > 默认值
 
 示例:
-  ./tsp-fpm --root ./www --port 9000
-  ./tsp-fpm -r ./site -p 8080 --dev
+  # 使用配置文件
+  ./tsp-fpm
+
+  # 指定配置文件
+  ./tsp-fpm --config ./my-config.json
+
+  # 命令行参数覆盖配置文件
+  ./tsp-fpm --port 8080 --dev
+
+  # 纯命令行参数
+  ./tsp-fpm --root ./www --port 9000 --dev
 `);
 }
 
@@ -265,7 +379,7 @@ async function handleRequest(
 
 // 启动服务器
 async function main(): Promise<void> {
-  const config = parseArgs();
+  const config = await parseArgs();
 
   console.log(`
 ╔════════════════════════════════════════╗

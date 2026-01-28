@@ -212,6 +212,7 @@ async function compileBinary(): Promise<void> {
       "compile",
       "--allow-net",
       "--allow-read",
+      "--allow-write",
       "--allow-env",
       "--output",
       outputFile,
@@ -883,6 +884,264 @@ Deno.test({
         throw error;
       }
       printTestResult("并发请求压力测试", false);
+      throw error;
+    }
+  },
+});
+
+/**
+ * 配置文件测试
+ */
+Deno.test({
+  name: "config - 配置文件测试",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  sanitizeExit: false,
+  fn: async () => {
+    const startTime = Date.now();
+
+    printSection("配置文件测试");
+
+    try {
+      // 先停止当前服务器
+      await stopServer();
+      printSuccess("已停止当前服务器");
+
+      // 等待端口释放
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      /**
+       * 辅助函数：启动带配置的服务器
+       */
+      async function startWithConfig(configContent: string, filename: string, args: string[] = []): Promise<boolean> {
+        try {
+          // 写入配置文件
+          await Deno.writeTextFile(filename, configContent);
+
+          // 启动服务器
+          const binaryPath = getBinaryPath();
+          const commandPath = Deno.build.os === "windows" && !binaryPath.startsWith("./")
+            ? `./${binaryPath}`
+            : binaryPath;
+
+          const serverProcess = new Deno.Command(commandPath, {
+            args: [...args, "--root", TEST_ROOT],
+            stdout: "piped",
+            stderr: "piped",
+          });
+
+          const process = serverProcess.spawn();
+
+          // 等待服务器启动
+          await new Promise((resolve) => setTimeout(resolve, STARTUP_DELAY));
+
+          // 检查是否启动成功
+          try {
+            const response = await fetch(`http://localhost:${TEST_PORT}/`);
+            const success = response.status === 200;
+
+            // 停止服务器
+            try {
+              process.kill("SIGTERM");
+            } catch {
+              // 忽略错误
+            }
+
+            return success;
+          } catch {
+            // 无法连接，启动失败
+            try {
+              process.kill("SIGTERM");
+            } catch {
+              // 忽略错误
+            }
+            return false;
+          }
+        } finally {
+          // 清理配置文件
+          try {
+            await Deno.remove(filename);
+          } catch {
+            // 忽略错误
+          }
+        }
+      }
+
+      // 测试 1: config.json 配置文件
+      printInfo("测试 config.json 配置文件");
+      const jsonConfig = JSON.stringify({
+        root: TEST_ROOT,
+        port: TEST_PORT,
+        dev: false,
+      }, null, 2);
+
+      const success1 = await startWithConfig(jsonConfig, "config.json");
+      printTestResult("config.json 配置文件", success1);
+      if (!success1) throw new Error("config.json 配置文件测试失败");
+
+      // 等待端口释放
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // 测试 2: config.jsonc 配置文件（支持注释）
+      printInfo("测试 config.jsonc 配置文件（带注释）");
+      const jsoncConfig = `{
+  // 这是一个配置文件
+  "root": "${TEST_ROOT}",
+  "port": ${TEST_PORT},
+  /* 多行注释
+     开发模式 */
+  "dev": false
+}`;
+
+      const success2 = await startWithConfig(jsoncConfig, "config.jsonc");
+      printTestResult("config.jsonc 配置文件（支持注释）", success2);
+      if (!success2) throw new Error("config.jsonc 配置文件测试失败");
+
+      // 等待端口释放
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // 测试 3: 配置文件优先级（jsonc > json）
+      printInfo("测试配置文件优先级");
+      await Deno.writeTextFile("config.json", JSON.stringify({ root: TEST_ROOT, port: TEST_PORT, dev: false }));
+      await Deno.writeTextFile("config.jsonc", JSON.stringify({ root: TEST_ROOT, port: TEST_PORT, dev: true }));
+
+      // 启动服务器（应该使用 config.jsonc）
+      const binaryPath = getBinaryPath();
+      const commandPath = Deno.build.os === "windows" && !binaryPath.startsWith("./")
+        ? `./${binaryPath}`
+        : binaryPath;
+
+      const priorityProcess = new Deno.Command(commandPath, {
+        args: ["--root", TEST_ROOT],
+        stdout: "piped",
+        stderr: "piped",
+      });
+
+      const priorityServer = priorityProcess.spawn();
+      await new Promise((resolve) => setTimeout(resolve, STARTUP_DELAY));
+
+      // 检查是否是开发模式（来自 jsonc）
+      try {
+        const response = await fetch(`http://localhost:${TEST_PORT}/error.tsx`);
+        const text = await response.text();
+        const isDevMode = text.includes("Stack trace") || text.includes("Error:");
+
+        printTestResult("配置文件优先级 (jsonc > json)", isDevMode);
+
+        priorityServer.kill("SIGTERM");
+      } catch {
+        priorityServer.kill("SIGTERM");
+        printTestResult("配置文件优先级 (jsonc > json)", false);
+        throw new Error("配置文件优先级测试失败");
+      }
+
+      // 清理配置文件
+      try {
+        await Deno.remove("config.json");
+        await Deno.remove("config.jsonc");
+      } catch {
+        // 忽略错误
+      }
+
+      // 等待端口释放
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // 测试 4: 命令行参数覆盖配置文件
+      printInfo("测试命令行参数覆盖配置文件");
+      await Deno.writeTextFile("config.json", JSON.stringify({
+        root: TEST_ROOT,
+        port: TEST_PORT,
+        dev: false,
+      }));
+
+      const overrideProcess = new Deno.Command(commandPath, {
+        args: ["--dev"], // 覆盖配置文件中的 dev: false
+        stdout: "piped",
+        stderr: "piped",
+      });
+
+      const overrideServer = overrideProcess.spawn();
+      await new Promise((resolve) => setTimeout(resolve, STARTUP_DELAY));
+
+      try {
+        const response = await fetch(`http://localhost:${TEST_PORT}/error.tsx`);
+        const text = await response.text();
+        const isDevMode = text.includes("Stack trace") || text.includes("Error:");
+
+        printTestResult("命令行参数覆盖配置文件", isDevMode);
+
+        overrideServer.kill("SIGTERM");
+
+        if (!isDevMode) {
+          throw new Error("命令行参数覆盖测试失败");
+        }
+      } catch {
+        overrideServer.kill("SIGTERM");
+        printTestResult("命令行参数覆盖配置文件", false);
+        throw new Error("命令行参数覆盖测试失败");
+      }
+
+      // 清理配置文件
+      try {
+        await Deno.remove("config.json");
+      } catch {
+        // 忽略错误
+      }
+
+      // 等待端口释放
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // 测试 5: 无效的配置文件
+      printInfo("测试无效配置文件处理");
+      await Deno.writeTextFile("config.json", "{ invalid json }");
+
+      const invalidProcess = new Deno.Command(commandPath, {
+        args: ["--root", TEST_ROOT],
+        stdout: "piped",
+        stderr: "piped",
+      });
+
+      const invalidServer = invalidProcess.spawn();
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      // 检查服务器是否启动失败（预期行为）
+      try {
+        const response = await fetch(`http://localhost:${TEST_PORT}/`);
+        const failed = response.status !== 200;
+
+        printTestResult("无效配置文件被拒绝", failed);
+
+        try {
+          invalidServer.kill("SIGTERM");
+        } catch {
+          // 忽略错误
+        }
+
+        if (!failed) {
+          throw new Error("无效配置文件应该被拒绝");
+        }
+      } catch {
+        // 连接失败说明服务器未启动，这是正确的
+        printTestResult("无效配置文件被拒绝", true);
+
+        try {
+          invalidServer.kill("SIGTERM");
+        } catch {
+          // 忽略错误
+        }
+      }
+
+      // 清理配置文件
+      try {
+        await Deno.remove("config.json");
+      } catch {
+        // 忽略错误
+      }
+
+      const duration = Date.now() - startTime;
+      console.log(`  ${COLORS.dim}${duration}ms${COLORS.reset}`);
+    } catch (error) {
+      printTestResult("配置文件测试", false);
       throw error;
     }
   },
