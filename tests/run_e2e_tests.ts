@@ -7,7 +7,7 @@
 
 import { assertEquals, assertExists } from "https://deno.land/std@0.210.0/testing/asserts.ts";
 
-const OUTPUT_BINARY = "tsp-fpm-test";
+const OUTPUT_BINARY = "tspserver-test";
 const TEST_PORT = 9100;
 const TEST_ROOT = "./tests/test_www";
 const STARTUP_DELAY = 2000;
@@ -482,7 +482,7 @@ async function runE2ETests(): Promise<void> {
 
 // 启动横幅
 console.log(`\n${COLORS.cyan}${COLORS.bright}╔════════════════════════════════════════════╗${COLORS.reset}`);
-console.log(`${COLORS.cyan}${COLORS.bright}║   TSP-FPM E2E 测试                         ║${COLORS.reset}`);
+console.log(`${COLORS.cyan}${COLORS.bright}║   TSP E2E 测试                            ║${COLORS.reset}`);
 console.log(`${COLORS.cyan}${COLORS.bright}╚════════════════════════════════════════════╝${COLORS.reset}`);
 
 // 运行测试

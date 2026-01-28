@@ -4,8 +4,6 @@
  * 这个页面只测试基本的 TSX 功能，依赖注入功能由单元测试覆盖
  */
 
-import type { PageContext } from "../../src/cache.ts";
-
 export default async function(context: PageContext) {
   return (
     <html lang="zh-CN">

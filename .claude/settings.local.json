@@ -25,7 +25,8 @@
       "Bash(cmd //c taskkill //F //PID 11320)",
       "Bash(ls:*)",
       "Bash(deno test:*)",
-      "Bash(head:*)"
+      "Bash(head:*)",
+      "Bash(grep:*)"
     ]
   }
 }

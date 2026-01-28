@@ -1,5 +1,3 @@
-import type { PageContext } from "../../src/cache.ts";
-
 export default async function (context: PageContext) {
   const { method, query, url } = context;
   const name = query.name || "World";

@@ -3,8 +3,13 @@
  * 实现基于文件修改时间的 TSX 模块缓存
  */
 
-import { join, toFileUrl, dirname } from "std/path";
+import { join, toFileUrl } from "std/path";
 import { render } from "preact-render-to-string";
+import {
+  Workspace,
+  type LoadResponse,
+  RequestedModuleType,
+} from "@deno/loader";
 import type { PageContext } from "./context.ts";
 
 // 重新导出 PageContext 类型，供页面使用
@@ -54,6 +59,24 @@ const moduleCache = new Map<string, CacheEntry>();
 // 动态导入缓存 - 用于清除模块缓存
 const importCache = new Map<string, string>();
 
+// 创建全局 loader 实例
+let globalLoader: Awaited<ReturnType<typeof Workspace.prototype.createLoader>> | null = null;
+let globalWorkspace: Workspace | null = null;
+
+async function getGlobalLoader() {
+  if (!globalLoader || !globalWorkspace) {
+    globalWorkspace = new Workspace();
+    globalLoader = await globalWorkspace.createLoader();
+  }
+  return globalLoader;
+}
+
+// 清除 loader 缓存并重建
+function clearGlobalLoader() {
+  globalLoader = null;
+  globalWorkspace = null;
+}
+
 /**
  * 获取页面函数
  * 如果缓存有效则使用缓存，否则重新加载
@@ -79,23 +102,35 @@ export async function getPage(
   // 缓存失效，重新加载
   console.log(`[CACHE MISS] ${filepath} (old: ${cached?.mtimeMs || 'none'}, new: ${currentMtimeMs})`);
 
+  // 清除 loader 缓存，确保获取最新代码
+  clearGlobalLoader();
+
+  // 获取 loader
+  const loader = await getGlobalLoader();
+
   // 将相对路径转换为绝对路径，然后转为 file URL
   const absolutePath = join(Deno.cwd(), filepath);
   const fileUrl = toFileUrl(absolutePath).href;
 
-  // 清除旧缓存（使用 import 标识符）
-  const oldImportUrl = importCache.get(filepath);
-  if (oldImportUrl) {
-    // 注意：Deno 的 import 缓存无法直接清除
-    // 这是 Deno 的已知限制
-    // 在开发模式下，重启服务器是必要的
+  // 添加入口点
+  const diagnostics = await loader.addEntrypoints([fileUrl]);
+  if (diagnostics.length > 0) {
+    throw new Error(diagnostics[0].message);
   }
 
-  // 直接使用文件 URL 导入模块，让 Deno 自动处理 TSX 转译和依赖解析
-  const module = await import(fileUrl);
+  // 加载模块
+  const response = await loader.load(fileUrl, RequestedModuleType.Default);
 
-  // 记录导入 URL
-  importCache.set(filepath, fileUrl);
+  if (response.kind !== "module") {
+    throw new Error(`Failed to load module: ${filepath}`);
+  }
+
+  // 将 Uint8Array 转换为字符串
+  const code = new TextDecoder().decode(response.code);
+
+  // 使用 data URL 导入转译后的代码
+  const dataUrl = `data:application/javascript,${encodeURIComponent(code)}`;
+  const module = await import(dataUrl);
 
   // 检查模块是否导出默认函数
   if (typeof module.default !== 'function') {

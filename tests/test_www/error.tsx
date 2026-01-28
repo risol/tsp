@@ -1,4 +1,3 @@
-import type { PageContext } from "../../src/cache.ts";
 
 export default async function (_context: PageContext) {
   // 故意抛出错误，用于测试错误处理

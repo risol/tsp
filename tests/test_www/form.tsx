@@ -1,4 +1,3 @@
-import type { PageContext } from "../../src/cache.ts";
 
 export default async function (context: PageContext) {
   const { method, body } = context;
