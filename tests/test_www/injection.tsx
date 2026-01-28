@@ -14,7 +14,7 @@ export default async function(context: PageContext) {
       <body>
         <h1>依赖注入测试</h1>
         <p>注意：依赖注入功能通过单元测试验证</p>
-        <p>单元测试覆盖：withDeps, registerDepBuilder, 依赖注入等</p>
+        <p>单元测试覆盖：Page, registerDep, 依赖注入等</p>
         <p>状态: <span style={{ color: 'green' }}>✓ 测试通过</span></p>
       </body>
     </html>

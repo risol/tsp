@@ -1,8 +1,8 @@
-import { registerDepBuilder, withDeps } from "./src/injection.ts";
+import { registerDep, Page } from "./src/injection-typed.ts";
 import type { PageContext } from "./src/context.ts";
 
 // 注册 testFunc
-registerDepBuilder('testFunc', () => {
+registerDep('testFunc' as never, () => {
   return function testFunc() {
     console.log('testFunc called');
     return 'testFunc called';
@@ -21,12 +21,12 @@ const context: PageContext = {
   root: "./www",
 };
 
-// 测试 withDeps
-const wrappedFn = withDeps((ctx: PageContext, deps: any) => {
+// 测试 Page
+const wrappedFn = Page((ctx: PageContext, deps: AppDeps) => {
   console.log('deps:', deps);
   return 'success';
 });
 
-console.log('Testing withDeps...');
+console.log('Testing Page...');
 const result = await wrappedFn(context);
 console.log('Result:', result);

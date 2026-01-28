@@ -26,7 +26,8 @@
       "Bash(ls:*)",
       "Bash(deno test:*)",
       "Bash(head:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(tree:*)"
     ]
   }
 }

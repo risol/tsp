@@ -5,7 +5,7 @@
  * 使用步骤：
  * 1. 在 types.d.ts 的 AppDeps 接口中声明依赖类型
  * 2. 在 main.ts 中使用 registerDep() 注册依赖实现
- * 3. 在 TSX 中直接使用全局 withDeps()（无需 import）
+ * 3. 在 TSX 中直接使用全局 Page()（无需 import）
  */
 
 import type { PageContext } from "./context.ts";
@@ -82,12 +82,12 @@ export function getRegisteredDeps(): string[] {
 }
 
 /**
- * Page / withDeps 实现
- * 这是一个高阶函数，返回一个包装函数
+ * Page 包装器
+ * 这是一个高阶函数，返回一个包装函数，用于自动注入依赖
  *
  * @example
  * ```tsx
- * // 使用 Page（推荐）
+ * // 使用 Page 包装页面函数
  * import { Page } from "../src/injection-typed.ts";
  *
  * export default Page(async function(ctx, { testFunc, db }) {
@@ -95,21 +95,18 @@ export function getRegisteredDeps(): string[] {
  *   return <div>{result}</div>;
  * });
  *
- * // 或者使用 withDeps（别名）
- * import { withDeps } from "../src/injection-typed.ts";
- *
- * export default withDeps(async function(ctx, { testFunc, db }) {
+ * // Page 已在全局作用域，无需 import
+ * export default Page(async function(ctx, { testFunc, db }) {
  *   const result = testFunc();
  *   return <div>{result}</div>;
  * });
  * ```
  */
-export function createWithDeps() {
+export function createPage() {
   /**
    * 包装页面函数，自动注入依赖
-   * Page 和 withDeps 是同一个函数
    */
-  function PageOrWithDeps<T>(
+  function Page<T>(
     fn: (ctx: PageContext, deps: AppDeps) => Promise<T> | T
   ): (ctx: PageContext) => Promise<T> {
     return async (ctx: PageContext) => {
@@ -140,29 +137,25 @@ export function createWithDeps() {
     };
   }
 
-  return PageOrWithDeps;
+  return Page;
 }
 
 /**
  * 初始化全局 Page
  * 在模块加载时就自动执行，无需手动调用
  */
-export function initGlobalWithDeps(): void {
-  if (typeof (globalThis as any).withDeps === 'undefined') {
-    (globalThis as any).withDeps = createWithDeps();
-  }
+export function initGlobalPage(): void {
   if (typeof (globalThis as any).Page === 'undefined') {
-    (globalThis as any).Page = createWithDeps();
+    (globalThis as any).Page = createPage();
   }
 }
 
 // 自动初始化（在模块加载时执行）
-initGlobalWithDeps();
+initGlobalPage();
 
-// 导出 Page 和 withDeps（同一个函数的两个别名）
-const _pageFn = createWithDeps();
+// 导出 Page
+const _pageFn = createPage();
 export const Page = _pageFn;
-export const withDeps = _pageFn;
 
 // 默认导出
 export default {
@@ -170,8 +163,7 @@ export default {
   registerDeps,
   unregisterDep,
   getRegisteredDeps,
-  createWithDeps,
-  initGlobalWithDeps,
+  createPage,
+  initGlobalPage,
   Page,
-  withDeps,
 };
