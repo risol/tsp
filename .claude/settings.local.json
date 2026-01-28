@@ -23,7 +23,8 @@
       "Bash(findstr:*)",
       "Bash(taskkill:*)",
       "Bash(cmd //c taskkill //F //PID 11320)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(deno test:*)"
     ]
   }
 }

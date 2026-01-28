@@ -2,18 +2,18 @@
   "tasks": {
     "dev": "deno run --watch --allow-net --allow-read --allow-env src/main.ts --dev",
     "start": "deno run --allow-net --allow-read --allow-env src/main.ts",
-    "compile": "deno compile --allow-net --allow-read --allow-env --output tsp-fpm src/main.ts",
+    "compile": "deno compile --allow-net --allow-read --allow-write --allow-env --output tsp-fpm src/main.ts",
 
     "test": "deno run --allow-all tests/run_all_tests.ts",
-    "test:basic": "deno test --allow-net --allow-read tests/basic_test.ts",
-    "test:binary": "deno test --allow-all tests/binary_build_test.ts",
+    "test:unit": "deno run --allow-net --allow-read --allow-run tests/run_unit_tests.ts",
+    "test:e2e": "deno run --allow-all tests/run_e2e_tests.ts",
     "test:all": "deno test --allow-all tests/",
 
     "check": "deno check src/main.ts src/cache.ts src/context.ts src/router.ts",
     "fmt": "deno fmt src/ www/ tests/",
     "fmt:check": "deno fmt --check src/ www/ tests/",
     "lint": "deno lint src/ www/ tests/",
-    "clean": "rm -rf tsp-fpm tsp-fpm.exe tests/tsp-fpm-test tests/tsp-fpm-test.exe"
+    "clean": "rm -rf tsp-fpm tsp-fpm.exe tests/tsp-fpm-test tests/tsp-fpm-test.exe config.json config.jsonc"
   },
   "imports": {
     "@deno/loader": "jsr:@deno/loader@^0.3.11",
