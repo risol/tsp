@@ -87,17 +87,17 @@ deno run --allow-net --allow-read --allow-env src/main.ts
 ```bash
 deno task compile
 # 等同于
-deno compile --allow-net --allow-read --allow-env --output tsp-fpm src/main.ts
+deno compile --allow-net --allow-read --allow-env --output tspserver src/main.ts
 ```
 
 **输出：**
-- Windows: `tsp-fpm.exe`
-- Linux/macOS: `tsp-fpm`
+- Windows: `tspserver.exe`
+- Linux/macOS: `tspserver`
 
 **运行编译后的程序：**
 ```bash
 # 需要设置 DENO_DIR 环境变量
-DENO_DIR=./.deno ./tsp-fpm --root ./www --port 9000
+DENO_DIR=./.deno ./tspserver --root ./www --port 9000
 ```
 
 ### test
@@ -225,12 +225,12 @@ deno lint src/ www/ tests/
 ```bash
 deno task clean
 # 等同于
-rm -rf tsp-fpm tsp-fpm.exe tests/tsp-fpm-test tests/tsp-fpm-test.exe
+rm -rf tspserver tspserver.exe tests/tspserver-test tests/tspserver-test.exe
 ```
 
 **删除内容：**
-- tsp-fpm / tsp-fpm.exe - 编译的主程序
-- tests/tsp-fpm-test - 测试生成的二进制文件
+- tspserver / tspserver.exe - 编译的主程序
+- tests/tspserver-test - 测试生成的二进制文件
 
 ## 使用示例
 
@@ -261,7 +261,7 @@ deno task test
 deno task compile
 
 # 3. 测试编译后的程序
-DENO_DIR=./.deno ./tsp-fpm --root ./www --port 9000
+DENO_DIR=./.deno ./tspserver --root ./www --port 9000
 
 # 4. 清理
 deno task clean
@@ -303,7 +303,7 @@ deno task dev
 **A:**
 ```bash
 # 需要设置 DENO_DIR 环境变量
-DENO_DIR=./.deno ./tsp-fpm --root ./www --port 9000
+DENO_DIR=./.deno ./tspserver --root ./www --port 9000
 ```
 
 ### Q: 如何添加新的任务？
@@ -338,7 +338,7 @@ deno task my-task
 3. **环境变量**
    - 编译后的程序需要设置 `DENO_DIR`
    - Windows: `set DENO_DIR=./.deno`
-   - Linux/Mac: `DENO_DIR=./.deno ./tsp-fpm`
+   - Linux/Mac: `DENO_DIR=./.deno ./tspserver`
 
 4. **性能**
    - `dev` 模式有文件监听开销

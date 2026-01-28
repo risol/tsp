@@ -11,7 +11,7 @@ export function Navigation() {
     }}>
       <div className="container" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ color: 'white', fontSize: '20px', fontWeight: 'bold' }}>
-          TSP-FPM
+          TSP
         </div>
 
         <ul style={{

@@ -5,7 +5,7 @@ export default async function(context: PageContext) {
   const { method, url, headers, query, cookies, body } = context;
 
   return (
-    <Layout title="请求信息 - TSP-FPM" description="HTTP 请求信息完整展示">
+    <Layout title="请求信息 - TSP" description="HTTP 请求信息完整展示">
       <h1 style={{ fontSize: "32px", marginBottom: "24px" }}>📡 请求信息</h1>
       <p style={{ color: "#64748b", marginBottom: "32px" }}>
         当前 HTTP 请求的完整信息，包括方法、URL、Headers、查询参数等

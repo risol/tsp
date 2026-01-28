@@ -5,7 +5,7 @@ export default async function(context: PageContext) {
   const { method, body } = context;
 
   return (
-    <Layout title="表单处理 - TSP-FPM" description="表单提交和数据处理演示">
+    <Layout title="表单处理 - TSP" description="表单提交和数据处理演示">
       <h1 style={{ fontSize: "32px", marginBottom: "24px" }}>📝 表单处理</h1>
       <p style={{ color: "#64748b", marginBottom: "32px" }}>
         支持多种表单提交方式：GET、POST（表单数据）、POST（JSON 数据）

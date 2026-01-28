@@ -10,7 +10,7 @@
 |------|------|----------|
 | **dev** | `deno run --watch --allow-net --allow-read --allow-write --allow-env --allow-run` | 开发模式（热重载）<br>- ✅ 网络访问<br>- ✅ 文件读取<br>- ✅ 文件写入（缓存）<br>- ✅ 环境变量<br>- ✅ 子进程 |
 | **start** | `deno run --allow-net --allow-read --allow-write --allow-env` | 生产模式<br>- ✅ 网络访问<br>- ✅ 文件读取<br>- ✅ 文件写入（缓存）<br>- ✅ 环境变量 |
-| **compile** | `deno compile --allow-net --allow-read --allow-write --allow-env --output tsp-fpm` | 编译二进制<br>- ✅ 网络访问<br>- ✅ 文件读取<br>- ✅ 文件写入<br>- ✅ 环境变量 |
+| **compile** | `deno compile --allow-net --allow-read --allow-write --allow-env --output tspserver` | 编译二进制<br>- ✅ 网络访问<br>- ✅ 文件读取<br>- ✅ 文件写入<br>- ✅ 环境变量 |
 
 ### 测试相关
 

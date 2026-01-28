@@ -1,10 +1,10 @@
-# TSP-FPM
+# TSP
 
-类 PHP-FPM 模板执行引擎 - 使用 Deno + TSX + Preact 实现
+TypeScript Server Page - 使用 Deno + TSX + Preact 实现
 
 ## 简介
 
-TSP-FPM 是一个类似 PHP-FPM 的模板执行引擎，让 `.tsx` 文件能够像 PHP 一样直接执行并输出 HTML。
+TSP (TypeScript Server Page) 是一个模板执行引擎，让 `.tsx` 文件能够直接执行并输出 HTML。
 
 ### 特点
 
@@ -39,10 +39,10 @@ deno run --allow-net --allow-read src/main.ts --root ./www --port 9000 --dev
 
 ```bash
 # 编译为独立可执行文件
-deno compile --allow-net --allow-read --output tsp-fpm src/main.ts
+deno compile --allow-net --allow-read --output tspserver src/main.ts
 
 # 运行编译后的程序
-./tsp-fpm --root ./www --port 9000
+./tspserver --root ./www --port 9000
 ```
 
 ## 使用说明

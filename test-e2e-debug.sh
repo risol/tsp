@@ -4,11 +4,11 @@ deno compile \
   --allow-read \
   --allow-write \
   --allow-env \
-  --output tsp-fpm-test \
+  --output tspserver-test \
   src/main.ts
 
 echo "Starting server..."
-./tsp-fpm-test --root ./tests/test_www --port 9100 --dev &
+./tspserver-test --root ./tests/test_www --port 9100 --dev &
 SERVER_PID=$!
 
 sleep 3

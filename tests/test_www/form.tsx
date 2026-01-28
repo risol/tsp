@@ -10,7 +10,7 @@ export default async function (context: PageContext) {
       <html lang="zh-CN">
         <head>
           <meta charset="UTF-8" />
-          <title>表单测试 - TSP-FPM</title>
+          <title>表单测试 - TSP</title>
         </head>
         <body>
           <h1>表单提交成功</h1>
@@ -25,7 +25,7 @@ export default async function (context: PageContext) {
     <html lang="zh-CN">
       <head>
         <meta charset="UTF-8" />
-        <title>表单测试 - TSP-FPM</title>
+        <title>表单测试 - TSP</title>
       </head>
       <body>
         <h1>表单测试</h1>

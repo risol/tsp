@@ -6,7 +6,7 @@ export default async function (context: PageContext) {
     <html lang="zh-CN">
       <head>
         <meta charset="UTF-8" />
-        <title>API 信息 - TSP-FPM</title>
+        <title>API 信息 - TSP</title>
       </head>
       <body>
         <h1>API 信息</h1>

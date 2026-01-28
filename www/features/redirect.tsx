@@ -21,7 +21,7 @@ export default async function(context: PageContext) {
   }
 
   return (
-    <Layout title="重定向 - TSP-FPM" description="HTTP 重定向功能">
+    <Layout title="重定向 - TSP" description="HTTP 重定向功能">
       <h1 style={{ fontSize: "32px", marginBottom: "24px" }}>➡️ HTTP 重定向</h1>
       <p style={{ color: "#64748b", marginBottom: "32px" }}>
         返回包含 redirect 属性的对象即可触发 HTTP 重定向

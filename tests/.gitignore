@@ -1,6 +1,6 @@
 # 测试生成的二进制文件
-tsp-fpm-test
-tsp-fpm-test.exe
+tspserver-test
+tspserver-test.exe
 
 # 测试输出
 *.log

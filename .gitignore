@@ -1,4 +1,4 @@
 tmpclaude-*-cwd
-tsp-fpm.exe
+tspserver.exe
 /.deno
-tsp-fpm-test.exe
+tspserver-test.exe

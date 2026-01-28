@@ -163,7 +163,7 @@ await testHttpRequest(`http://localhost:${TEST_PORT}/nonexistent.tsx`, 404);
 
 ### 返回值类型
 
-TSP-FPM 支持三种返回值类型：
+TSP 支持三种返回值类型：
 
 1. **JSX 元素** - 渲染为 HTML (200)
    ```tsx

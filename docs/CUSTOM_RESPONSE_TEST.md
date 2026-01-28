@@ -274,7 +274,7 @@ curl -I http://localhost:9000/custom_response.tsx
 - ✅ 自定义状态码和响应头
 - ✅ 无需经过 JSX 渲染
 
-这是 TSP-FPM 的高级功能，适用于需要精确控制 HTTP 响应的场景。
+这是 TSP 的高级功能，适用于需要精确控制 HTTP 响应的场景。
 
 ## 更新时间
 

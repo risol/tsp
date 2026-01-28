@@ -1,8 +1,8 @@
-# TSP-FPM 快速开始
+# TSP 快速开始
 
 ## 配置文件功能
 
-TSP-FPM 现在支持配置文件！让配置更简单。
+TSP 现在支持配置文件！让配置更简单。
 
 ### 三种使用方式
 
@@ -19,7 +19,7 @@ TSP-FPM 现在支持配置文件！让配置更简单。
 
 直接运行：
 ```bash
-./tsp-fpm
+./tspserver
 ```
 
 #### 2. 使用 JSONC（支持注释）
@@ -41,7 +41,7 @@ TSP-FPM 现在支持配置文件！让配置更简单。
 #### 3. 命令行参数
 
 ```bash
-./tsp-fpm --root ./www --port 9000 --dev
+./tspserver --root ./www --port 9000 --dev
 ```
 
 ### 混合使用
@@ -50,13 +50,13 @@ TSP-FPM 现在支持配置文件！让配置更简单。
 
 ```bash
 # 使用配置文件，但临时修改端口
-./tsp-fpm --port 8080
+./tspserver --port 8080
 ```
 
 ### 指定配置文件
 
 ```bash
-./tsp-fpm --config ./my-config.json
+./tspserver --config ./my-config.json
 ```
 
 ### 优先级

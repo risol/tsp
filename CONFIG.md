@@ -1,8 +1,8 @@
-# TSP-FPM 配置文件使用说明
+# TSP 配置文件使用说明
 
 ## 配置文件支持
 
-TSP-FPM 支持通过配置文件来设置参数，同时保留命令行参数的灵活性。
+TSP 支持通过配置文件来设置参数，同时保留命令行参数的灵活性。
 
 ## 配置文件格式
 
@@ -36,17 +36,17 @@ TSP-FPM 支持通过配置文件来设置参数，同时保留命令行参数的
 在项目根目录创建 `config.json`，然后直接运行：
 
 ```bash
-./tsp-fpm
+./tspserver
 ```
 
-TSP-FPM 会自动查找并加载配置文件。
+TSP 会自动查找并加载配置文件。
 
 ### 2. 指定配置文件
 
 ```bash
-./tsp-fpm --config ./my-config.json
+./tspserver --config ./my-config.json
 # 或
-./tsp-fpm -c ./my-config.json
+./tspserver -c ./my-config.json
 ```
 
 ### 3. 命令行参数覆盖
@@ -55,13 +55,13 @@ TSP-FPM 会自动查找并加载配置文件。
 
 ```bash
 # 使用配置文件，但覆盖端口和开发模式
-./tsp-fpm --port 8080 --dev
+./tspserver --port 8080 --dev
 ```
 
 ### 4. 纯命令行参数（不使用配置文件）
 
 ```bash
-./tsp-fpm --root ./www --port 9000 --dev
+./tspserver --root ./www --port 9000 --dev
 ```
 
 ## 配置优先级
@@ -87,7 +87,7 @@ TSP-FPM 会自动查找并加载配置文件。
 
 **启动**:
 ```bash
-./tsp-fpm
+./tspserver
 ```
 
 ### 生产环境
@@ -103,7 +103,7 @@ TSP-FPM 会自动查找并加载配置文件。
 
 **启动**:
 ```bash
-./tsp-fpm
+./tspserver
 ```
 
 ### 多环境配置
@@ -129,10 +129,10 @@ TSP-FPM 会自动查找并加载配置文件。
 **启动**:
 ```bash
 # 开发环境
-./tsp-fpm --config ./tsp-fpm.dev.json
+./tspserver --config ./tspserver.dev.json
 
 # 生产环境
-./tsp-fpm --config ./tsp-fpm.prod.json
+./tspserver --config ./tspserver.prod.json
 ```
 
 ### 快速测试
@@ -141,10 +141,10 @@ TSP-FPM 会自动查找并加载配置文件。
 
 ```bash
 # 使用配置文件，但临时切换到其他端口
-./tsp-fpm --port 9999 --dev
+./tspserver --port 9999 --dev
 
 # 使用配置文件，但临时切换到其他目录
-./tsp-fpm --root ./test-www
+./tspserver --root ./test-www
 ```
 
 ## 注意事项
@@ -163,8 +163,8 @@ TSP-FPM 会自动查找并加载配置文件。
    - 建议使用 `./www` 这样的相对路径
 
 4. **错误处理**
-   - 如果配置文件格式错误，TSP-FPM 会显示错误并退出
-   - 如果指定的配置文件不存在，TSP-FPM 会显示错误并退出
+   - 如果配置文件格式错误，TSP 会显示错误并退出
+   - 如果指定的配置文件不存在，TSP 会显示错误并退出
 
 ## 完整示例
 
@@ -175,7 +175,7 @@ my-project/
 ├── www/                    # 文档根目录
 │   ├── index.tsx
 │   └── about.tsx
-└── tsp-fpm                 # 二进制文件
+└── tspserver              # 二进制文件
 ```
 
 **配置文件** (`config.json`):
@@ -190,7 +190,7 @@ my-project/
 **启动**:
 ```bash
 # 使用配置文件
-./tsp-fpm
+./tspserver
 
 # 访问 http://localhost:3000
 ```
@@ -202,7 +202,7 @@ my-project/
 检查文件名是否正确：
 - ✅ `config.jsonc`
 - ✅ `config.json`
-- ❌ `tsp-fpm.config.json`
+- ❌ `tspserver.config.json`
 - ❌ `config.json5`
 
 ### 配置文件格式错误
@@ -228,14 +228,14 @@ my-project/
 如果配置的端口已被占用：
 ```bash
 # 临时使用其他端口
-./tsp-fpm --port 9999
+./tspserver --port 9999
 ```
 
 ## 相关命令
 
 ```bash
 # 查看帮助
-./tsp-fpm --help
+./tspserver --help
 
 # 开发模式（自动重载）
 deno task dev

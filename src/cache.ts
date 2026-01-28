@@ -102,48 +102,68 @@ export async function getPage(
   // 缓存失效，重新加载
   console.log(`[CACHE MISS] ${filepath} (old: ${cached?.mtimeMs || 'none'}, new: ${currentMtimeMs})`);
 
-  // 清除 loader 缓存，确保获取最新代码
-  clearGlobalLoader();
-
-  // 获取 loader
-  const loader = await getGlobalLoader();
-
   // 将相对路径转换为绝对路径，然后转为 file URL
   const absolutePath = join(Deno.cwd(), filepath);
   const fileUrl = toFileUrl(absolutePath).href;
 
-  // 添加入口点
-  const diagnostics = await loader.addEntrypoints([fileUrl]);
-  if (diagnostics.length > 0) {
-    throw new Error(diagnostics[0].message);
+  // 清除 loader 缓存，确保获取最新代码
+  clearGlobalLoader();
+
+  // 先尝试直接 import（适用于 deno run 模式）
+  try {
+    const module = await import(fileUrl);
+
+    // 检查模块是否导出默认函数
+    if (typeof module.default !== 'function') {
+      throw new Error(`Module ${filepath} must export a default function`);
+    }
+
+    // 更新缓存
+    moduleCache.set(filepath, {
+      mtimeMs: currentMtimeMs,
+      module: module.default as PageFunction,
+    });
+
+    return module.default as PageFunction;
+  } catch (importError) {
+    // 如果直接 import 失败，使用 loader（适用于编译后的二进制文件）
+    console.log(`[FALLBACK] Using @deno/loader for ${filepath}`);
+
+    const loader = await getGlobalLoader();
+
+    // 添加入口点
+    const diagnostics = await loader.addEntrypoints([fileUrl]);
+    if (diagnostics.length > 0) {
+      throw new Error(diagnostics[0].message);
+    }
+
+    // 加载模块
+    const response = await loader.load(fileUrl, RequestedModuleType.Default);
+
+    if (response.kind !== "module") {
+      throw new Error(`Failed to load module: ${filepath}`);
+    }
+
+    // 将 Uint8Array 转换为字符串
+    const code = new TextDecoder().decode(response.code);
+
+    // 使用 data URL 导入转译后的代码
+    const dataUrl = `data:application/javascript,${encodeURIComponent(code)}`;
+    const module = await import(dataUrl);
+
+    // 检查模块是否导出默认函数
+    if (typeof module.default !== 'function') {
+      throw new Error(`Module ${filepath} must export a default function`);
+    }
+
+    // 更新缓存
+    moduleCache.set(filepath, {
+      mtimeMs: currentMtimeMs,
+      module: module.default as PageFunction,
+    });
+
+    return module.default as PageFunction;
   }
-
-  // 加载模块
-  const response = await loader.load(fileUrl, RequestedModuleType.Default);
-
-  if (response.kind !== "module") {
-    throw new Error(`Failed to load module: ${filepath}`);
-  }
-
-  // 将 Uint8Array 转换为字符串
-  const code = new TextDecoder().decode(response.code);
-
-  // 使用 data URL 导入转译后的代码
-  const dataUrl = `data:application/javascript,${encodeURIComponent(code)}`;
-  const module = await import(dataUrl);
-
-  // 检查模块是否导出默认函数
-  if (typeof module.default !== 'function') {
-    throw new Error(`Module ${filepath} must export a default function`);
-  }
-
-  // 更新缓存
-  moduleCache.set(filepath, {
-    mtimeMs: currentMtimeMs,
-    module: module.default as PageFunction,
-  });
-
-  return module.default as PageFunction;
 }
 
 /**

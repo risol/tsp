@@ -41,7 +41,7 @@ async function runTestSuite(name: string, command: string): Promise<boolean> {
 
 async function main() {
   console.log("╔════════════════════════════════════════════╗");
-  console.log("║   TSP-FPM 完整测试套件                    ║");
+  console.log("║   TSP 完整测试套件                         ║");
   console.log("╚════════════════════════════════════════════╝");
 
   const startTime = Date.now();

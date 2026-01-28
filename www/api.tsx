@@ -62,7 +62,7 @@ export default async function (context: PageContext) {
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>API 信息 - TSP-FPM</title>
+        <title>API 信息 - TSP</title>
         <style>{style}</style>
       </head>
       <body>

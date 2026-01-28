@@ -4,7 +4,7 @@ import { Layout } from "./components/Layout.tsx";
 export default async function(context: PageContext) {
   return (
     <Layout
-      title="TSP-FPM - 类 PHP-FPM 模板引擎"
+      title="TSP - TypeScript Server Page"
       description="使用 Deno + TSX 实现的高性能模板服务器"
     >
       {/* Hero Section */}
@@ -17,10 +17,10 @@ export default async function(context: PageContext) {
         marginBottom: '40px',
       }}>
         <h1 style={{ fontSize: '48px', fontWeight: 'bold', marginBottom: '16px' }}>
-          🚀 TSP-FPM
+          🚀 TSP
         </h1>
         <p style={{ fontSize: '20px', opacity: 0.9, marginBottom: '24px' }}>
-          类 PHP-FPM 模板执行引擎
+          TypeScript Server Page
         </p>
         <p style={{ fontSize: '16px', opacity: 0.8, marginBottom: '32px' }}>
           使用 Deno + TSX + Preact 构建的高性能模板服务器
@@ -158,7 +158,7 @@ export default async function(context: PageContext) {
         <title>Hello World</title>
       </head>
       <body>
-        <h1>Hello from TSP-FPM!</h1>
+        <h1>Hello from TSP!</h1>
         <p>Request method: {method}</p>
         <p>URL: {url.pathname}</p>
       </body>
@@ -178,7 +178,7 @@ export default async function(context: PageContext) {
         marginTop: '40px',
       }}>
         <h3 style={{ marginBottom: '16px', color: '#1e293b' }}>
-          开始使用 TSP-FPM
+          开始使用 TSP
         </h3>
         <p style={{ marginBottom: '24px', color: '#64748b' }}>
           探索各种功能演示，了解如何构建强大的 Web 应用

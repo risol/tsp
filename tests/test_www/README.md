@@ -1,4 +1,4 @@
-# TSP-FPM 测试页面说明
+# TSP 测试页面说明
 
 本目录包含用于测试的简化 TSX 页面。
 
@@ -47,7 +47,7 @@ API 信息页面，测试请求上下文。
 deno run --allow-net --allow-read src/main.ts --root ./tests/test_www
 
 # 或编译后运行
-DENO_DIR=./.deno ./tsp-fpm.exe --root ./tests/test_www
+DENO_DIR=./.deno ./tspserver.exe --root ./tests/test_www
 ```
 
 ## 页面特点

@@ -2,7 +2,7 @@
   "tasks": {
     "dev": "deno run --watch --allow-net --allow-read --allow-write --allow-env --allow-run src/main.ts --dev",
     "start": "deno run --allow-net --allow-read --allow-write --allow-env src/main.ts",
-    "compile": "deno compile --allow-net --allow-read --allow-write --allow-env --output tsp-fpm src/main.ts",
+    "compile": "deno compile --allow-net --allow-read --allow-write --allow-env --output tspserver src/main.ts",
 
     "test": "deno run --allow-all tests/run_all_tests.ts",
     "test:unit": "deno run --allow-all tests/run_unit_tests.ts",
@@ -14,7 +14,7 @@
     "fmt": "deno fmt --allow-write src/ www/ tests/",
     "fmt:check": "deno fmt --check src/ www/ tests/",
     "lint": "deno lint src/ www/ tests/",
-    "clean": "rm -rf tsp-fpm tsp-fpm.exe tests/tsp-fpm-test tests/tsp-fpm-test.exe config.json config.jsonc"
+    "clean": "rm -rf tspserver tspserver.exe tests/tspserver-test tests/tspserver-test.exe config.json config.jsonc"
   },
   "imports": {
     "@deno/loader": "jsr:@deno/loader@^0.3.11",

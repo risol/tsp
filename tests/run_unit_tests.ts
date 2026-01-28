@@ -53,7 +53,7 @@ async function runTestFile(testFile: string): Promise<boolean> {
 
 async function main() {
   console.log("╔════════════════════════════════════════════╗");
-  console.log("║   TSP-FPM 单元测试                         ║");
+  console.log("║   TSP 单元测试                              ║");
   console.log("╚════════════════════════════════════════════╝");
 
   const startTime = Date.now();

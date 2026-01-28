@@ -1,7 +1,7 @@
 #!/usr/bin/env -S deno run --allow-net --allow-read
 
 /**
- * TSP-FPM: 类 PHP-FPM 模板执行引擎
+ * TSP: TypeScript Server Page
  * 使用 Deno + TSX 实现的模板服务器
  */
 
@@ -152,10 +152,10 @@ async function parseArgs(): Promise<Config> {
 // 打印帮助信息
 function printHelp(): void {
   console.log(`
-TSP-FPM: 类 PHP-FPM 模板执行引擎
+TSP: TypeScript Server Page
 
 用法:
-  ./tsp-fpm [options]
+  ./tspserver [options]
 
 选项:
   --config, -c <file>  配置文件路径 (默认: 自动查找 config.json)
@@ -180,16 +180,16 @@ TSP-FPM: 类 PHP-FPM 模板执行引擎
 
 示例:
   # 使用配置文件
-  ./tsp-fpm
+  ./tspserver
 
   # 指定配置文件
-  ./tsp-fpm --config ./my-config.json
+  ./tspserver --config ./my-config.json
 
   # 命令行参数覆盖配置文件
-  ./tsp-fpm --port 8080 --dev
+  ./tspserver --port 8080 --dev
 
   # 纯命令行参数
-  ./tsp-fpm --root ./www --port 9000 --dev
+  ./tspserver --root ./www --port 9000 --dev
 `);
 }
 
@@ -392,7 +392,7 @@ async function main(): Promise<void> {
 
   console.log(`
 ╔════════════════════════════════════════╗
-║         TSP-FPM Template Engine        ║
+║            TSP Server                  ║
 ╚════════════════════════════════════════╝
 
 Document Root: ${config.root}

@@ -129,7 +129,7 @@ deno task test:binary
 deno run --allow-net --allow-read src/main.ts --root ./tests/test_www
 
 # 编译后运行
-DENO_DIR=./.deno ./tsp-fpm.exe --root ./tests/test_www
+DENO_DIR=./.deno ./tspserver.exe --root ./tests/test_www
 ```
 
 ## 访问测试页面

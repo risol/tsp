@@ -4,14 +4,14 @@ import { Layout } from "./components/Layout.tsx";
 export default async function(context: PageContext) {
   return (
     <Layout
-      title="功能特性 - TSP-FPM"
-      description="TSP-FPM 提供的完整功能特性列表"
+      title="功能特性 - TSP"
+      description="TSP 提供的完整功能特性列表"
     >
       <h1 style={{ fontSize: '36px', marginBottom: '24px', color: '#1e293b' }}>
         📚 功能特性
       </h1>
       <p style={{ fontSize: '18px', color: '#64748b', marginBottom: '40px' }}>
-        探索 TSP-FPM 提供的强大功能，每个功能都配有详细的演示和代码示例
+        探索 TSP 提供的强大功能，每个功能都配有详细的演示和代码示例
       </p>
 
       <div className="info-grid">
@@ -165,7 +165,7 @@ export default async function(context: PageContext) {
             <tbody>
               <tr>
                 <td><a href="/">返回首页</a></td>
-                <td style={{ textAlign: 'right', color: '#64748b' }}>TSP-FPM 主页</td>
+                <td style={{ textAlign: 'right', color: '#64748b' }}>TSP 主页</td>
               </tr>
               <tr>
                 <td><a href="/features/request-info">请求信息演示</a></td>

@@ -2,7 +2,7 @@
  * E2E 测试共享工具
  */
 
-const OUTPUT_BINARY = "tsp-fpm-test";
+const OUTPUT_BINARY = "tspserver-test";
 const TEST_PORT = 9100;
 const TEST_ROOT = "./tests/test_www";
 const STARTUP_DELAY = 2000;
