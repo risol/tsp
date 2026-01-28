@@ -1,5 +1,3 @@
-import type { PageContext } from "../src/cache.ts";
-
 export default async function (_context: PageContext) {
   const redirectObj = { redirect: "/" };
 

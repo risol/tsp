@@ -26,6 +26,7 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "jsxImportSource": "preact",
-    "lib": ["deno.window", "DOM"]
+    "lib": ["deno.window", "DOM"],
+    "types": ["./types.d.ts"]
   }
 }

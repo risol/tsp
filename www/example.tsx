@@ -1,4 +1,3 @@
-import type { PageContext } from "../src/cache.ts";
 import Layout from "./components/Layout.tsx";
 import Header from "./components/Header.tsx";
 import Footer from "./components/Footer.tsx";

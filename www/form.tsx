@@ -1,5 +1,3 @@
-import type { PageContext } from "../src/cache.ts";
-
 export default async function (context: PageContext) {
   const { method, body } = context;
 
@@ -101,7 +99,7 @@ export default async function (context: PageContext) {
 
             <div class="form-group">
               <label>个人简介：</label>
-              <textarea name="bio" rows="4"></textarea>
+              <textarea name="bio" rows={4}></textarea>
             </div>
 
             <button type="submit">提交</button>

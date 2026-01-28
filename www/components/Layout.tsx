@@ -1,5 +1,3 @@
-import type { PageContext } from "../../src/cache.ts";
-
 interface LayoutProps {
   title: string;
   context: PageContext;
