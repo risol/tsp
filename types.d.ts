@@ -69,12 +69,12 @@ declare global {
     /**
      * 测试函数
      */
-    testFunc?: () => string;
+    testFunc: () => string;
 
     /**
      * 数据库接口（示例）
      */
-    db?: {
+    db: {
       query: (sql: string) => Promise<unknown[]>;
       insert: (table: string, data: Record<string, unknown>) => Promise<void>;
     };
@@ -82,7 +82,7 @@ declare global {
     /**
      * Session 管理（示例）
      */
-    session?: {
+    session: {
       getUser: () => Promise<{ id: string; name: string } | null>;
       set: (key: string, value: unknown) => Promise<void>;
     };
@@ -90,7 +90,7 @@ declare global {
     /**
      * 日志函数（示例）
      */
-    logger?: typeof console.log;
+    logger: typeof console.log;
   }
 
   /**

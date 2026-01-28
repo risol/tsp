@@ -113,15 +113,30 @@ export function createWithDeps() {
     fn: (ctx: PageContext, deps: AppDeps) => Promise<T> | T
   ): (ctx: PageContext) => Promise<T> {
     return async (ctx: PageContext) => {
+      // 获取函数签名中期望的依赖名称
+      const fnStr = fn.toString();
+      const depsMatch = fnStr.match(/\([^)]*,\s*{([^}]+)\}\s*\)/);
+      const expectedDeps = depsMatch ? depsMatch[1].split(',').map(d => d.trim()) : [];
+
       // 构建所有已注册的依赖
-      const deps = {} as AppDeps;
+      const deps: Record<string, unknown> = {};
 
       for (const [name, builder] of depBuilders) {
         deps[name] = await builder(ctx);
       }
 
+      // 检查所有期望的依赖是否都已注册
+      for (const depName of expectedDeps) {
+        if (!(depName in deps)) {
+          throw new Error(
+            `Dependency "${depName}" is used but not registered. ` +
+            `Please register it using registerDep('${depName}', builder) in main.ts.`
+          );
+        }
+      }
+
       // 调用原始函数，注入依赖
-      return fn(ctx, deps);
+      return fn(ctx, deps as AppDeps);
     };
   }
 
