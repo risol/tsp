@@ -94,18 +94,18 @@ declare global {
   }
 
   /**
-   * 全局 withDeps 函数
+   * 全局 Page 函数
    * TSX 文件中可以直接使用，无需 import
    *
    * @example
    * ```tsx
-   * export default withDeps(async function(ctx, { testFunc, db }) {
+   * export default Page(async function(ctx, { testFunc, db }) {
    *   const result = testFunc();  // ✅ 有完整类型提示
    *   return <div>{result}</div>;
    * });
    * ```
    */
-  function withDeps<T>(
+  function Page<T>(
     fn: (ctx: PageContext, deps: AppDeps) => Promise<T> | T
   ): (ctx: PageContext) => Promise<T>;
 }

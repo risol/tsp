@@ -82,14 +82,24 @@ export function getRegisteredDeps(): string[] {
 }
 
 /**
- * withDeps 实现
+ * Page / withDeps 实现
  * 这是一个高阶函数，返回一个包装函数
  *
  * @example
  * ```tsx
- * // TSX 文件中无需 import，直接使用全局 withDeps
- * export default withDeps(async function(ctx, { testFunc, db }) {
+ * // 使用 Page（推荐）
+ * import { Page } from "../src/injection-typed.ts";
+ *
+ * export default Page(async function(ctx, { testFunc, db }) {
  *   const result = testFunc();  // ✅ 有完整类型提示
+ *   return <div>{result}</div>;
+ * });
+ *
+ * // 或者使用 withDeps（别名）
+ * import { withDeps } from "../src/injection-typed.ts";
+ *
+ * export default withDeps(async function(ctx, { testFunc, db }) {
+ *   const result = testFunc();
  *   return <div>{result}</div>;
  * });
  * ```
@@ -97,8 +107,9 @@ export function getRegisteredDeps(): string[] {
 export function createWithDeps() {
   /**
    * 包装页面函数，自动注入依赖
+   * Page 和 withDeps 是同一个函数
    */
-  return function withDeps<T>(
+  function PageOrWithDeps<T>(
     fn: (ctx: PageContext, deps: AppDeps) => Promise<T> | T
   ): (ctx: PageContext) => Promise<T> {
     return async (ctx: PageContext) => {
@@ -112,21 +123,31 @@ export function createWithDeps() {
       // 调用原始函数，注入依赖
       return fn(ctx, deps);
     };
-  };
+  }
+
+  return PageOrWithDeps;
 }
 
 /**
- * 初始化全局 withDeps
+ * 初始化全局 Page
  * 在模块加载时就自动执行，无需手动调用
  */
 export function initGlobalWithDeps(): void {
   if (typeof (globalThis as any).withDeps === 'undefined') {
     (globalThis as any).withDeps = createWithDeps();
   }
+  if (typeof (globalThis as any).Page === 'undefined') {
+    (globalThis as any).Page = createWithDeps();
+  }
 }
 
 // 自动初始化（在模块加载时执行）
 initGlobalWithDeps();
+
+// 导出 Page 和 withDeps（同一个函数的两个别名）
+const _pageFn = createWithDeps();
+export const Page = _pageFn;
+export const withDeps = _pageFn;
 
 // 默认导出
 export default {
@@ -136,4 +157,6 @@ export default {
   getRegisteredDeps,
   createWithDeps,
   initGlobalWithDeps,
+  Page,
+  withDeps,
 };
