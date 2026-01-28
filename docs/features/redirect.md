@@ -41,8 +41,6 @@ export default async function (context: PageContext) {
 创建 `www/redirect_simple.tsx`，总是重定向：
 
 ```tsx
-import type { PageContext } from "../src/cache.ts";
-
 export default async function (_context: PageContext) {
   // 简单的重定向测试页面
   // 总是重定向到首页
@@ -120,8 +118,6 @@ await testHttpRequest(`http://localhost:${TEST_PORT}/nonexistent.tsx`, 404); // 
 ### 新增文件: www/redirect_simple.tsx
 
 ```tsx
-import type { PageContext } from "../src/cache.ts";
-
 export default async function (_context: PageContext) {
   return { redirect: "/" };
 }

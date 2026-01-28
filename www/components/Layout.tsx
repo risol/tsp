@@ -1,4 +1,3 @@
-import type { PageContext } from "../../src/cache.ts";
 import { Navigation } from "./Navigation.tsx";
 import { Footer } from "./Footer.tsx";
 import { getGlobalStyles } from "./Styles.tsx";

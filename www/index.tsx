@@ -1,4 +1,3 @@
-import type { PageContext } from "../src/cache.ts";
 import { Layout } from "./components/Layout.tsx";
 
 export default async function(context: PageContext) {
@@ -147,8 +146,6 @@ export default async function(context: PageContext) {
           <h3 style={{ marginBottom: '16px' }}>创建一个页面</h3>
           <div className="code-block">
 {`// www/index.tsx
-import type { PageContext } from "../src/cache.ts";
-
 export default async function(context: PageContext) {
   const { method, url, query } = context;
 

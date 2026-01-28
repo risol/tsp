@@ -37,8 +37,6 @@ deno run --allow-net --allow-read src/main.ts --root ./www --port 9000 --dev
 在 `www` 目录下创建 `hello.tsx`：
 
 ```tsx
-import type { PageContext } from "../src/cache.ts";
-
 export default async function (context: PageContext) {
   const { method, query } = context;
   const name = query.name || "World";
@@ -59,6 +57,8 @@ export default async function (context: PageContext) {
 ```
 
 访问 `http://localhost:9000/hello` 即可看到结果。
+
+> **注意**: `PageContext` 类型已在 `types.d.ts` 中全局声明，无需 import 即可使用。
 
 ---
 
@@ -249,8 +249,6 @@ export default async function (context: PageContext) {
 每个 `.tsx` 页面必须导出一个默认函数：
 
 ```tsx
-import type { PageContext } from "../src/cache.ts";
-
 export default async function (context: PageContext) {
   // 处理逻辑
   return <div>页面内容</div>;
@@ -449,8 +447,6 @@ export default async function (context: PageContext) {
 
 ```tsx
 // www/components/Layout.tsx
-import type { PageContext } from "../../src/cache.ts";
-
 interface LayoutProps {
   title: string;
   context: PageContext;

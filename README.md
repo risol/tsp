@@ -78,8 +78,6 @@ deno task clean
 创建 `index.tsx` 文件：
 
 ```tsx
-import type { PageContext } from "../src/cache.ts";
-
 export default async function (context: PageContext) {
   const { method, query } = context;
   const name = query.name ?? "World";

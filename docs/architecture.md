@@ -156,8 +156,6 @@ URL 到文件的映射规则:
 每个 `.tsx` 文件导出默认函数:
 
 ```tsx
-import type { PageContext } from "../src/cache.ts";
-
 export default async function (context: PageContext) {
   return <div>页面内容</div>;
 }

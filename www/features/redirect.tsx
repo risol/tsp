@@ -1,5 +1,3 @@
-import type { PageContext } from "../../src/cache.ts";
-import type { RedirectResult } from "../../src/cache.ts";
 import { Layout } from "../components/Layout.tsx";
 
 export default async function(context: PageContext) {
