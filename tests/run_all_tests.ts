@@ -49,7 +49,7 @@ async function main() {
   // 运行单元测试
   const unitPassed = await runTestSuite(
     "单元测试",
-    "deno run --allow-net --allow-read tests/run_unit_tests.ts"
+    "deno run --allow-all tests/run_unit_tests.ts"
   );
 
   totalTests++;
