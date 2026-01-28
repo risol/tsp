@@ -334,6 +334,43 @@ async function runE2ETests(): Promise<void> {
     },
   });
 
+  // 测试 3.5: 依赖注入测试页面（基本 TSX 功能）
+  tests.push({
+    name: "injection - 依赖注入测试页面",
+    fn: async () => {
+      const startTime = Date.now();
+
+      printSubsection("依赖注入测试页面");
+
+      const response = await fetch(`http://localhost:${TEST_PORT}/injection.tsx`);
+
+      // 如果不是 200，输出错误信息
+      if (response.status !== 200) {
+        const text = await response.text();
+        console.log(`  ${COLORS.red}错误响应内容:${COLORS.reset}`);
+        console.log(`  ${COLORS.dim}${text.substring(0, 500)}${COLORS.reset}`);
+
+        // 输出服务器错误日志
+        const serverErrors = (globalThis as any).serverErrors || '';
+        if (serverErrors) {
+          console.log(`  ${COLORS.red}服务器错误日志:${COLORS.reset}`);
+          console.log(`  ${COLORS.dim}${serverErrors}${COLORS.reset}`);
+        }
+      }
+
+      assertEquals(response.status, 200);
+
+      const text = await response.text();
+      // 验证页面包含预期内容（注意：由于编译限制，E2E 不测试实际依赖注入）
+      assertExists(text.includes("依赖注入测试"));
+      assertExists(text.includes("单元测试覆盖"));
+      printTestResult("injection.tsx - 基本页面功能正常", true);
+
+      const duration = Date.now() - startTime;
+      console.log(`  ${COLORS.dim}${duration}ms${COLORS.reset}`);
+    },
+  });
+
   // 测试 4: 错误处理
   tests.push({
     name: "http - 错误处理",

@@ -10,6 +10,7 @@ const UNIT_TEST_FILES = [
   "tests/unit/router_test.ts",
   "tests/unit/context_test.ts",
   "tests/unit/security_test.ts",
+  "tests/unit/injection_test.ts",
 ];
 
 let totalTests = 0;

@@ -8,6 +8,7 @@
 import { resolvePath, securityCheck } from "./router.ts";
 import { buildContext } from "./context.ts";
 import { getPage, renderJSX, type RedirectResult } from "./cache.ts";
+import { registerDepBuilder } from "./injection.ts";
 
 // 配置接口
 interface Config {
@@ -380,6 +381,14 @@ async function handleRequest(
 // 启动服务器
 async function main(): Promise<void> {
   const config = await parseArgs();
+
+  // 注册依赖注入函数
+  registerDepBuilder('testFunc', () => {
+    return function testFunc() {
+      console.log('testFunc called');
+      return 'testFunc called';
+    };
+  });
 
   console.log(`
 ╔════════════════════════════════════════╗
