@@ -8,7 +8,7 @@
 import { resolvePath, securityCheck } from "./router.ts";
 import { buildContext } from "./context.ts";
 import { getPage, renderJSX, type RedirectResult } from "./cache.ts";
-import { registerDepBuilder } from "./injection.ts";
+import { registerDep } from "./injection-typed.ts";
 
 // 配置接口
 interface Config {
@@ -382,8 +382,8 @@ async function handleRequest(
 async function main(): Promise<void> {
   const config = await parseArgs();
 
-  // 注册依赖注入函数
-  registerDepBuilder('testFunc', () => {
+  // 注册依赖注入函数（类型安全版本）
+  registerDep('testFunc', () => {
     return function testFunc() {
       console.log('testFunc called');
       return 'testFunc called';

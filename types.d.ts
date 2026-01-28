@@ -49,6 +49,65 @@ declare global {
     /** 重定向状态码，默认 302 */
     status?: 301 | 302 | 303 | 307 | 308;
   }
+
+  /**
+   * 应用依赖类型
+   * 在此声明所有可注入的依赖及其类型
+   *
+   * @example
+   * ```typescript
+   * // 添加新的依赖类型
+   * interface AppDeps {
+   *   testFunc: () => string;
+   *   db: {
+   *     query: (sql: string) => Promise<unknown[]>;
+   *   };
+   * }
+   * ```
+   */
+  interface AppDeps extends Record<string, unknown> {
+    /**
+     * 测试函数
+     */
+    testFunc?: () => string;
+
+    /**
+     * 数据库接口（示例）
+     */
+    db?: {
+      query: (sql: string) => Promise<unknown[]>;
+      insert: (table: string, data: Record<string, unknown>) => Promise<void>;
+    };
+
+    /**
+     * Session 管理（示例）
+     */
+    session?: {
+      getUser: () => Promise<{ id: string; name: string } | null>;
+      set: (key: string, value: unknown) => Promise<void>;
+    };
+
+    /**
+     * 日志函数（示例）
+     */
+    logger?: typeof console.log;
+  }
+
+  /**
+   * 全局 withDeps 函数
+   * TSX 文件中可以直接使用，无需 import
+   *
+   * @example
+   * ```tsx
+   * export default withDeps(async function(ctx, { testFunc, db }) {
+   *   const result = testFunc();  // ✅ 有完整类型提示
+   *   return <div>{result}</div>;
+   * });
+   * ```
+   */
+  function withDeps<T>(
+    fn: (ctx: PageContext, deps: AppDeps) => Promise<T> | T
+  ): (ctx: PageContext) => Promise<T>;
 }
 
 // 确保类型被视为全局的
