@@ -1,16 +1,17 @@
 {
   "tasks": {
-    "dev": "deno run --watch --allow-net --allow-read --allow-env src/main.ts --dev",
-    "start": "deno run --allow-net --allow-read --allow-env src/main.ts",
+    "dev": "deno run --watch --allow-net --allow-read --allow-write --allow-env --allow-run src/main.ts --dev",
+    "start": "deno run --allow-net --allow-read --allow-write --allow-env src/main.ts",
     "compile": "deno compile --allow-net --allow-read --allow-write --allow-env --output tsp-fpm src/main.ts",
 
     "test": "deno run --allow-all tests/run_all_tests.ts",
-    "test:unit": "deno run --allow-net --allow-read --allow-run tests/run_unit_tests.ts",
+    "test:unit": "deno run --allow-all tests/run_unit_tests.ts",
     "test:e2e": "deno run --allow-all tests/run_e2e_tests.ts",
-    "test:all": "deno test --allow-all tests/",
+    "test:injection": "deno test --allow-all tests/unit/injection_test.ts",
 
-    "check": "deno check src/main.ts src/cache.ts src/context.ts src/router.ts",
-    "fmt": "deno fmt src/ www/ tests/",
+    "check": "deno check src/main.ts src/cache.ts src/context.ts src/router.ts src/injection-typed.ts",
+    "check:all": "deno check src/ www/",
+    "fmt": "deno fmt --allow-write src/ www/ tests/",
     "fmt:check": "deno fmt --check src/ www/ tests/",
     "lint": "deno lint src/ www/ tests/",
     "clean": "rm -rf tsp-fpm tsp-fpm.exe tests/tsp-fpm-test tests/tsp-fpm-test.exe config.json config.jsonc"
