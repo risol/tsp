@@ -99,7 +99,7 @@ export default async function(context: PageContext) {
               <tr>
                 <td><strong>API 演示</strong></td>
                 <td>返回 JSON 格式的 API 响应示例</td>
-                <td><a href="/features/api-demo">查看演示 →</a></td>
+                <td><a href="/api">查看演示 →</a></td>
               </tr>
               <tr>
                 <td><strong>重定向</strong></td>
@@ -108,8 +108,10 @@ export default async function(context: PageContext) {
               </tr>
               <tr>
                 <td><strong>依赖注入</strong></td>
-                <td>类型安全的依赖注入功能</td>
-                <td><a href="/features/dependency-injection">查看演示 →</a></td>
+                <td>类型安全的依赖注入功能（单元测试覆盖）</td>
+                <td><span style={{ color: '#64748b', fontSize: '14px' }}>
+                  ✓ 单元测试验证
+                </span></td>
               </tr>
             </tbody>
           </table>

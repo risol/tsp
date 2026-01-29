@@ -67,7 +67,7 @@ export default async function(context: PageContext) {
             <li>响应头设置</li>
             <li>直接返回 Response 对象</li>
           </ul>
-          <a href="/features/api-demo" className="btn btn-primary" style={{ marginTop: '16px' }}>
+          <a href="/api" className="btn btn-primary" style={{ marginTop: '16px' }}>
             查看演示 →
           </a>
         </div>
@@ -106,9 +106,12 @@ export default async function(context: PageContext) {
             <li>支持异步依赖</li>
             <li>访问 Context 的依赖</li>
           </ul>
-          <a href="/features/dependency-injection" className="btn btn-primary" style={{ marginTop: '16px' }}>
-            查看演示 →
-          </a>
+          <div style={{ marginTop: '16px' }}>
+            <span className="badge badge-success">已集成</span>
+            <span style={{ marginLeft: '8px', fontSize: '14px', color: '#64748b' }}>
+              通过单元测试验证
+            </span>
+          </div>
         </div>
 
         {/* Error Handling */}
@@ -171,8 +174,8 @@ export default async function(context: PageContext) {
                 <td style={{ textAlign: 'right', color: '#64748b' }}>查看 HTTP 请求详情</td>
               </tr>
               <tr>
-                <td><a href="/features/dependency-injection">依赖注入演示</a></td>
-                <td style={{ textAlign: 'right', color: '#64748b' }}>类型安全的 DI 功能</td>
+                <td><a href="/api">API 演示</a></td>
+                <td style={{ textAlign: 'right', color: '#64748b' }}>查看 API 响应示例</td>
               </tr>
             </tbody>
           </table>

@@ -68,7 +68,7 @@ export function Navigation() {
           </li>
           <li>
             <a
-              href="/features/dependency-injection"
+              href="/form"
               style={{
                 color: 'white',
                 textDecoration: 'none',
@@ -78,7 +78,7 @@ export function Navigation() {
               onMouseEnter={(e) => e.currentTarget.style.opacity = '0.8'}
               onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
             >
-              依赖注入
+              表单示例
             </a>
           </li>
         </ul>
