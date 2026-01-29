@@ -30,7 +30,9 @@
       "Bash(tree:*)",
       "Bash(ping:*)",
       "Bash(DENO_DIR=./.deno ./tspserver.exe:*)",
-      "Bash(tasklist:*)"
+      "Bash(tasklist:*)",
+      "Bash(echo:*)",
+      "Bash(del:*)"
     ]
   }
 }

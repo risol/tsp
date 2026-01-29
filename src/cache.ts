@@ -130,8 +130,11 @@ export async function getPage(
   const cachePath = getCachePath(filepath);
   const cacheUrl = toFileUrl(cachePath).href;
 
+  // 添加时间戳查询参数，强制 Deno 重新加载模块（解决二进制模式下 import() 缓存问题）
+  const moduleUrl = `${cacheUrl}?t=${currentMtime}`;
+
   // 加载模块
-  const module = await import(cacheUrl);
+  const module = await import(moduleUrl);
 
   // 检查模块是否导出默认函数
   if (typeof module.default !== 'function') {

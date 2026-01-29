@@ -53,14 +53,15 @@ async function transpileTSX(filepath: string): Promise<string> {
   // 将 Uint8Array 转换为字符串
   let code = new TextDecoder().decode(response.code);
 
-  // 重写导入路径：将本地导入中的 .tsx 和 .ts 替换为 .js
+  // 重写导入路径：将本地导入中的 .tsx 替换为 .js
+  // 注意：.ts 文件不需要编译，Deno 原生支持 TypeScript，所以保留 .ts 扩展名
   // 支持多种格式：
   // - import { X } from "./path.tsx"
   // - import { X } from "./path.tsx";
   // - export { X } from "./path.tsx"
   code = code.replace(
-    /((?:import|export)\s+(?:(?:\*\s+as\s+\w+)|(?:\w+)|(?:\{[^}]*\}))\s+from\s+['"]((?:\.\/|\.\.\/)[^'"]+)\.)(tsx|ts)(['"][;\s]*)/g,
-    '$1js$4'
+    /((?:import|export)\s+(?:(?:\*\s+as\s+\w+)|(?:\w+)|(?:\{[^}]*\}))\s+from\s+['"]((?:\.\/|\.\.\/)[^'"]+))\.tsx(['"][;\s]*)/g,
+    '$1.js$3'
   );
 
   return code;
@@ -158,6 +159,9 @@ export async function compileFile(filepath: string): Promise<void> {
     );
   }
 
+  // 分析依赖
+  const dependencies = await analyzeDependencies(filepath);
+
   // 转译为 JS
   const jsCode = await transpileTSX(filepath);
 
@@ -169,6 +173,16 @@ export async function compileFile(filepath: string): Promise<void> {
 
   // 写入编译后的文件
   await Deno.writeTextFile(cachePath, jsCode);
+
+  // 复制 .ts 依赖文件到缓存目录（不编译，Deno 原生支持 TypeScript）
+  for (const dep of dependencies) {
+    if (dep.endsWith(".ts")) {
+      const depCachePath = getCachePath(dep);
+      await ensureDir(dirname(depCachePath));
+      await Deno.copyFile(dep, depCachePath);
+      console.log(`[COPIED] ${dep} -> ${relative(Deno.cwd(), depCachePath)}`);
+    }
+  }
 
   console.log(`[COMPILED] ${filepath} -> ${relative(Deno.cwd(), cachePath)}`);
 }
