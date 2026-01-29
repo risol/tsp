@@ -10,6 +10,7 @@ import { buildContext } from "./context.ts";
 import { getPage, renderJSX, type RedirectResult } from "./cache.ts";
 import { registerDep } from "./injection-typed.ts";
 import { compileAll } from "./precompiler_lib.ts";
+import { serveStaticFileWithCache } from "./static.ts";
 import { join } from "std/path";
 
 // 配置接口
@@ -18,13 +19,39 @@ export interface Config {
   port: number;
   dev: boolean;
   accessLogPath?: string;
+  staticExtensions?: string[];
 }
+
+// 默认支持的静态文件扩展名
+const DEFAULT_STATIC_EXTENSIONS = [
+  ".css",
+  ".js",
+  ".json",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".svg",
+  ".ico",
+  ".webp",
+  ".woff",
+  ".woff2",
+  ".ttf",
+  ".eot",
+  ".mp3",
+  ".mp4",
+  ".webm",
+  ".txt",
+  ".md",
+  ".xml",
+];
 
 // 默认配置
 const DEFAULT_CONFIG: Config = {
   root: "./www",
   port: 9000,
   dev: false,
+  staticExtensions: DEFAULT_STATIC_EXTENSIONS,
 };
 
 // 配置文件接口（与 Config 相同，但所有字段都是可选的）
@@ -33,6 +60,7 @@ interface ConfigFile {
   port?: number;
   dev?: boolean;
   accessLogPath?: string;
+  staticExtensions?: string[];
 }
 
 /**
@@ -222,7 +250,8 @@ TSP: TypeScript Server Page
     "root": "./www",
     "port": 9000,
     "dev": false,
-    "accessLogPath": "./access.log"
+    "accessLogPath": "./access.log",
+    "staticExtensions": [".css", ".js", ".png", ".jpg"]
   }
 
   优先级: 命令行参数 > 配置文件 > 默认值
@@ -257,8 +286,9 @@ async function handleRequest(
     const url = new URL(req.url);
     const pathname = url.pathname;
 
-    // 解析文件路径
-    const fileResult = resolvePath(pathname, config.root);
+    // 解析文件路径（包含静态文件扩展名）
+    const staticExtensions = config.staticExtensions || [];
+    const fileResult = resolvePath(pathname, config.root, staticExtensions);
     if (!fileResult.success) {
       return new Response(fileResult.error, {
         status: 404,
@@ -268,8 +298,8 @@ async function handleRequest(
 
     const filepath = fileResult.filepath!;
 
-    // 安全检查
-    const securityResult = await securityCheck(filepath, config.root);
+    // 安全检查（包含静态文件扩展名）
+    const securityResult = await securityCheck(filepath, config.root, staticExtensions);
     if (!securityResult.success) {
       // 根据错误类型决定状态码
       const error = securityResult.error || "";
@@ -288,6 +318,21 @@ async function handleRequest(
         status,
         headers: { "Content-Type": "text/plain; charset=utf-8" },
       });
+    }
+
+    // 检查是否是静态文件（如果是配置文件中允许的扩展名）
+    // 静态文件扩展名列表在配置中提供
+    const allowedExtensions = config.staticExtensions || [];
+    const staticResponse = await serveStaticFileWithCache(
+      filepath,
+      allowedExtensions,
+      req.headers,
+      config.dev
+    );
+
+    // 如果是静态文件，直接返回
+    if (staticResponse !== null) {
+      return staticResponse;
     }
 
     // 解析请求体

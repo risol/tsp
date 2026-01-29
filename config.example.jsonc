@@ -14,4 +14,11 @@
   // 如果不设置，日志将输出到控制台
   // 如果设置为文件路径，日志将写入该文件（例如: "./access.log"）
   // "accessLogPath": "./access.log"
+
+  // 静态文件扩展名白名单（可选）
+  // 指定哪些扩展名的文件作为静态文件直接提供
+  // 如果不设置，使用默认列表
+  // 默认支持: .css, .js, .json, .png, .jpg, .jpeg, .gif, .svg, .ico,
+  //          .webp, .woff, .woff2, .ttf, .eot, .mp3, .mp4, .webm, .txt, .md, .xml
+  // "staticExtensions": [".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".svg"]
 }

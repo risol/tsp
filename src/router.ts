@@ -18,16 +18,21 @@ interface SecurityResult {
   error?: string;
 }
 
-// 允许的文件扩展名
+// 允许的文件扩展名（TSX 页面）
 const ALLOWED_EXTENSIONS = [".tsx"];
 
 /**
  * 解析 URL 路径到文件系统路径
  * @param pathname URL 路径
  * @param root 文档根目录
+ * @param additionalExtensions 额外允许的扩展名（如静态文件）
  * @returns 解析结果
  */
-export function resolvePath(pathname: string, root: string): PathResult {
+export function resolvePath(
+  pathname: string,
+  root: string,
+  additionalExtensions: string[] = []
+): PathResult {
   try {
     // 移除开头的斜杠并解码
     const decoded = decodeURIComponent(pathname.slice(1));
@@ -40,8 +45,13 @@ export function resolvePath(pathname: string, root: string): PathResult {
       };
     }
 
+    // 合并所有允许的扩展名
+    const allAllowedExtensions = [...ALLOWED_EXTENSIONS, ...additionalExtensions];
+
     // 检查路径是否已经有允许的扩展名
-    const hasExtension = ALLOWED_EXTENSIONS.some(ext => decoded.endsWith(ext));
+    const hasExtension = allAllowedExtensions.some(ext =>
+      decoded.endsWith(ext)
+    );
 
     if (hasExtension) {
       // 路径已有扩展名，直接使用
@@ -50,7 +60,7 @@ export function resolvePath(pathname: string, root: string): PathResult {
         filepath: join(root, decoded),
       };
     } else {
-      // 添加 .tsx 扩展名
+      // 添加 .tsx 扩展名（默认行为）
       return {
         success: true,
         filepath: join(root, decoded + ".tsx"),
@@ -97,25 +107,29 @@ async function findFile(basePath: string): Promise<string | null> {
 /**
  * 检查文件扩展名是否允许
  * @param filepath 文件路径
+ * @param additionalExtensions 额外允许的扩展名
  * @returns 是否允许
  */
-function checkExtension(filepath: string): boolean {
-  return ALLOWED_EXTENSIONS.some((ext) => filepath.endsWith(ext));
+function checkExtension(filepath: string, additionalExtensions: string[] = []): boolean {
+  const allAllowedExtensions = [...ALLOWED_EXTENSIONS, ...additionalExtensions];
+  return allAllowedExtensions.some((ext) => filepath.endsWith(ext));
 }
 
 /**
  * 安全检查
  * @param filepath 文件路径
  * @param root 文档根目录
+ * @param additionalExtensions 额外允许的扩展名（如静态文件）
  * @returns 安全检查结果
  */
 export async function securityCheck(
   filepath: string,
-  root: string
+  root: string,
+  additionalExtensions: string[] = []
 ): Promise<SecurityResult> {
   try {
     // 1. 检查文件扩展名
-    if (!checkExtension(filepath)) {
+    if (!checkExtension(filepath, additionalExtensions)) {
       return {
         success: false,
         error: "File type not allowed",

@@ -45,4 +45,40 @@ Deno.test("router - resolvePath: 嵌套目录", () => {
   assertEquals(normalizedPath, "www/api/v1/users/list.tsx");
 });
 
+// 静态文件测试
+Deno.test("router - resolvePath: 静态 CSS 文件", () => {
+  const result = resolvePath("/static/style.css", TEST_ROOT, [".css"]);
+  assertEquals(result.success, true);
+  const normalizedPath = result.filepath!.replace(/\\/g, "/");
+  assertEquals(normalizedPath, "www/static/style.css");
+});
+
+Deno.test("router - resolvePath: 静态 JS 文件", () => {
+  const result = resolvePath("/js/app.js", TEST_ROOT, [".js"]);
+  assertEquals(result.success, true);
+  const normalizedPath = result.filepath!.replace(/\\/g, "/");
+  assertEquals(normalizedPath, "www/js/app.js");
+});
+
+Deno.test("router - resolvePath: 静态图片文件", () => {
+  const result = resolvePath("/images/logo.png", TEST_ROOT, [".png"]);
+  assertEquals(result.success, true);
+  const normalizedPath = result.filepath!.replace(/\\/g, "/");
+  assertEquals(normalizedPath, "www/images/logo.png");
+});
+
+Deno.test("router - resolvePath: 混合扩展名（TSX 和静态文件）", () => {
+  // TSX 文件（默认支持）
+  const tsxResult = resolvePath("/page", TEST_ROOT, [".css", ".js"]);
+  assertEquals(tsxResult.success, true);
+  const tsxPath = tsxResult.filepath!.replace(/\\/g, "/");
+  assertEquals(tsxPath, "www/page.tsx");
+
+  // 静态 CSS 文件
+  const cssResult = resolvePath("/style.css", TEST_ROOT, [".css"]);
+  assertEquals(cssResult.success, true);
+  const cssPath = cssResult.filepath!.replace(/\\/g, "/");
+  assertEquals(cssPath, "www/style.css");
+});
+
 console.log("\n✓ Router 模块测试完成");
