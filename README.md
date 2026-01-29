@@ -53,6 +53,7 @@ deno compile --allow-net --allow-read --allow-write --allow-env --output tspserv
 - [配置说明](./docs/configuration.md) - 配置文件使用方法
 - [架构设计](./docs/architecture.md) - 系统架构和原理
 - [开发指南](./docs/development.md) - 开发环境配置
+- [开发路线图](./docs/ROADMAP.md) - 功能规划和未来计划
 
 ## 🛠️ 常用命令
 
