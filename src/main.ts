@@ -9,6 +9,8 @@ import { resolvePath, securityCheck } from "./router.ts";
 import { buildContext } from "./context.ts";
 import { getPage, renderJSX, type RedirectResult } from "./cache.ts";
 import { registerDep } from "./injection-typed.ts";
+import { compileAll } from "./precompiler_lib.ts";
+import { join } from "std/path";
 
 // 配置接口
 interface Config {
@@ -401,6 +403,39 @@ Mode: ${config.dev ? "Development" : "Production"}
 
 Starting server...
   `);
+
+  // 预编译所有 TSX 文件
+  if (config.dev) {
+    console.log("\n⏭️  Development mode: skipping precompilation");
+    console.log("   Files will be compiled on-demand.\n");
+  } else {
+    console.log("\n🔨 Precompiling TSX files...");
+    const { compileAll } = await import("./precompiler_lib.ts");
+    try {
+      const compiledFiles = await compileAll();
+
+      // 预热缓存：加载所有编译后的模块到内存
+      console.log("🔥 Warming up cache...");
+      const { getPage } = await import("./cache.ts");
+
+      for (const relPath of compiledFiles) {
+        try {
+          // 转换为 router 返回的格式：./www/index.tsx
+          const cacheKey = join(".", relPath);
+          await getPage(cacheKey);
+        } catch (error) {
+          const err = error as Error;
+          console.warn(`[WARN] Failed to load ${relPath} into cache:`, err.message);
+        }
+      }
+
+      console.log("✓ Cache warmed up");
+    } catch (error) {
+      const err = error as Error;
+      console.error("\n❌ Precompilation failed:", err.message);
+      Deno.exit(1);
+    }
+  }
 
   // 启动 HTTP 服务器
   Deno.serve({

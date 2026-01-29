@@ -27,7 +27,10 @@
       "Bash(deno test:*)",
       "Bash(head:*)",
       "Bash(grep:*)",
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "Bash(ping:*)",
+      "Bash(DENO_DIR=./.deno ./tspserver.exe:*)",
+      "Bash(tasklist:*)"
     ]
   }
 }

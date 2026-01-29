@@ -64,15 +64,26 @@ async function main() {
   totalTests++;
   if (e2ePassed) passedTests++; else failedTests++;
 
+  // 运行热重载测试（独立）
+  const hotReloadPassed = await runTestSuite(
+    "热重载测试",
+    "deno run --allow-all tests/hot_reload_test.ts"
+  );
+
+  totalTests++;
+  if (hotReloadPassed) passedTests++; else failedTests++;
+
   const endTime = Date.now();
   const duration = ((endTime - startTime) / 1000).toFixed(2);
 
   console.log("\n╔════════════════════════════════════════════╗");
   console.log("║   测试总结                                 ║");
   console.log("╚════════════════════════════════════════════╝");
-  console.log(`总测试套件: ${totalTests}`);
+  console.log(`\n总测试套件: ${totalTests}`);
   console.log(`✓ 通过: ${passedTests}`);
-  console.log(`✗ 失败: ${failedTests}`);
+  if (failedTests > 0) {
+    console.log(`✗ 失败: ${failedTests}`);
+  }
   console.log(`⏱ 总耗时: ${duration} 秒`);
 
   if (failedTests === 0) {

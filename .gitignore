@@ -1,8 +1,10 @@
 tmpclaude-*-cwd
 tspserver.exe
+tspserver-test.exe
 /.deno
-tspserver-test.exe
-tspserver-test.exe
+.cache
+dist
+config.json
+config.jsonc
 nul
-tspserver-test.exe
-tspserver-test.exe
+*.log

@@ -3,19 +3,23 @@
     "dev": "deno run --watch --allow-net --allow-read --allow-write --allow-env --allow-run src/main.ts --dev",
     "start": "deno run --allow-net --allow-read --allow-write --allow-env src/main.ts",
     "compile": "deno compile --allow-net --allow-read --allow-write --allow-env --output tspserver src/main.ts",
+    "build": "deno run --allow-all src/build_tool.ts",
+
+    "precompile": "deno run --allow-net --allow-read --allow-write --allow-env src/precompile_tool.ts",
+    "precompile:clean": "deno run --allow-net --allow-read --allow-write --allow-env --allow-run src/precompile_tool.ts clean",
 
     "test": "deno run --allow-all tests/run_all_tests.ts",
     "test:unit": "deno run --allow-all tests/run_unit_tests.ts",
     "test:e2e": "deno run --allow-all tests/run_e2e_tests.ts",
+    "test:hot-reload": "deno run --allow-all tests/hot_reload_test.ts",
     "test:injection": "deno test --allow-all tests/unit/injection_test.ts",
-    "test:jsx-imports": "deno run --allow-all tests/test_jsx_imports.ts",
 
-    "check": "deno check src/main.ts src/cache.ts src/context.ts src/router.ts src/injection-typed.ts",
+    "check": "deno check src/main.ts src/cache.ts src/context.ts src/router.ts src/injection-typed.ts src/precompiler_lib.ts",
     "check:all": "deno check src/ www/",
     "fmt": "deno fmt --allow-write src/ www/ tests/",
     "fmt:check": "deno fmt --check src/ www/ tests/",
     "lint": "deno lint src/ www/ tests/",
-    "clean": "rm -rf tspserver tspserver.exe tests/tspserver-test tests/tspserver-test.exe config.json config.jsonc"
+    "clean": "rm -rf tspserver tspserver.exe tests/tspserver-test tests/tspserver-test.exe config.json config.jsonc .cache dist"
   },
   "imports": {
     "@deno/loader": "jsr:@deno/loader@^0.3.11",

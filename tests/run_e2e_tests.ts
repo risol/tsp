@@ -6,11 +6,13 @@
  */
 
 import { assertEquals, assertExists } from "https://deno.land/std@0.210.0/testing/asserts.ts";
+import { join } from "std/path";
 
 const OUTPUT_BINARY = "tspserver-test";
 const TEST_PORT = 9100;
 const TEST_ROOT = "./tests/test_www";
 const STARTUP_DELAY = 2000;
+const RELOAD_DELAY = 1000;
 
 // 全局服务器进程
 let serverProcess: Deno.ChildProcess | null = null;

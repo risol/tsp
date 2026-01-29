@@ -1,15 +1,13 @@
 /**
  * 模块缓存模块
- * 实现基于文件修改时间的 TSX 模块缓存
+ * 实现基于预编译的模块缓存
+ * TSX 文件会被编译到 .cache/tsp/ 目录，getPage() 加载编译后的 JS 文件
  */
 
 import { join, toFileUrl } from "std/path";
 import { render } from "preact-render-to-string";
-import {
-  Workspace,
-  type LoadResponse,
-  RequestedModuleType,
-} from "@deno/loader";
+import { ensureDir } from "https://deno.land/std@0.224.0/fs/ensure_dir.ts";
+import { compileFile, analyzeDependencies, getCachePath } from "./precompiler_lib.ts";
 import type { PageContext } from "./context.ts";
 
 // 重新导出 PageContext 类型，供页面使用
@@ -51,119 +49,150 @@ export type PageFunction = (
 interface CacheEntry {
   mtimeMs: number;
   module: PageFunction;
+  dependencies: string[]; // 依赖的文件列表
 }
 
 // 模块缓存 Map
 const moduleCache = new Map<string, CacheEntry>();
 
-// 动态导入缓存 - 用于清除模块缓存
-const importCache = new Map<string, string>();
+// 依赖图：记录每个 TSX 文件及其依赖的文件
+const dependencyGraph = new Map<string, string[]>();
 
-// 创建全局 loader 实例
-let globalLoader: Awaited<ReturnType<typeof Workspace.prototype.createLoader>> | null = null;
-let globalWorkspace: Workspace | null = null;
-
-async function getGlobalLoader() {
-  if (!globalLoader || !globalWorkspace) {
-    globalWorkspace = new Workspace();
-    globalLoader = await globalWorkspace.createLoader();
-  }
-  return globalLoader;
-}
-
-// 清除 loader 缓存并重建
-function clearGlobalLoader() {
-  globalLoader = null;
-  globalWorkspace = null;
-}
+// 编译文件修改时间
+const compiledMtimes = new Map<string, number>();
 
 /**
  * 获取页面函数
- * 如果缓存有效则使用缓存，否则重新加载
- * @param filepath 页面文件路径
+ * 使用预编译的 JS 文件，支持自动重新编译
+ * @param filepath 页面文件路径（相对于 www 目录）
  * @returns 页面函数
  */
 export async function getPage(
   filepath: string
 ): Promise<PageFunction> {
+  const absPath = join(Deno.cwd(), filepath);
+
   // 获取文件修改时间
-  const stat = await Deno.stat(filepath);
-  const currentMtimeMs = stat.mtime?.getTime() || 0;
+  const stat = await Deno.stat(absPath);
+  const currentMtime = stat.mtime?.getTime() || 0;
 
   // 检查缓存
   const cached = moduleCache.get(filepath);
 
-  if (cached && cached.mtimeMs === currentMtimeMs) {
+  // 构建依赖关系并检查是否需要重新编译
+  const needsRecompile = await needsRecompilation(filepath, currentMtime);
+
+  if (cached && !needsRecompile) {
     // 缓存有效，使用缓存的模块
-    console.log(`[CACHE HIT] ${filepath} (mtime: ${currentMtimeMs})`);
+    console.log(`[CACHE HIT] ${filepath} (mtime: ${currentMtime})`);
     return cached.module;
   }
 
-  // 缓存失效，重新加载
-  console.log(`[CACHE MISS] ${filepath} (old: ${cached?.mtimeMs || 'none'}, new: ${currentMtimeMs})`);
+  // 需要重新编译
+  console.log(`[CACHE MISS] ${filepath} - recompiling...`);
 
-  // 将相对路径转换为绝对路径，然后转为 file URL
-  const absolutePath = join(Deno.cwd(), filepath);
-  const fileUrl = toFileUrl(absolutePath).href;
-
-  // 清除 loader 缓存，确保获取最新代码
-  clearGlobalLoader();
-
-  // 先尝试直接 import（适用于 deno run 模式）
-  try {
-    const module = await import(fileUrl);
-
-    // 检查模块是否导出默认函数
-    if (typeof module.default !== 'function') {
-      throw new Error(`Module ${filepath} must export a default function`);
-    }
-
-    // 更新缓存
-    moduleCache.set(filepath, {
-      mtimeMs: currentMtimeMs,
-      module: module.default as PageFunction,
-    });
-
-    return module.default as PageFunction;
-  } catch (importError) {
-    // 如果直接 import 失败，使用 loader（适用于编译后的二进制文件）
-    console.log(`[FALLBACK] Using @deno/loader for ${filepath}`);
-
-    const loader = await getGlobalLoader();
-
-    // 添加入口点
-    const diagnostics = await loader.addEntrypoints([fileUrl]);
-    if (diagnostics.length > 0) {
-      throw new Error(diagnostics[0].message);
-    }
-
-    // 加载模块
-    const response = await loader.load(fileUrl, RequestedModuleType.Default);
-
-    if (response.kind !== "module") {
-      throw new Error(`Failed to load module: ${filepath}`);
-    }
-
-    // 将 Uint8Array 转换为字符串
-    const code = new TextDecoder().decode(response.code);
-
-    // 使用 data URL 导入转译后的代码
-    const dataUrl = `data:application/javascript,${encodeURIComponent(code)}`;
-    const module = await import(dataUrl);
-
-    // 检查模块是否导出默认函数
-    if (typeof module.default !== 'function') {
-      throw new Error(`Module ${filepath} must export a default function`);
-    }
-
-    // 更新缓存
-    moduleCache.set(filepath, {
-      mtimeMs: currentMtimeMs,
-      module: module.default as PageFunction,
-    });
-
-    return module.default as PageFunction;
+  // 1. 检查远程导入
+  const { checkRemoteImports } = await import("./precompiler_lib.ts");
+  const remoteImports = await checkRemoteImports(absPath);
+  if (remoteImports.length > 0) {
+    throw new Error(
+      `Remote imports are not allowed: ${remoteImports.join(", ")}`
+    );
   }
+
+  // 2. 分析依赖
+  const { analyzeDependencies } = await import("./precompiler_lib.ts");
+  const dependencies = await analyzeDependencies(absPath);
+  console.log(`[INFO] Dependencies: ${dependencies.join(", ")}`);
+
+  // 3. 编译当前文件
+  const { compileFile } = await import("./precompiler_lib.ts");
+  await compileFile(absPath);
+
+  // 4. 编译所有依赖的 TSX 文件
+  for (const dep of dependencies) {
+    if (dep.endsWith(".tsx")) {
+      console.log(`[INFO] Compiling dependency: ${dep}`);
+      await compileFile(dep);
+
+      // 更新依赖文件的编译时间戳
+      const depStat = await Deno.stat(dep);
+      const depMtime = depStat.mtime?.getTime() || 0;
+      compiledMtimes.set(dep, depMtime);
+    }
+  }
+
+  // 5. 更新依赖图
+  dependencyGraph.set(filepath, dependencies);
+
+  // 6. 加载编译后的 JS 文件
+  const { getCachePath } = await import("./precompiler_lib.ts");
+  const cachePath = getCachePath(filepath);
+  const cacheUrl = toFileUrl(cachePath).href;
+
+  // 加载模块
+  const module = await import(cacheUrl);
+
+  // 检查模块是否导出默认函数
+  if (typeof module.default !== 'function') {
+    throw new Error(`Module ${filepath} must export a default function`);
+  }
+
+  // 7. 更新缓存
+  moduleCache.set(filepath, {
+    mtimeMs: currentMtime,
+    module: module.default as PageFunction,
+    dependencies: dependencies,
+  });
+
+  // 8. 更新编译文件修改时间
+  compiledMtimes.set(filepath, currentMtime);
+
+  return module.default as PageFunction;
+}
+
+/**
+ * 检查是否需要重新编译
+ */
+async function needsRecompilation(
+  filepath: string,
+  currentMtime: number
+): Promise<boolean> {
+  const cached = moduleCache.get(filepath);
+
+  if (!cached) {
+    return true; // 没有缓存，需要编译
+  }
+
+  // 检查主文件是否修改
+  const compiledMtime = compiledMtimes.get(filepath);
+  if (!compiledMtime || compiledMtime !== currentMtime) {
+    return true;
+  }
+
+  // 检查依赖文件是否修改
+  const dependencies = cached.dependencies || [];
+  for (const dep of dependencies) {
+    try {
+      const depStat = await Deno.stat(dep);
+      const depMtime = depStat.mtime?.getTime() || 0;
+
+      // 获取这个依赖文件的编译时间
+      const depCompiledMtime = compiledMtimes.get(dep);
+
+      // 如果依赖文件修改了，或者还没有编译过
+      if (!depCompiledMtime || depMtime > depCompiledMtime) {
+        console.log(`[INFO] Dependency modified: ${dep}`);
+        return true;
+      }
+    } catch (error) {
+      // 文件不存在，可能被删除了
+      console.log(`[WARN] Dependency not found: ${dep}`);
+      return true;
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -171,6 +200,8 @@ export async function getPage(
  */
 export function clearCache(): void {
   moduleCache.clear();
+  dependencyGraph.clear();
+  compiledMtimes.clear();
 }
 
 /**
