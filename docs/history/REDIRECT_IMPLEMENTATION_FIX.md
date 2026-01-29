@@ -5,7 +5,7 @@
 重定向页面返回 200 状态码而不是预期的 302：
 
 ```
-测试请求: http://localhost:9100/redirect_simple.tsx
+测试请求: http://localhost:9001/redirect_simple.tsx
 ✓ 状态码: 200
 
 Error: 期望状态码 302
@@ -210,14 +210,14 @@ export default async function (_context: PageContext) {
 
 **修复前：**
 ```
-测试请求: http://localhost:9100/redirect_simple.tsx
+测试请求: http://localhost:9001/redirect_simple.tsx
 ✓ 状态码: 200  ❌ 错误
 ```
 
 **修复后：**
 ```
 [重定向] www/redirect_simple.tsx -> / (302)
-测试请求: http://localhost:9100/redirect_simple.tsx
+测试请求: http://localhost:9001/redirect_simple.tsx
 ✓ 状态码: 302  ✅ 正确
 ```
 

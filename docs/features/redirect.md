@@ -5,7 +5,7 @@
 运行二进制测试时，重定向测试失败：
 
 ```
-测试请求: http://localhost:9100/redirect.tsx
+测试请求: http://localhost:9001/redirect.tsx
 ✓ 状态码: 200
 
 Error: 请求失败: Values are not equal: 期望状态码 302

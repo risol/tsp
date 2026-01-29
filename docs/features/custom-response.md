@@ -58,7 +58,7 @@ export default async function (context: PageContext) {
 ### 测试 1: HTML Response
 
 ```bash
-curl http://localhost:9100/custom_response.tsx
+curl http://localhost:9001/custom_response.tsx
 ```
 
 **预期结果：**
@@ -69,7 +69,7 @@ curl http://localhost:9100/custom_response.tsx
 ### 测试 2: JSON Response
 
 ```bash
-curl http://localhost:9100/custom_response.tsx?format=json
+curl http://localhost:9001/custom_response.tsx?format=json
 ```
 
 **预期结果：**

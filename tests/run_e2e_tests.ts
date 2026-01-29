@@ -9,7 +9,7 @@ import { assertEquals, assertExists } from "https://deno.land/std@0.210.0/testin
 import { join } from "std/path";
 
 const OUTPUT_BINARY = "tspserver-test";
-const TEST_PORT = 9100;
+const TEST_PORT = 9001;
 const TEST_ROOT = "./tests/test_www";
 const STARTUP_DELAY = 2000;
 const RELOAD_DELAY = 1000;

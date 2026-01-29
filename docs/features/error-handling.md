@@ -70,7 +70,7 @@ deno run --allow-net --allow-read src/main.ts --root ./tests/test_www
 ### 测试错误捕获
 
 ```typescript
-await testHttpRequest(`http://localhost:9100/error.tsx`, 500, undefined, true);
+await testHttpRequest(`http://localhost:9001/error.tsx`, 500, undefined, true);
 ```
 
 **验证点：**

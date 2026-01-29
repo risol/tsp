@@ -62,7 +62,7 @@ await testHttpRequest(`http://localhost:${TEST_PORT}/nonexistent.tsx`, 404);
 
 **测试方法：**
 ```bash
-curl -X POST http://localhost:9100/form.tsx \
+curl -X POST http://localhost:9001/form.tsx \
   -H "Content-Type: application/json" \
   -d '{"username":"TestUser"}'
 ```
@@ -134,12 +134,12 @@ DENO_DIR=./.deno ./tspserver.exe --root ./tests/test_www
 
 ## 访问测试页面
 
-假设服务器运行在 localhost:9100：
+假设服务器运行在 localhost:9001：
 
-- **首页**: http://localhost:9100/
-- **表单**: http://localhost:9100/form.tsx
-- **API**: http://localhost:9100/api.tsx
-- **重定向**: http://localhost:9100/redirect.tsx
+- **首页**: http://localhost:9001/
+- **表单**: http://localhost:9001/form.tsx
+- **API**: http://localhost:9001/api.tsx
+- **重定向**: http://localhost:9001/redirect.tsx
 
 ## 清理
 
