@@ -11,6 +11,7 @@ const UNIT_TEST_FILES = [
   "tests/unit/context_test.ts",
   "tests/unit/security_test.ts",
   "tests/unit/injection_test.ts",
+  "tests/unit/access_log_test.ts",
 ];
 
 let totalTests = 0;
@@ -25,7 +26,7 @@ async function runTestFile(testFile: string): Promise<boolean> {
   const command = new Deno.Command("deno", {
     args: [
       "test",
-      "--allow-net",
+      "--allow-all",
       testFile,
     ],
     cwd: ".", // 明确指定工作目录为项目根目录

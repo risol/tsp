@@ -13,10 +13,11 @@ import { compileAll } from "./precompiler_lib.ts";
 import { join } from "std/path";
 
 // 配置接口
-interface Config {
+export interface Config {
   root: string;
   port: number;
   dev: boolean;
+  accessLogPath?: string;
 }
 
 // 默认配置
@@ -31,6 +32,7 @@ interface ConfigFile {
   root?: string;
   port?: number;
   dev?: boolean;
+  accessLogPath?: string;
 }
 
 /**
@@ -44,6 +46,45 @@ function stripJsonComments(content: string): string {
   // 移除多行注释 /* */
   content = content.replace(/\/\*[\s\S]*?\*\//g, '');
   return content;
+}
+
+/**
+ * 记录 HTTP 访问日志
+ * @param req 请求对象
+ * @param resp 响应对象
+ * @param config 配置对象
+ */
+export async function logAccess(
+  req: Request,
+  resp: Response,
+  config: Config
+): Promise<void> {
+  const url = new URL(req.url);
+  const now = new Date();
+  const timestamp = now.toISOString();
+  const method = req.method;
+  const pathname = url.pathname;
+  const status = resp.status;
+  const userAgent = req.headers.get("user-agent") || "-";
+
+  // 获取响应时间（如果需要的话，可以在这里添加计时逻辑）
+  const logLine = `${timestamp} ${method} ${pathname} ${status} "${userAgent}"`;
+
+  if (config.accessLogPath) {
+    // 写入文件
+    try {
+      await Deno.writeTextFile(
+        config.accessLogPath,
+        logLine + "\n",
+        { append: true, create: true }
+      );
+    } catch (error) {
+      console.error(`Failed to write access log: ${error}`);
+    }
+  } else {
+    // 输出到控制台
+    console.log(logLine);
+  }
 }
 
 /**
@@ -138,6 +179,10 @@ async function parseArgs(): Promise<Config> {
       case "-d":
         config.dev = true;
         break;
+      case "--access-log":
+      case "-a":
+        config.accessLogPath = args[++i];
+        break;
       case "--help":
       case "-h":
         printHelp();
@@ -160,11 +205,12 @@ TSP: TypeScript Server Page
   ./tspserver [options]
 
 选项:
-  --config, -c <file>  配置文件路径 (默认: 自动查找 config.json)
-  --root, -r <path>    文档根目录 (默认: ./www)
-  --port, -p <port>    监听端口 (默认: 9000)
-  --dev, -d            开发模式 (显示错误详情)
-  --help, -h           显示帮助信息
+  --config, -c <file>     配置文件路径 (默认: 自动查找 config.json)
+  --root, -r <path>       文档根目录 (默认: ./www)
+  --port, -p <port>       监听端口 (默认: 9000)
+  --dev, -d               开发模式 (显示错误详情)
+  --access-log, -a <path> 访问日志文件路径 (默认: 控制台输出)
+  --help, -h              显示帮助信息
 
 配置文件:
   支持的配置文件名（按优先级）:
@@ -175,7 +221,8 @@ TSP: TypeScript Server Page
   {
     "root": "./www",
     "port": 9000,
-    "dev": false
+    "dev": false,
+    "accessLogPath": "./access.log"
   }
 
   优先级: 命令行参数 > 配置文件 > 默认值
@@ -192,6 +239,12 @@ TSP: TypeScript Server Page
 
   # 纯命令行参数
   ./tspserver --root ./www --port 9000 --dev
+
+  # 记录访问日志到文件
+  ./tspserver --access-log ./access.log
+
+  # 访问日志输出到控制台（默认）
+  ./tspserver
 `);
 }
 
@@ -444,7 +497,12 @@ Starting server...
       console.log(`✓ Server running at http://${hostname}:${port}/`);
       console.log("Press Ctrl+C to stop.\n");
     },
-  }, (req) => handleRequest(req, config));
+  }, async (req) => {
+    const resp = await handleRequest(req, config);
+    // 记录访问日志
+    await logAccess(req, resp, config);
+    return resp;
+  });
 }
 
 // 启动程序
