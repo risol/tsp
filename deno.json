@@ -8,6 +8,7 @@
     "test:unit": "deno run --allow-all tests/run_unit_tests.ts",
     "test:e2e": "deno run --allow-all tests/run_e2e_tests.ts",
     "test:injection": "deno test --allow-all tests/unit/injection_test.ts",
+    "test:jsx-imports": "deno run --allow-all tests/test_jsx_imports.ts",
 
     "check": "deno check src/main.ts src/cache.ts src/context.ts src/router.ts src/injection-typed.ts",
     "check:all": "deno check src/ www/",

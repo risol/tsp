@@ -371,6 +371,9 @@ async function runE2ETests(): Promise<void> {
     },
   });
 
+  // 注意：JSX Import 测试已移到单独的测试套件 (tests/test_jsx_imports.ts)
+  // 因为编译后的二进制文件有已知的 import 限制，JSX import 功能只在源码模式下测试
+
   // 测试 4: 错误处理
   tests.push({
     name: "http - 错误处理",

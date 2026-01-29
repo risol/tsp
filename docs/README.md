@@ -15,6 +15,7 @@
 ### 开发文档
 - [架构设计](./architecture.md) - 系统架构和设计原理
 - [开发指南](./development.md) - 开发环境配置和最佳实践
+- [二进制文件限制说明](./binary-limitations.md) - 已知限制和解决方案
 
 ### 功能特性
 - [依赖注入](./features/injection.md) - 类型安全的依赖注入功能
