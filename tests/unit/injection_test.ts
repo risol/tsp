@@ -87,7 +87,7 @@ Deno.test("injection - Page: 单个依赖注入", async () => {
   const testFunc = () => "testFunc called";
   registerDep("testFunc" as never, (ctx) => testFunc);
 
-  const wrapper = Page((ctx: PageContext, deps: AppDeps) => {
+  const wrapper = Page(["testFunc"], (ctx: PageContext, deps: AppDeps) => {
     const fn = deps.testFunc as () => string;
     return fn();
   });
@@ -110,7 +110,7 @@ Deno.test("injection - Page: 多个依赖注入", async () => {
   registerDep("func2" as never, () => func2);
   registerDep("func3" as never, () => func3);
 
-  const wrapper = Page((ctx: PageContext, deps: AppDeps) => {
+  const wrapper = Page(["func1", "func2", "func3"], (ctx: PageContext, deps: AppDeps) => {
     const f1 = deps.func1 as () => string;
     const f2 = deps.func2 as () => string;
     const f3 = deps.func3 as () => string;
@@ -136,7 +136,7 @@ Deno.test("injection - Page: 异步依赖构建", async () => {
 
   registerDep("asyncFunc" as never, async (ctx) => asyncFunc);
 
-  const wrapper = Page(async (ctx: PageContext, deps: AppDeps) => {
+  const wrapper = Page(["asyncFunc"], async (ctx: PageContext, deps: AppDeps) => {
     const fn = deps.asyncFunc as () => Promise<string>;
     return await fn();
   });
@@ -155,7 +155,7 @@ Deno.test("injection - Page: 依赖可以访问 context", async () => {
     return () => ctx.url.pathname;
   });
 
-  const wrapper = Page((ctx: PageContext, deps: AppDeps) => {
+  const wrapper = Page(["contextReader"], (ctx: PageContext, deps: AppDeps) => {
     const reader = deps.contextReader as () => string;
     return reader();
   });
@@ -172,7 +172,7 @@ Deno.test("injection - Page: 依赖可以访问 context", async () => {
 Deno.test("injection - Page: 页面函数返回 JSX", async () => {
   registerDep("logger" as never, (ctx) => console.log);
 
-  const wrapper = Page((ctx: PageContext, deps: AppDeps) => {
+  const wrapper = Page(["logger"], (ctx: PageContext, deps: AppDeps) => {
     const log = deps.logger as typeof console.log;
     log("页面函数执行中");
 
@@ -196,8 +196,8 @@ Deno.test("injection - Page: 全局 Page 函数可用", async () => {
   // 验证全局 Page 函数存在
   assertExists((globalThis as any).Page);
 
-  // 使用全局 Page
-  const wrapper = (globalThis as any).Page((ctx: PageContext, deps: AppDeps) => {
+  // 使用全局 Page（需要传入空数组，因为不使用依赖）
+  const wrapper = (globalThis as any).Page([], (ctx: PageContext) => {
     return "test";
   });
 

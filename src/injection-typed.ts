@@ -87,53 +87,54 @@ export function getRegisteredDeps(): string[] {
  *
  * @example
  * ```tsx
- * // 使用 Page 包装页面函数
+ * // 使用 Page 包装页面函数（显式声明依赖）
  * import { Page } from "../src/injection-typed.ts";
  *
- * export default Page(async function(ctx, { testFunc, db }) {
- *   const result = testFunc();  // ✅ 有完整类型提示
+ * // 方式1: 使用依赖键数组（推荐）
+ * export default Page(['testFunc', 'db'], async (ctx, { testFunc, db }) => {
+ *   const result = await testFunc();  // ✅ 有完整类型提示
+ *   const data = await db.query('SELECT * FROM users');
  *   return <div>{result}</div>;
  * });
  *
  * // Page 已在全局作用域，无需 import
- * export default Page(async function(ctx, { testFunc, db }) {
- *   const result = testFunc();
- *   return <div>{result}</div>;
+ * export default Page(['logger'], async function(ctx, { logger }) {
+ *   await logger('Page loaded');
+ *   return <div>Hello</div>;
  * });
  * ```
  */
 export function createPage() {
   /**
-   * 包装页面函数，自动注入依赖
+   * 包装页面函数，自动注入依赖（显式声明版本）
+   *
+   * @param deps - 依赖名称数组
+   * @param fn - 页面函数
+   * @returns 包装后的页面函数
    */
   function Page<T>(
+    deps: (keyof AppDeps)[],
     fn: (ctx: PageContext, deps: AppDeps) => Promise<T> | T
   ): (ctx: PageContext) => Promise<T> {
     return async (ctx: PageContext) => {
-      // 获取函数签名中期望的依赖名称
-      const fnStr = fn.toString();
-      const depsMatch = fnStr.match(/\([^)]*,\s*{([^}]+)\}\s*\)/);
-      const expectedDeps = depsMatch ? depsMatch[1].split(',').map(d => d.trim()) : [];
+      // 构建请求的依赖
+      const resolvedDeps: Record<string, unknown> = {};
 
-      // 构建所有已注册的依赖
-      const deps: Record<string, unknown> = {};
-
-      for (const [name, builder] of depBuilders) {
-        deps[name] = await builder(ctx);
-      }
-
-      // 检查所有期望的依赖是否都已注册
-      for (const depName of expectedDeps) {
-        if (!(depName in deps)) {
+      for (const depName of deps) {
+        const builder = depBuilders.get(depName);
+        if (builder) {
+          resolvedDeps[depName] = await builder(ctx);
+        } else {
           throw new Error(
-            `Dependency "${depName}" is used but not registered. ` +
-            `Please register it using registerDep('${depName}', builder) in main.ts.`
+            `Dependency "${String(depName)}" is requested but not registered. ` +
+            `Please register it using registerDep('${String(depName)}', builder) in main.ts. ` +
+            `Available deps: ${Array.from(depBuilders.keys()).join(', ')}`
           );
         }
       }
 
       // 调用原始函数，注入依赖
-      return fn(ctx, deps as AppDeps);
+      return fn(ctx, resolvedDeps as AppDeps);
     };
   }
 

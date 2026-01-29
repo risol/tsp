@@ -2,3 +2,5 @@ tmpclaude-*-cwd
 tspserver.exe
 /.deno
 tspserver-test.exe
+tspserver-test.exe
+nul
