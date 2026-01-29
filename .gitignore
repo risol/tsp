@@ -1,6 +1,8 @@
 tmpclaude-*-cwd
 tspserver.exe
 tspserver-test.exe
+*.exe.tmp*
+*.tmp-*
 /.deno
 .cache
 dist
