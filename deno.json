@@ -11,7 +11,7 @@
     "test": "deno run --allow-all tests/run_all_tests.ts",
     "test:unit": "deno run --allow-all tests/run_unit_tests.ts",
     "test:e2e": "deno run --allow-all tests/run_e2e_tests.ts",
-    "test:hot-reload": "deno run --allow-all tests/hot_reload_test.ts",
+    "test:hot-reload": "deno run --allow-all tests/hot_reload_source_test.ts",
     "test:injection": "deno test --allow-all tests/unit/injection_test.ts",
 
     "check": "deno check src/main.ts src/cache.ts src/context.ts src/router.ts src/injection-typed.ts src/precompiler_lib.ts src/static.ts",

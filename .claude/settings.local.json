@@ -35,7 +35,8 @@
       "Bash(del:*)",
       "Bash(git add:*)",
       "Bash(git commit -m \"$\\(cat <<''EOF''\n✨ feat\\(static\\): add static file serving with configurable extensions\n\nImplement comprehensive static file serving with:\n- Support for 21 file types \\(CSS, JS, images, fonts, media\\)\n- Automatic MIME type detection\n- HTTP caching with ETag and Last-Modified\n- 304 Not Modified responses for conditional requests\n- Development mode with cache disabled\n- Production mode with 1-day cache strategy\n- Configurable file extension whitelist via config.json\n- Security: extension whitelist, path traversal protection\n- 27 unit tests covering all functionality\n\nAdded files:\n- src/static.ts: Core static file serving module\n- tests/unit/static_test.ts: Comprehensive test suite\n- docs/features/static-files.md: Complete documentation\n- www/static/example.css: Example static file\n- www/static-demo.tsx: Demo page showing usage\n\nModified files:\n- src/main.ts: Integrate static file serving in request pipeline\n- src/router.ts: Add static extension support to routing\n- config.example.jsonc: Add staticExtensions configuration\n- deno.json: Add static.ts to type check\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(xargs:*)"
     ]
   }
 }

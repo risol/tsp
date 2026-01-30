@@ -64,15 +64,6 @@ async function main() {
   totalTests++;
   if (e2ePassed) passedTests++; else failedTests++;
 
-  // 运行热重载测试（独立）
-  const hotReloadPassed = await runTestSuite(
-    "热重载测试",
-    "deno run --allow-all tests/hot_reload_test.ts"
-  );
-
-  totalTests++;
-  if (hotReloadPassed) passedTests++; else failedTests++;
-
   const endTime = Date.now();
   const duration = ((endTime - startTime) / 1000).toFixed(2);
 

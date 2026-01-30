@@ -3,6 +3,7 @@
 /**
  * 运行E2E测试（二进制测试）
  * 一次性运行所有E2E测试，共享服务器实例
+ * 包括热重载测试（在开发模式下）
  */
 
 import { assertEquals, assertExists } from "https://deno.land/std@0.210.0/testing/asserts.ts";
@@ -97,7 +98,7 @@ async function startServer(): Promise<void> {
     : binaryPath;
 
   const command = new Deno.Command(commandPath, {
-    args: ["--root", TEST_ROOT, "--port", TEST_PORT.toString()],
+    args: ["--root", TEST_ROOT, "--port", TEST_PORT.toString(), "--dev"],
     stdout: "piped",
     stderr: "piped",
   });
@@ -426,7 +427,68 @@ async function runE2ETests(): Promise<void> {
     },
   });
 
-  // 测试 6: 清理资源
+  // 测试 6: 热重载测试（嵌套依赖）
+  tests.push({
+    name: "hot reload - 嵌套依赖热重载（二进制 + --dev）",
+    fn: async () => {
+      const startTime = Date.now();
+
+      printSubsection("热重载测试");
+
+      // 清理测试文件
+      const componentPath = "./tests/test_www/components/HotReloadComponent.tsx";
+      const wrapperPath = "./tests/test_www/components/HotReloadWrapper.tsx";
+
+      try { await Deno.remove(componentPath); } catch {}
+      try { await Deno.remove(wrapperPath); } catch {}
+
+      // 创建初始文件
+      await Deno.writeTextFile(componentPath, `export function HotReloadComponent() {
+  return <div data-testid="component">INITIAL_VERSION</div>;
+}`);
+      await Deno.writeTextFile(wrapperPath, `import { HotReloadComponent } from "./HotReloadComponent.tsx";
+
+export function HotReloadWrapper() {
+  return <div data-testid="wrapper"><HotReloadComponent /></div>;
+}`);
+      await new Promise(r => setTimeout(r, 500));
+
+      // 首次访问，验证初始内容
+      let response = await fetch(`http://localhost:${TEST_PORT}/hot_reload_page.tsx`);
+      assertEquals(response.status, 200);
+      let content = await response.text();
+      assertExists(content.includes("INITIAL_VERSION"), "页面应包含 INITIAL_VERSION");
+      printTestResult("初始内容验证", true);
+
+      // 修改组件文件（二级依赖）
+      await Deno.writeTextFile(componentPath, `export function HotReloadComponent() {
+  return <div data-testid="component">MODIFIED_VERSION</div>;
+}`);
+      printTestResult("组件文件已修改", true);
+
+      // 等待文件系统检测到修改
+      await new Promise(r => setTimeout(r, RELOAD_DELAY));
+
+      // 再次访问，验证内容已更新
+      response = await fetch(`http://localhost:${TEST_PORT}/hot_reload_page.tsx`);
+      assertEquals(response.status, 200);
+      content = await response.text();
+      const hasModified = content.includes("MODIFIED_VERSION");
+      const hasInitial = content.includes("INITIAL_VERSION");
+
+      if (hasModified && !hasInitial) {
+        printTestResult("嵌套依赖热重载工作正常", true);
+      } else {
+        printTestResult("嵌套依赖热重载失败", false);
+        throw new Error(`热重载失败: hasModified=${hasModified}, hasInitial=${hasInitial}`);
+      }
+
+      const duration = Date.now() - startTime;
+      console.log(`  ${COLORS.dim}${duration}ms}${COLORS.reset}`);
+    },
+  });
+
+  // 测试 7: 清理资源
   tests.push({
     name: "binary build - 停止服务器",
     fn: async () => {

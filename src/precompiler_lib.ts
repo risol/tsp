@@ -9,26 +9,71 @@ import { ensureDir } from "https://deno.land/std@0.224.0/fs/ensure_dir.ts";
 const WWW_DIR = "./www";
 const CACHE_DIR = ".cache/tsp";
 
-/** Get file path relative to www directory */
+// Global cache base directory - set from main.ts
+let cacheBaseDir: string | null = null;
+
+/**
+ * Set the base directory for cache calculations
+ * Should be called with the parent directory of the www folder
+ */
+export function setCacheBaseDir(dir: string): void {
+  cacheBaseDir = dir;
+}
+
+/**
+ * Get the cache base directory
+ * Returns the directory where .cache should be located
+ * If setCacheBaseDir was called, uses that; otherwise uses Deno.cwd()
+ */
+function getCacheBaseDir(): string {
+  if (cacheBaseDir) {
+    return cacheBaseDir;
+  }
+  // Default to current working directory
+  return Deno.cwd();
+}
+
+/** Get file path relative to current working directory or www directory */
 function getRelativePath(filepath: string): string {
-  const wwwPath = join(Deno.cwd(), WWW_DIR);
-  // filepath is already absolute when passed from compileFile
+  const cacheBase = getCacheBaseDir();
   const absPath = filepath;
-  return relative(wwwPath, absPath);
+
+  // 尝试相对于 www 目录计算路径
+  const wwwPath = join(cacheBase, WWW_DIR);
+  if (absPath.startsWith(wwwPath)) {
+    return relative(wwwPath, absPath);
+  }
+
+  // 如果不在 www 目录下，相对于 cache base 计算路径
+  return relative(cacheBase, absPath);
 }
 
 /**
  * 获取 cache 目录中的目标路径
+ * @param filepath 文件路径
+ * @param version 版本号（可选，用于生成版本化文件名）
  */
-export function getCachePath(filepath: string): string {
+export function getCachePath(filepath: string, version?: number): string {
   const relativePath = getRelativePath(filepath);
-  return join(Deno.cwd(), CACHE_DIR, relativePath.replace(/\.tsx$/, ".js"));
+  const jsPath = relativePath.replace(/\.tsx$/, ".js");
+
+  const cacheBase = getCacheBaseDir();
+
+  // 如果提供了版本号，在文件名中嵌入版本号
+  if (version !== undefined) {
+    const versionedPath = jsPath.replace(/\.js$/, `.v${version}.js`);
+    return join(cacheBase, CACHE_DIR, versionedPath);
+  }
+
+  return join(cacheBase, CACHE_DIR, jsPath);
 }
 
 /**
  * 使用 @deno/loader 转译 TSX 为 JS
+ * @param filepath 文件路径
+ * @param version 版本号（用于缓存破坏，绕过 Deno import 缓存）
  */
-async function transpileTSX(filepath: string): Promise<string> {
+async function transpileTSX(filepath: string, version?: number): Promise<string> {
   const { Workspace, RequestedModuleType } = await import("@deno/loader");
 
   // filepath is already an absolute path
@@ -53,15 +98,33 @@ async function transpileTSX(filepath: string): Promise<string> {
   // 将 Uint8Array 转换为字符串
   let code = new TextDecoder().decode(response.code);
 
-  // 重写导入路径：将本地导入中的 .tsx 替换为 .js
+  // ⭐ 移除 source map 注释，避免路径解析问题
+  // source map 中的相对路径会导致 Deno 解析错误的文件位置
+  code = code.replace(/\/\/# sourceMappingURL=.+$/gm, '');
+
+  // 重写导入路径：将本地导入中的 .tsx 替换为 .js，并添加版本号
   // 注意：.ts 文件不需要编译，Deno 原生支持 TypeScript，所以保留 .ts 扩展名
   // 支持多种格式：
   // - import { X } from "./path.tsx"
   // - import { X } from "./path.tsx";
   // - export { X } from "./path.tsx"
   code = code.replace(
-    /((?:import|export)\s+(?:(?:\*\s+as\s+\w+)|(?:\w+)|(?:\{[^}]*\}))\s+from\s+['"]((?:\.\/|\.\.\/)[^'"]+))\.tsx(['"][;\s]*)/g,
-    '$1.js$3'
+    /((?:import|export)\s+(?:(?:\*\s+as\s+\w+)|(?:\w+)|(?:\{[^}]*\}))\s+from\s+['"])((?:\.\/|\.\.\/)[^'"]+)\.tsx(['"][;\s]*)/g,
+    (match, prefix, importPath, suffix) => {
+      // 替换 .tsx 为 .js
+      const jsPath = importPath + '.js';
+
+      // ⭐ 如果提供了版本号，在文件名中嵌入版本号以绕过 Deno 的 import 缓存
+      // 例如：./Component.js 变成 ./ Component.v2.js
+      // 每次版本号变化时，文件名不同，Deno 会重新加载
+      if (version !== undefined) {
+        // 在扩展名前插入版本号
+        const versionedPath = jsPath.replace(/\.js$/, `.v${version}.js`);
+        return `${prefix}${versionedPath}${suffix}`;
+      }
+
+      return `${prefix}${jsPath}${suffix}`;
+    }
   );
 
   return code;
@@ -149,8 +212,10 @@ export async function analyzeDependencies(filepath: string): Promise<string[]> {
 
 /**
  * 编译单个 TSX 文件
+ * @param filepath 文件路径
+ * @param version 版本号（用于缓存破坏，绕过 Deno import 缓存）
  */
-export async function compileFile(filepath: string): Promise<void> {
+export async function compileFile(filepath: string, version?: number): Promise<void> {
   // 检查远程导入
   const remoteImports = await checkRemoteImports(filepath);
   if (remoteImports.length > 0) {
@@ -162,11 +227,11 @@ export async function compileFile(filepath: string): Promise<void> {
   // 分析依赖
   const dependencies = await analyzeDependencies(filepath);
 
-  // 转译为 JS
-  const jsCode = await transpileTSX(filepath);
+  // 转译为 JS（传递版本号）
+  const jsCode = await transpileTSX(filepath, version);
 
-  // 获取目标路径
-  const cachePath = getCachePath(filepath);
+  // 获取目标路径（传递版本号）
+  const cachePath = getCachePath(filepath, version);
 
   // 确保目录存在
   await ensureDir(dirname(cachePath));
@@ -177,14 +242,17 @@ export async function compileFile(filepath: string): Promise<void> {
   // 复制 .ts 依赖文件到缓存目录（不编译，Deno 原生支持 TypeScript）
   for (const dep of dependencies) {
     if (dep.endsWith(".ts")) {
-      const depCachePath = getCachePath(dep);
+      const depCachePath = getCachePath(dep, version);
       await ensureDir(dirname(depCachePath));
       await Deno.copyFile(dep, depCachePath);
+      // ⭐ 等待文件系统完成写入
+      await new Promise(resolve => setTimeout(resolve, 10));
       console.log(`[COPIED] ${dep} -> ${relative(Deno.cwd(), depCachePath)}`);
     }
   }
 
-  console.log(`[COMPILED] ${filepath} -> ${relative(Deno.cwd(), cachePath)}`);
+  const versionSuffix = version !== undefined ? ` (v=${version})` : '';
+  console.log(`[COMPILED] ${filepath} -> ${relative(Deno.cwd(), cachePath)}${versionSuffix}`);
 }
 
 /**

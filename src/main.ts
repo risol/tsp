@@ -9,9 +9,9 @@ import { resolvePath, securityCheck } from "./router.ts";
 import { buildContext } from "./context.ts";
 import { getPage, renderJSX, type RedirectResult } from "./cache.ts";
 import { registerDep } from "./injection-typed.ts";
-import { compileAll } from "./precompiler_lib.ts";
+import { compileAll, setCacheBaseDir } from "./precompiler_lib.ts";
 import { serveStaticFileWithCache } from "./static.ts";
-import { join } from "std/path";
+import { join, resolve } from "std/path";
 
 // 配置接口
 export interface Config {
@@ -481,6 +481,14 @@ async function handleRequest(
 // 启动服务器
 async function main(): Promise<void> {
   const config = await parseArgs();
+
+  // Resolve root directory to absolute path
+  config.root = resolve(config.root);
+
+  // Set cache base directory to current working directory
+  // This ensures cache is created relative to where the binary is run from
+  // Whether running from project root or dist/, the cache will be in ./cache/tsp/
+  setCacheBaseDir(Deno.cwd());
 
   // 注册依赖注入函数（类型安全版本）
   registerDep('testFunc', () => {
