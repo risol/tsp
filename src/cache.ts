@@ -58,6 +58,9 @@ const moduleCache = new Map<string, CacheEntry>();
 // 依赖图：记录每个 TSX 文件及其依赖的文件
 const dependencyGraph = new Map<string, string[]>();
 
+// ⭐ 反向依赖图：记录每个文件被哪些文件依赖
+const reverseDeps = new Map<string, Set<string>>();
+
 // 编译文件修改时间
 const compiledMtimes = new Map<string, number>();
 
@@ -125,6 +128,9 @@ export async function getPage(
   // 5. 更新依赖图
   dependencyGraph.set(filepath, dependencies);
 
+  // ⭐ 记录反向依赖关系
+  trackReverseDependencies(filepath, dependencies);
+
   // 6. 加载编译后的 JS 文件
   const { getCachePath } = await import("./precompiler_lib.ts");
   const cachePath = getCachePath(filepath);
@@ -173,7 +179,7 @@ async function needsRecompilation(
     return true;
   }
 
-  // 检查依赖文件是否修改
+  // ⭐ 检查依赖文件是否修改，并批量失效
   const dependencies = cached.dependencies || [];
   for (const dep of dependencies) {
     try {
@@ -186,6 +192,13 @@ async function needsRecompilation(
       // 如果依赖文件修改了，或者还没有编译过
       if (!depCompiledMtime || depMtime > depCompiledMtime) {
         console.log(`[INFO] Dependency modified: ${dep}`);
+
+        // ⭐ 主动通知所有依赖此文件的缓存失效
+        const invalidated = invalidateDependents(dep);
+
+        console.log(`[INFO] Batch invalidated ${invalidated.length} file(s) due to ${dep} change`);
+
+        // 返回 true，当前文件需要重新编译
         return true;
       }
     } catch (error) {
@@ -204,7 +217,54 @@ async function needsRecompilation(
 export function clearCache(): void {
   moduleCache.clear();
   dependencyGraph.clear();
+  reverseDeps.clear();  // ⭐ 清除反向依赖图
   compiledMtimes.clear();
+}
+
+/**
+ * ⭐ 记录反向依赖关系
+ * @param filepath 当前文件路径
+ * @param dependencies 当前文件的依赖列表
+ */
+function trackReverseDependencies(filepath: string, dependencies: string[]): void {
+  for (const dep of dependencies) {
+    if (!reverseDeps.has(dep)) {
+      reverseDeps.set(dep, new Set());
+    }
+    reverseDeps.get(dep)!.add(filepath);
+
+    console.log(`[REVERSE_DEPS] ${dep} → [${Array.from(reverseDeps.get(dep)!).join(", ")}]`);
+  }
+}
+
+/**
+ * ⭐ 使依赖某个文件的所有文件失效
+ * @param dependencyFile 被修改的文件路径
+ * @returns 被失效的文件列表
+ */
+export function invalidateDependents(dependencyFile: string): string[] {
+  const dependents = reverseDeps.get(dependencyFile);
+
+  if (!dependents || dependents.size === 0) {
+    console.log(`[REVERSE_DEPS] No files depend on ${dependencyFile}`);
+    return [];
+  }
+
+  console.log(`[REVERSE_DEPS] File modified: ${dependencyFile}`);
+  console.log(`[REVERSE_DEPS] Invalidating ${dependents.size} dependent(s):`, Array.from(dependents));
+
+  const invalidated: string[] = [];
+
+  for (const dependent of dependents) {
+    // 清除缓存
+    moduleCache.delete(dependent);
+    compiledMtimes.delete(dependent);
+    invalidated.push(dependent);
+
+    console.log(`[CACHE] Invalidated: ${dependent}`);
+  }
+
+  return invalidated;
 }
 
 /**

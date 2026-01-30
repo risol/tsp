@@ -13,6 +13,7 @@ const UNIT_TEST_FILES = [
   "tests/unit/injection_test.ts",
   "tests/unit/access_log_test.ts",
   "tests/unit/static_test.ts",
+  "tests/unit/cache_reverse_deps_test.ts",
 ];
 
 let totalTests = 0;
