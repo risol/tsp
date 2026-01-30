@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-TSP (TypeScript Server Page) is a template server built with Deno + TSX + Preact. It executes `.tsx` files directly (like PHP) and serves them as HTML, with intelligent module caching based on file modification time.
+TSP (TypeScript Server Page) is a template server built with Deno + TSX + Preact. It executes `.tsx` files directly (like PHP) and serves them as HTML, with intelligent module caching and hot reload support for nested dependencies.
 
 ## Common Commands
 
@@ -18,6 +18,9 @@ deno task start
 
 # Compile to standalone binary
 deno task compile
+
+# Build distribution package
+deno task build
 
 # Clean generated files
 deno task clean
@@ -36,20 +39,15 @@ deno task test:e2e
 
 # Run single unit test
 deno test --allow-all tests/unit/injection_test.ts
-
-# Run single E2E test
-deno test --allow-all tests/unit/router_test.ts
 ```
 
 ### Code Quality
 ```bash
 # Type check
 deno task check
-deno task check:all
 
 # Format code
 deno task fmt
-deno task fmt:check
 
 # Lint
 deno task lint
@@ -57,14 +55,15 @@ deno task lint
 
 ### Binary Execution
 ```bash
-# Run compiled binary (Windows)
-DENO_DIR=./.deno ./tspserver.exe --root ./www --port 9000
+# Run compiled binary from project root
+./tspserver --root ./www --port 9000
 
-# Run compiled binary (Linux/Mac)
-DENO_DIR=./.deno ./tspserver --root ./www --port 9000
-
-# With dev mode
+# With dev mode (hot reload enabled)
 ./tspserver --root ./www --port 9000 --dev
+
+# From distribution package
+cd dist
+./tspserver --root ./www --port 9000
 ```
 
 ## Critical Architecture Rules
@@ -98,8 +97,6 @@ import { Page } from "../src/injection-typed.ts";
 - `src/` files can import from other `src/` files
 - `tests/unit/` can import from `src/`
 - `tests/test_www/` CANNOT import from `src/`
-
-See `docs/CODING_STANDARDS.md` for complete rules.
 
 ## High-Level Architecture
 
@@ -139,12 +136,36 @@ Process return value:
   - JSX → render via Preact → HTML
 ```
 
-### Module Caching
+### Module Caching & Hot Reload
 
+#### Cache Mechanism
 - **Key**: File modification time (mtime)
 - **Storage**: `Map<string, CacheEntry>` in memory
+- **Location**: `.cache/tsp/` relative to current working directory
 - **Invalidation**: Automatic when file mtime changes
-- **Cache invalidation**: Clears global loader cache when cache miss occurs
+
+#### Hot Reload System (Dev Mode)
+
+The hot reload system supports **nested dependencies** through:
+
+1. **Versioned Filenames**: Compiled files use version numbers to bypass Deno's import cache
+   - Example: `Component.v7.js` instead of `Component.js`
+   - Version increments on each recompilation
+
+2. **Reverse Dependency Graph**: Tracks which files depend on which
+   - When `Navigation.tsx` changes, `Layout.tsx` and `index.tsx` are automatically recompiled
+   - Supports unlimited nesting depth
+
+3. **Recursive Dependency Checking**:
+   - Checks all transitive dependencies for modifications
+   - Invalidates caches recursively up the dependency tree
+
+#### Cache Directory
+- **Development mode**: Cache at `project_root/.cache/tsp/`
+- **Production mode (from root)**: Cache at `project_root/.cache/tsp/`
+- **Production mode (from dist/)**: Cache at `dist/.cache/tsp/`
+
+The cache directory is always relative to where the binary is run from.
 
 ### Dependency Injection System
 
@@ -193,8 +214,10 @@ This design means TSX files need NO imports for types or the Page function.
 - **src/main.ts**: Server entry point, CLI argument parsing, HTTP request handler
 - **src/router.ts**: URL → file path resolution, security checks
 - **src/context.ts**: PageContext builder
-- **src/cache.ts**: Module caching, TSX loading with hybrid strategy (direct import + @deno/loader fallback)
+- **src/cache.ts**: Module caching, hot reload, reverse dependency tracking
+- **src/precompiler_lib.ts**: TSX → JS transpilation with versioned filenames
 - **src/injection-typed.ts**: Type-safe dependency injection with global Page function
+- **src/static.ts**: Static file serving with caching
 - **types.d.ts**: Global type declarations (CRITICAL - read this first)
 
 ## Configuration
@@ -205,6 +228,8 @@ The server supports three configuration methods (priority: CLI args > config fil
 2. **Config file**: `config.json` or `config.jsonc` (auto-discovered)
 3. **Defaults**: root="./www", port=9000, dev=false
 
+The root path is automatically resolved to an absolute path, ensuring cache directory consistency regardless of where the binary is run from.
+
 ## Test Structure
 
 - **tests/unit/**: Unit tests without server (can import src/)
@@ -212,11 +237,53 @@ The server supports three configuration methods (priority: CLI args > config fil
 - **tests/run_e2e_tests.ts**: E2E runner that compiles binary and tests it
 - **tests/run_unit_tests.ts**: Unit test runner
 
-E2E tests compile a binary named `tspserver-test` to avoid conflicts.
+E2E tests include:
+- Basic HTTP functionality
+- API tests
+- Dependency injection
+- Error handling
+- Security (path traversal protection)
+- **Hot reload with nested dependencies** (2+ level deep)
 
-## Compilation Notes
+E2E tests compile a binary named `tspserver-test.exe` to avoid conflicts with development binaries.
 
+## Compilation & Distribution
+
+### Compilation Notes
 When compiling with `deno compile`:
-- Binary must be run with `DENO_DIR=./.deno` environment variable
+- Binary can be run from any directory
+- Cache directory is created relative to working directory
 - Use `@deno/loader` for TSX transpilation (fallback mechanism)
-- Test binaries use port 9100 to avoid conflicts with dev server (9000)
+- Test binaries use port 9001 to avoid conflicts with dev server (9000)
+
+### Distribution Package
+```bash
+# Build distribution package
+deno task build
+
+# The build creates:
+dist/
+  tspserver.exe          # Compiled binary
+  www/                   # Copied from project root
+  .deno/                 # Deno cache directory
+  README.md              # Distribution readme
+```
+
+## Important Implementation Details
+
+### Hot Reload Implementation
+- **Versioned filenames**: `Component.v7.js` instead of query parameters or fragments
+- **Source maps removed**: To avoid path resolution issues in compiled binaries
+- **Recursive dependency tracking**: Supports unlimited nesting depth
+- **Efficient invalidation**: Only recompiles affected files, not entire dependency tree
+
+### Path Resolution
+- All file paths are resolved to absolute paths at server startup
+- This prevents issues when running from different directories
+- Cache directory location is calculated based on current working directory
+
+### Performance Optimizations
+- In-memory module cache with mtime-based invalidation
+- Static file caching with ETag and If-Modified-Since support
+- Reverse dependency graph for efficient cascade invalidation
+- Precompilation mode for production (no --dev flag)
