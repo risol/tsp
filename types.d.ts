@@ -91,6 +91,11 @@ declare global {
      * 日志函数（示例）
      */
     logger: typeof console.log;
+
+    /**
+     * Cookie管理器
+     */
+    cookies: import("./src/cookies.ts").CookieManager;
   }
 
   /**

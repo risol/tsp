@@ -217,6 +217,7 @@ This design means TSX files need NO imports for types or the Page function.
 - **src/cache.ts**: Module caching, hot reload, reverse dependency tracking
 - **src/precompiler_lib.ts**: TSX → JS transpilation with versioned filenames
 - **src/injection-typed.ts**: Type-safe dependency injection with global Page function
+- **src/cookies.ts**: Cookie management module with Set-Cookie header support
 - **src/static.ts**: Static file serving with caching
 - **types.d.ts**: Global type declarations (CRITICAL - read this first)
 

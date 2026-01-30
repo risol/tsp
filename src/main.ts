@@ -387,6 +387,10 @@ async function handleRequest(
     const pageFn = await getPage(filepath);
     const result = await pageFn(context);
 
+    // 提取cookie响应头
+    const { extractSetCookieHeaders } = await import("./cookies.ts");
+    const setCookieHeaders = extractSetCookieHeaders(context);
+
     // 检查是否是重定向对象
     if (result && typeof result === "object" && "redirect" in result) {
       // 更严格地检查：确保不是 VNode
@@ -401,17 +405,38 @@ async function handleRequest(
         const validStatuses = [301, 302, 303, 307, 308];
         const finalStatus = validStatuses.includes(status) ? status : 302;
 
+        const headers: HeadersInit = { "Location": targetUrl };
+
+        // 添加Set-Cookie响应头
+        if (setCookieHeaders && setCookieHeaders.length > 0) {
+          const cookieHeaders: string[] = [];
+          for (const header of setCookieHeaders) {
+            cookieHeaders.push(header);
+          }
+          (headers as Record<string, string | string[]>)["Set-Cookie"] = cookieHeaders;
+        }
+
         return new Response(null, {
           status: finalStatus,
-          headers: {
-            "Location": targetUrl,
-          },
+          headers,
         });
       }
     }
 
     // 检查是否是 Response 对象（直接返回）
     if (result instanceof Response) {
+      // 如果有cookie需要设置，创建新的Response对象并添加Set-Cookie头
+      if (setCookieHeaders && setCookieHeaders.length > 0) {
+        const newHeaders = new Headers(result.headers);
+        for (const header of setCookieHeaders) {
+          newHeaders.append('Set-Cookie', header);
+        }
+        return new Response(result.body, {
+          status: result.status,
+          statusText: result.statusText,
+          headers: newHeaders,
+        });
+      }
       return result;
     }
 
@@ -428,6 +453,15 @@ async function handleRequest(
       headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
       headers["Pragma"] = "no-cache";
       headers["Expires"] = "0";
+    }
+
+    // 添加Set-Cookie响应头
+    if (setCookieHeaders && setCookieHeaders.length > 0) {
+      const cookieHeaders: string[] = [];
+      for (const header of setCookieHeaders) {
+        cookieHeaders.push(header);
+      }
+      (headers as Record<string, string | string[]>)["Set-Cookie"] = cookieHeaders;
     }
 
     return new Response(html, {
@@ -496,6 +530,12 @@ async function main(): Promise<void> {
       console.log('testFunc called');
       return 'testFunc called';
     };
+  });
+
+  // 注册cookie管理器
+  registerDep('cookies', async (ctx) => {
+    const { createCookieManager } = await import("./cookies.ts");
+    return createCookieManager(ctx);
   });
 
   console.log(`
