@@ -3,7 +3,7 @@
  * Compile TSX files to JS in cache directory
  */
 
-import { join, relative, dirname, toFileUrl } from "std/path";
+import { dirname, join, relative, toFileUrl } from "std/path";
 import { ensureDir } from "https://deno.land/std@0.224.0/fs/ensure_dir.ts";
 
 const WWW_DIR = "./www";
@@ -73,7 +73,10 @@ export function getCachePath(filepath: string, version?: number): string {
  * @param filepath 文件路径
  * @param version 版本号（用于缓存破坏，绕过 Deno import 缓存）
  */
-async function transpileTSX(filepath: string, version?: number): Promise<string> {
+async function transpileTSX(
+  filepath: string,
+  version?: number,
+): Promise<string> {
   const { Workspace, RequestedModuleType } = await import("@deno/loader");
 
   // filepath is already an absolute path
@@ -100,7 +103,7 @@ async function transpileTSX(filepath: string, version?: number): Promise<string>
 
   // ⭐ 移除 source map 注释，避免路径解析问题
   // source map 中的相对路径会导致 Deno 解析错误的文件位置
-  code = code.replace(/\/\/# sourceMappingURL=.+$/gm, '');
+  code = code.replace(/\/\/# sourceMappingURL=.+$/gm, "");
 
   // 重写导入路径：将本地导入中的 .tsx 替换为 .js，并添加版本号
   // 注意：.ts 文件不需要编译，Deno 原生支持 TypeScript，所以保留 .ts 扩展名
@@ -112,7 +115,7 @@ async function transpileTSX(filepath: string, version?: number): Promise<string>
     /((?:import|export)\s+(?:(?:\*\s+as\s+\w+)|(?:\w+)|(?:\{[^}]*\}))\s+from\s+['"])((?:\.\/|\.\.\/)[^'"]+)\.tsx(['"][;\s]*)/g,
     (match, prefix, importPath, suffix) => {
       // 替换 .tsx 为 .js
-      const jsPath = importPath + '.js';
+      const jsPath = importPath + ".js";
 
       // ⭐ 如果提供了版本号，在文件名中嵌入版本号以绕过 Deno 的 import 缓存
       // 例如：./Component.js 变成 ./ Component.v2.js
@@ -124,7 +127,7 @@ async function transpileTSX(filepath: string, version?: number): Promise<string>
       }
 
       return `${prefix}${jsPath}${suffix}`;
-    }
+    },
   );
 
   return code;
@@ -137,7 +140,8 @@ export async function checkRemoteImports(filepath: string): Promise<string[]> {
   const code = await Deno.readTextFile(filepath);
 
   // 匹配所有 import 语句
-  const importRegex = /import\s+(?:\*\s+as\s+\w+|\w+|\{[^}]*\})\s+from\s+['"]([^'"]+)['"]|import\s+['"]([^'"]+)['"]/g;
+  const importRegex =
+    /import\s+(?:\*\s+as\s+\w+|\w+|\{[^}]*\})\s+from\s+['"]([^'"]+)['"]|import\s+['"]([^'"]+)['"]/g;
 
   const remoteImports: string[] = [];
   let match;
@@ -146,10 +150,12 @@ export async function checkRemoteImports(filepath: string): Promise<string[]> {
     const importPath = match[1] || match[2];
 
     // 检查是否是远程导入
-    if (importPath && (importPath.startsWith("http://") ||
+    if (
+      importPath && (importPath.startsWith("http://") ||
         importPath.startsWith("https://") ||
         importPath.startsWith("npm:") ||
-        importPath.startsWith("jsr:"))) {
+        importPath.startsWith("jsr:"))
+    ) {
       remoteImports.push(importPath);
     }
   }
@@ -165,14 +171,15 @@ export async function analyzeDependencies(filepath: string): Promise<string[]> {
 
   // 匹配所有本地导入（可能包含扩展名）
   const localImports: string[] = [];
-  const importRegex = /import\s+(?:\*\s+as\s+\w+|\w+|\{[^}]*\})\s+from\s+['"]((?:\.\/|\.\.\/)[^'"]+)['"]/g;
+  const importRegex =
+    /import\s+(?:\*\s+as\s+\w+|\w+|\{[^}]*\})\s+from\s+['"]((?:\.\/|\.\.\/)[^'"]+)['"]/g;
 
   let match;
   while ((match = importRegex.exec(code)) !== null) {
     let importPath = match[1];
 
     // 移除可能的扩展名 (.tsx, .ts, .js)
-    importPath = importPath.replace(/\.tsx?$/, '').replace(/\.js$/, '');
+    importPath = importPath.replace(/\.tsx?$/, "").replace(/\.js$/, "");
 
     localImports.push(importPath);
   }
@@ -215,12 +222,17 @@ export async function analyzeDependencies(filepath: string): Promise<string[]> {
  * @param filepath 文件路径
  * @param version 版本号（用于缓存破坏，绕过 Deno import 缓存）
  */
-export async function compileFile(filepath: string, version?: number): Promise<void> {
+export async function compileFile(
+  filepath: string,
+  version?: number,
+): Promise<void> {
   // 检查远程导入
   const remoteImports = await checkRemoteImports(filepath);
   if (remoteImports.length > 0) {
     throw new Error(
-      `Remote imports are not allowed in ${filepath}:\n  ${remoteImports.join("\n  ")}`
+      `Remote imports are not allowed in ${filepath}:\n  ${
+        remoteImports.join("\n  ")
+      }`,
     );
   }
 
@@ -246,20 +258,25 @@ export async function compileFile(filepath: string, version?: number): Promise<v
       await ensureDir(dirname(depCachePath));
       await Deno.copyFile(dep, depCachePath);
       // ⭐ 等待文件系统完成写入
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
       console.log(`[COPIED] ${dep} -> ${relative(Deno.cwd(), depCachePath)}`);
     }
   }
 
-  const versionSuffix = version !== undefined ? ` (v=${version})` : '';
-  console.log(`[COMPILED] ${filepath} -> ${relative(Deno.cwd(), cachePath)}${versionSuffix}`);
+  const versionSuffix = version !== undefined ? ` (v=${version})` : "";
+  console.log(
+    `[COMPILED] ${filepath} -> ${
+      relative(Deno.cwd(), cachePath)
+    }${versionSuffix}`,
+  );
 }
 
 /**
  * 编译所有 TSX 文件
- * @returns 编译的文件列表（相对于 WWW_DIR）
+ * @param rootDir - 根目录（相对于CWD，默认为 "./www"）
+ * @returns 编译的文件列表（相对于根目录）
  */
-export async function compileAll(): Promise<string[]> {
+export async function compileAll(rootDir: string = WWW_DIR): Promise<string[]> {
   console.log("🚀 Starting TSX compilation...\n");
 
   // 确保 cache 目录存在
@@ -282,7 +299,7 @@ export async function compileAll(): Promise<string[]> {
     }
   }
 
-  await findTSXFiles(join(Deno.cwd(), WWW_DIR));
+  await findTSXFiles(join(Deno.cwd(), rootDir));
 
   console.log(`[INFO] Found ${tsxFiles.length} TSX files`);
 
