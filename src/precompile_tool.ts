@@ -3,7 +3,7 @@
  * Compile TSX files in www directory to JS files in cache directory
  */
 
-import { compileAll, cleanCache } from "./precompiler_lib.ts";
+import { cleanCache, compileAll } from "./precompiler_lib.ts";
 
 const command = Deno.args[0];
 

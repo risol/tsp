@@ -14,7 +14,7 @@ export default async function (context: PageContext) {
   // 示例 3: 未登录重定向
   if (query.to === "protected" && !cookies.sessionId) {
     return {
-      redirect: `/login?redirect=/protected`
+      redirect: `/login?redirect=/protected`,
     };
   }
 

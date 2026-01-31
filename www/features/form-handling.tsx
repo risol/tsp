@@ -1,6 +1,6 @@
 import { Layout } from "../components/Layout.tsx";
 
-export default async function(context: PageContext) {
+export default async function (context: PageContext) {
   const { method, body } = context;
 
   return (
@@ -12,13 +12,21 @@ export default async function(context: PageContext) {
 
       {/* Result Display */}
       {method === "POST" && body && (
-        <div className="card" style={{
-          background: "#d1fae5",
-          border: "2px solid #10b981",
-          marginBottom: "32px",
-        }}>
-          <h3 style={{ color: "#065f46", marginBottom: "12px" }}>✅ 提交成功！</h3>
-          <div className="code-block" style={{ background: "#064e3b", marginTop: "16px" }}>
+        <div
+          className="card"
+          style={{
+            background: "#d1fae5",
+            border: "2px solid #10b981",
+            marginBottom: "32px",
+          }}
+        >
+          <h3 style={{ color: "#065f46", marginBottom: "12px" }}>
+            ✅ 提交成功！
+          </h3>
+          <div
+            className="code-block"
+            style={{ background: "#064e3b", marginTop: "16px" }}
+          >
             {JSON.stringify(body, null, 2)}
           </div>
         </div>
@@ -30,7 +38,13 @@ export default async function(context: PageContext) {
         <div className="card">
           <form method="POST" style={{ maxWidth: "500px" }}>
             <div style={{ marginBottom: "16px" }}>
-              <label style={{ display: "block", fontWeight: "600", marginBottom: "8px" }}>
+              <label
+                style={{
+                  display: "block",
+                  fontWeight: "600",
+                  marginBottom: "8px",
+                }}
+              >
                 用户名：
               </label>
               <input

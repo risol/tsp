@@ -5,9 +5,9 @@
 
 import { assertEquals } from "https://deno.land/std@0.210.0/testing/asserts.ts";
 import {
-  serializeCookie,
   createCookieManager,
   extractSetCookieHeaders,
+  serializeCookie,
 } from "../src/cookies.ts";
 
 // Mock PageContext

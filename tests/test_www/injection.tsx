@@ -4,7 +4,7 @@
  * 这个页面只测试基本的 TSX 功能，依赖注入功能由单元测试覆盖
  */
 
-export default async function(context: PageContext) {
+export default async function (context: PageContext) {
   return (
     <html lang="zh-CN">
       <head>
@@ -15,7 +15,9 @@ export default async function(context: PageContext) {
         <h1>依赖注入测试</h1>
         <p>注意：依赖注入功能通过单元测试验证</p>
         <p>单元测试覆盖：Page, registerDep, 依赖注入等</p>
-        <p>状态: <span style={{ color: 'green' }}>✓ 测试通过</span></p>
+        <p>
+          状态: <span style={{ color: "green" }}>✓ 测试通过</span>
+        </p>
       </body>
     </html>
   );

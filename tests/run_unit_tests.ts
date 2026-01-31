@@ -90,7 +90,9 @@ async function main() {
     Deno.exit(0);
   } else {
     console.log("\n❌ 部分测试失败！");
-    results.filter((r) => !r.passed).forEach((r) => console.log(`  ✗ ${r.file}`));
+    results.filter((r) => !r.passed).forEach((r) =>
+      console.log(`  ✗ ${r.file}`)
+    );
     Deno.exit(1);
   }
 }

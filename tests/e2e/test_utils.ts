@@ -51,9 +51,10 @@ export async function compileBinary(): Promise<void> {
  */
 export async function startServer(args: string[] = []): Promise<void> {
   const binaryPath = getBinaryPath();
-  const commandPath = Deno.build.os === "windows" && !binaryPath.startsWith("./")
-    ? `./${binaryPath}`
-    : binaryPath;
+  const commandPath =
+    Deno.build.os === "windows" && !binaryPath.startsWith("./")
+      ? `./${binaryPath}`
+      : binaryPath;
 
   const command = new Deno.Command(commandPath, {
     args: ["--root", TEST_ROOT, "--port", TEST_PORT.toString(), ...args],
@@ -115,7 +116,7 @@ export async function testHttpRequest(
     method?: "GET" | "POST" | "PUT" | "DELETE";
     body?: string;
     headers?: Record<string, string>;
-  } = {}
+  } = {},
 ): Promise<void> {
   const {
     expectedContentType,
@@ -132,7 +133,9 @@ export async function testHttpRequest(
   });
 
   if (response.status !== expectedStatus) {
-    throw new Error(`期望状态码 ${expectedStatus}，实际得到 ${response.status}`);
+    throw new Error(
+      `期望状态码 ${expectedStatus}，实际得到 ${response.status}`,
+    );
   }
 
   const text = await response.text();
@@ -142,7 +145,9 @@ export async function testHttpRequest(
     const contentType = response.headers.get("content-type");
     const hasContentType = contentType?.includes(expectedContentType);
     if (!hasContentType) {
-      throw new Error(`期望 Content-Type 包含 ${expectedContentType}，实际得到 ${contentType}`);
+      throw new Error(
+        `期望 Content-Type 包含 ${expectedContentType}，实际得到 ${contentType}`,
+      );
     }
   }
 
@@ -223,4 +228,4 @@ export async function killProcessOnPort(port: number): Promise<void> {
   }
 }
 
-export { OUTPUT_BINARY, TEST_PORT, TEST_ROOT, STARTUP_DELAY, serverProcess };
+export { OUTPUT_BINARY, serverProcess, STARTUP_DELAY, TEST_PORT, TEST_ROOT };

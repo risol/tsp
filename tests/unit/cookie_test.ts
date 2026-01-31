@@ -2,13 +2,16 @@
  * Unit tests for cookie management module
  */
 
-import { assertEquals, assertExists } from "https://deno.land/std@0.210.0/testing/asserts.ts";
 import {
-  serializeCookie,
-  createCookieManager,
-  extractSetCookieHeaders,
+  assertEquals,
+  assertExists,
+} from "https://deno.land/std@0.210.0/testing/asserts.ts";
+import {
   type CookieManager,
   type CookieOptions,
+  createCookieManager,
+  extractSetCookieHeaders,
+  serializeCookie,
 } from "../../src/cookies.ts";
 
 // Mock PageContext for testing

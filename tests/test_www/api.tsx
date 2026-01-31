@@ -11,9 +11,15 @@ export default async function (context: PageContext) {
       <body>
         <h1>API 信息</h1>
         <h2>请求信息</h2>
-        <p>请求方法: <strong>{method}</strong></p>
-        <p>请求路径: <strong>{url.pathname}</strong></p>
-        <p>User-Agent: <strong>{userAgent}</strong></p>
+        <p>
+          请求方法: <strong>{method}</strong>
+        </p>
+        <p>
+          请求路径: <strong>{url.pathname}</strong>
+        </p>
+        <p>
+          User-Agent: <strong>{userAgent}</strong>
+        </p>
 
         <h2>上下文数据</h2>
         <ul>

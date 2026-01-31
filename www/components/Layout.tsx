@@ -19,13 +19,15 @@ export function Layout({ title, description, children }: LayoutProps) {
         {description && <meta name="description" content={description} />}
         <style>{getGlobalStyles()}</style>
       </head>
-      <body style={{
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-        minHeight: '100vh',
-        paddingBottom: '40px',
-      }}>
+      <body
+        style={{
+          background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+          minHeight: "100vh",
+          paddingBottom: "40px",
+        }}
+      >
         <Navigation />
-        <div className="container" style={{ marginTop: '40px' }}>
+        <div className="container" style={{ marginTop: "40px" }}>
           {children}
         </div>
         <Footer />
@@ -35,4 +37,3 @@ export function Layout({ title, description, children }: LayoutProps) {
 }
 
 export default Layout;
-

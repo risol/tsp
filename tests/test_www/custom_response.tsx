@@ -1,4 +1,3 @@
-
 export default async function (context: PageContext) {
   const { query } = context;
   const format = query.format;
@@ -18,7 +17,7 @@ export default async function (context: PageContext) {
           "Content-Type": "application/json",
           "X-Custom-Header": "test-value",
         },
-      }
+      },
     );
   }
 
@@ -31,6 +30,6 @@ export default async function (context: PageContext) {
         "Content-Type": "text/html; charset=utf-8",
         "X-Response-Type": "custom",
       },
-    }
+    },
   );
 }

@@ -114,9 +114,15 @@ export default async function (context: PageContext) {
         <div class="section">
           <h2>测试链接</h2>
           <ul>
-            <li><a href="?name=test&lang=zh">?name=test&lang=zh</a></li>
-            <li><a href="?debug=true&verbose=1">?debug=true&verbose=1</a></li>
-            <li><a href="../index.tsx">返回首页</a></li>
+            <li>
+              <a href="?name=test&lang=zh">?name=test&lang=zh</a>
+            </li>
+            <li>
+              <a href="?debug=true&verbose=1">?debug=true&verbose=1</a>
+            </li>
+            <li>
+              <a href="../index.tsx">返回首页</a>
+            </li>
           </ul>
         </div>
       </body>

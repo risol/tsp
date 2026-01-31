@@ -28,24 +28,25 @@ export default async function (context: PageContext) {
         <div class="container">
           <h2>支持的文件类型</h2>
           <p>
-            默认支持：CSS, JavaScript, JSON, PNG, JPG, GIF, SVG, ICO,
-            WebP, WOFF, WOFF2, TTF, EOT, MP3, MP4, WebM, TXT, MD, XML
+            默认支持：CSS, JavaScript, JSON, PNG, JPG, GIF, SVG, ICO, WebP,
+            WOFF, WOFF2, TTF, EOT, MP3, MP4, WebM, TXT, MD, XML
           </p>
           <p>
-            可通过 <code>config.json</code> 中的{" "}
-            <code>staticExtensions</code> 字段自定义。
+            可通过 <code>config.json</code> 中的 <code>staticExtensions</code>
+            {" "}
+            字段自定义。
           </p>
         </div>
 
         <div class="container">
           <h2>HTTP 缓存</h2>
           <p>
-            生产模式下，静态文件会自动添加 ETag 和 Last-Modified
-            头，支持 304 Not Modified 响应。
+            生产模式下，静态文件会自动添加 ETag 和 Last-Modified 头，支持 304
+            Not Modified 响应。
           </p>
           <p>
             开发模式下（<code>--dev</code>
-           ），缓存被禁用，确保始终加载最新文件。
+            ），缓存被禁用，确保始终加载最新文件。
           </p>
         </div>
 

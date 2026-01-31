@@ -1,20 +1,22 @@
 import { Layout } from "../components/Layout.tsx";
 
-export default async function(context: PageContext) {
+export default async function (context: PageContext) {
   const { url } = context;
 
   // 处理重定向演示
   const searchParams = new URL(url.href).searchParams;
-  const action = searchParams.get('action');
-  const status = searchParams.get('status');
+  const action = searchParams.get("action");
+  const status = searchParams.get("status");
 
-  if (action === 'redirect') {
+  if (action === "redirect") {
     const statusCode = status ? parseInt(status) : 302;
     const validStatuses = [301, 302, 303, 307, 308];
 
     return {
-      redirect: '/features',
-      status: validStatuses.includes(statusCode) ? statusCode as 301 | 302 | 303 | 307 | 308 : 302
+      redirect: "/features",
+      status: validStatuses.includes(statusCode)
+        ? statusCode as 301 | 302 | 303 | 307 | 308
+        : 302,
     } as RedirectResult;
   }
 
@@ -30,11 +32,36 @@ export default async function(context: PageContext) {
         <h2 className="section-title">🎮 交互式演示</h2>
         <div className="card">
           <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
-            <a href="/features/redirect?action=redirect&status=301" className="btn btn-secondary">301 永久</a>
-            <a href="/features/redirect?action=redirect&status=302" className="btn btn-secondary">302 临时</a>
-            <a href="/features/redirect?action=redirect&status=303" className="btn btn-secondary">303 See Other</a>
-            <a href="/features/redirect?action=redirect&status=307" className="btn btn-secondary">307 临时(POST)</a>
-            <a href="/features/redirect?action=redirect&status=308" className="btn btn-secondary">308 永久(POST)</a>
+            <a
+              href="/features/redirect?action=redirect&status=301"
+              className="btn btn-secondary"
+            >
+              301 永久
+            </a>
+            <a
+              href="/features/redirect?action=redirect&status=302"
+              className="btn btn-secondary"
+            >
+              302 临时
+            </a>
+            <a
+              href="/features/redirect?action=redirect&status=303"
+              className="btn btn-secondary"
+            >
+              303 See Other
+            </a>
+            <a
+              href="/features/redirect?action=redirect&status=307"
+              className="btn btn-secondary"
+            >
+              307 临时(POST)
+            </a>
+            <a
+              href="/features/redirect?action=redirect&status=308"
+              className="btn btn-secondary"
+            >
+              308 永久(POST)
+            </a>
           </div>
         </div>
       </div>

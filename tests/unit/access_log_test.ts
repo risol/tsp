@@ -3,8 +3,12 @@
  * 测试 src/main.ts 中的日志记录功能
  */
 
-import { assertEquals, assertExists, assertStringIncludes } from "https://deno.land/std@0.210.0/testing/asserts.ts";
-import { logAccess, type Config } from "../../src/main.ts";
+import {
+  assertEquals,
+  assertExists,
+  assertStringIncludes,
+} from "https://deno.land/std@0.210.0/testing/asserts.ts";
+import { type Config, logAccess } from "../../src/main.ts";
 
 // 测试用的临时日志文件路径
 const TEST_LOG_FILE = "./test_access.log";
@@ -105,7 +109,7 @@ Deno.test("access log - logAccess: 文件输出 - 多次追加", async () => {
       headers: { "User-Agent": "Agent1" },
     }),
     new Response("OK", { status: 200 }),
-    config
+    config,
   );
 
   await logAccess(
@@ -114,7 +118,7 @@ Deno.test("access log - logAccess: 文件输出 - 多次追加", async () => {
       headers: { "User-Agent": "Agent2" },
     }),
     new Response("Created", { status: 201 }),
-    config
+    config,
   );
 
   await logAccess(
@@ -123,7 +127,7 @@ Deno.test("access log - logAccess: 文件输出 - 多次追加", async () => {
       headers: { "User-Agent": "Agent3" },
     }),
     new Response("Not Found", { status: 404 }),
-    config
+    config,
   );
 
   // 读取日志文件
@@ -194,7 +198,15 @@ Deno.test("access log - logAccess: 各种 HTTP 方法", async () => {
     accessLogPath: TEST_LOG_FILE,
   };
 
-  const methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] as const;
+  const methods = [
+    "GET",
+    "POST",
+    "PUT",
+    "PATCH",
+    "DELETE",
+    "HEAD",
+    "OPTIONS",
+  ] as const;
 
   for (const method of methods) {
     await logAccess(
@@ -203,7 +215,7 @@ Deno.test("access log - logAccess: 各种 HTTP 方法", async () => {
         headers: { "User-Agent": "Test" },
       }),
       new Response("OK", { status: 200 }),
-      config
+      config,
     );
   }
 
@@ -241,7 +253,7 @@ Deno.test("access log - logAccess: 各种状态码", async () => {
         headers: { "User-Agent": "Test" },
       }),
       new Response("Status", { status }),
-      config
+      config,
     );
   }
 
@@ -275,7 +287,7 @@ Deno.test("access log - logAccess: 路径包含查询参数", async () => {
     {
       method: "GET",
       headers: { "User-Agent": "Test" },
-    }
+    },
   );
 
   const response = new Response("OK", { status: 200 });
@@ -304,7 +316,7 @@ Deno.test("access log - logAccess: 复杂 User-Agent", async () => {
   };
 
   const userAgent =
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
   const request = new Request("http://localhost:9000/test", {
     method: "GET",

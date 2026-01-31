@@ -1,6 +1,6 @@
 import { Layout } from "../components/Layout.tsx";
 
-export default async function(context: PageContext) {
+export default async function (context: PageContext) {
   const { method, url, headers, query, cookies, body } = context;
 
   return (
@@ -24,11 +24,15 @@ export default async function(context: PageContext) {
         </div>
         <div className="info-item">
           <div className="info-label">查询参数</div>
-          <div className="info-value">{Object.keys(query).length > 0 ? JSON.stringify(query) : "无"}</div>
+          <div className="info-value">
+            {Object.keys(query).length > 0 ? JSON.stringify(query) : "无"}
+          </div>
         </div>
         <div className="info-item">
           <div className="info-label">Cookies</div>
-          <div className="info-value">{Object.keys(cookies).length > 0 ? JSON.stringify(cookies) : "无"}</div>
+          <div className="info-value">
+            {Object.keys(cookies).length > 0 ? JSON.stringify(cookies) : "无"}
+          </div>
         </div>
       </div>
 

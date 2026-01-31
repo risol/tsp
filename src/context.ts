@@ -6,7 +6,14 @@
 /**
  * HTTP 请求方法类型
  */
-type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS";
+type HttpMethod =
+  | "GET"
+  | "POST"
+  | "PUT"
+  | "PATCH"
+  | "DELETE"
+  | "HEAD"
+  | "OPTIONS";
 
 /**
  * 页面上下文参数（用于构建上下文的输入参数）

@@ -3,8 +3,15 @@
  * 测试反向依赖图的缓存失效功能
  */
 
-import { assertEquals, assertExists } from "https://deno.land/std@0.210.0/testing/asserts.ts";
-import { clearCache, invalidateDependents, getCacheSize } from "../../src/cache.ts";
+import {
+  assertEquals,
+  assertExists,
+} from "https://deno.land/std@0.210.0/testing/asserts.ts";
+import {
+  clearCache,
+  getCacheSize,
+  invalidateDependents,
+} from "../../src/cache.ts";
 
 Deno.test("cache - reverseDeps: 初始状态", () => {
   // 清空缓存

@@ -49,20 +49,22 @@ async function main() {
   // 运行单元测试
   const unitPassed = await runTestSuite(
     "单元测试",
-    "deno run --allow-all tests/run_unit_tests.ts"
+    "deno run --allow-all tests/run_unit_tests.ts",
   );
 
   totalTests++;
-  if (unitPassed) passedTests++; else failedTests++;
+  if (unitPassed) passedTests++;
+  else failedTests++;
 
   // 运行E2E测试
   const e2ePassed = await runTestSuite(
     "E2E测试",
-    "deno run --allow-all tests/run_e2e_tests.ts"
+    "deno run --allow-all tests/run_e2e_tests.ts",
   );
 
   totalTests++;
-  if (e2ePassed) passedTests++; else failedTests++;
+  if (e2ePassed) passedTests++;
+  else failedTests++;
 
   const endTime = Date.now();
   const duration = ((endTime - startTime) / 1000).toFixed(2);

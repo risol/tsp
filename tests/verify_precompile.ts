@@ -6,7 +6,11 @@
  */
 
 import { assertEquals, assertThrows } from "@std/assert";
-import { checkRemoteImports, analyzeDependencies, getCachePath } from "../src/precompiler_lib.ts";
+import {
+  analyzeDependencies,
+  checkRemoteImports,
+  getCachePath,
+} from "../src/precompiler_lib.ts";
 
 console.log("╔════════════════════════════════════════════╗");
 console.log("║   预编译功能验证测试                      ║");
@@ -16,11 +20,14 @@ console.log("╚═════════════════════�
 console.log("▶ Test 1: Remote import detection");
 try {
   const testFile = "test_remote.tsx";
-  await Deno.writeTextFile(testFile, `
+  await Deno.writeTextFile(
+    testFile,
+    `
     import { something } from "https://example.com/module.ts";
     import { other } from "npm:package";
     export default async function(ctx) { return <div>Test</div>; }
-  `);
+  `,
+  );
 
   const remoteImports = await checkRemoteImports(testFile);
   assertEquals(remoteImports.length, 2);
@@ -38,11 +45,14 @@ try {
 console.log("▶ Test 2: Local imports are allowed");
 try {
   const testFile = "test_local.tsx";
-  await Deno.writeTextFile(testFile, `
+  await Deno.writeTextFile(
+    testFile,
+    `
     import { Component } from "./component.tsx";
     import { helper } from "../utils/helper.ts";
     export default async function(ctx) { return <div>Test</div>; }
-  `);
+  `,
+  );
 
   const remoteImports = await checkRemoteImports(testFile);
   assertEquals(remoteImports.length, 0);
@@ -61,17 +71,26 @@ try {
   await Deno.mkdir(testDir, { recursive: true });
 
   // Create test files
-  await Deno.writeTextFile(`${testDir}/main.tsx`, `
+  await Deno.writeTextFile(
+    `${testDir}/main.tsx`,
+    `
     import { A } from "./a";
     import { B } from "./b";
     export default async function(ctx) { return <div>Test</div>; }
-  `);
-  await Deno.writeTextFile(`${testDir}/a.tsx`, `
+  `,
+  );
+  await Deno.writeTextFile(
+    `${testDir}/a.tsx`,
+    `
     export const A = () => <div>A</div>;
-  `);
-  await Deno.writeTextFile(`${testDir}/b.ts`, `
+  `,
+  );
+  await Deno.writeTextFile(
+    `${testDir}/b.ts`,
+    `
     export const B = () => <div>B</div>;
-  `);
+  `,
+  );
 
   // Use absolute path
   const absPath = `${Deno.cwd()}/${testDir}/main.tsx`;
@@ -82,7 +101,9 @@ try {
   const hasB = dependencies.some((dep) => dep.endsWith("b.ts"));
 
   if (!hasA || !hasB) {
-    throw new Error(`Expected dependencies not found. Got: ${dependencies.join(", ")}`);
+    throw new Error(
+      `Expected dependencies not found. Got: ${dependencies.join(", ")}`,
+    );
   }
 
   await Deno.remove(testDir, { recursive: true });
@@ -100,7 +121,13 @@ try {
 
   // Should convert to .cache/tsp/test/page.js (platform-agnostic)
   const { join } = await import("std/path");
-  const expectedCachePath = join(Deno.cwd(), ".cache", "tsp", "test", "page.js");
+  const expectedCachePath = join(
+    Deno.cwd(),
+    ".cache",
+    "tsp",
+    "test",
+    "page.js",
+  );
   assertEquals(cachePath, expectedCachePath);
 
   console.log("  ✓ Cache path generation works correctly\n");
@@ -113,10 +140,13 @@ try {
 console.log("▶ Test 5: JSR imports are detected as remote");
 try {
   const testFile = "test_jsr.tsx";
-  await Deno.writeTextFile(testFile, `
+  await Deno.writeTextFile(
+    testFile,
+    `
     import { assert } from "jsr:@std/assert";
     export default async function(ctx) { return <div>Test</div>; }
-  `);
+  `,
+  );
 
   const remoteImports = await checkRemoteImports(testFile);
   assertEquals(remoteImports.length, 1);

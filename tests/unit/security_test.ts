@@ -37,7 +37,11 @@ Deno.test("security - securityCheck: 非白名单文件", async () => {
 
   for (const filepath of testPaths) {
     const checkResult = await securityCheck(filepath, TEST_ROOT);
-    assertEquals(checkResult.success, false, `应该阻止非 TSX 文件: ${filepath}`);
+    assertEquals(
+      checkResult.success,
+      false,
+      `应该阻止非 TSX 文件: ${filepath}`,
+    );
   }
 });
 
@@ -58,7 +62,11 @@ Deno.test("security - securityCheck: 正常文件通过", async () => {
     }
 
     const checkResult = await securityCheck(filepath, TEST_ROOT);
-    assertEquals(checkResult.success, true, `应该允许正常文件: ${filepath} - ${checkResult.error}`);
+    assertEquals(
+      checkResult.success,
+      true,
+      `应该允许正常文件: ${filepath} - ${checkResult.error}`,
+    );
   }
 });
 
@@ -93,7 +101,7 @@ Deno.test("security - securityCheck: URL 编码绕过", async () => {
         // 如果通过了检查，确保文件路径在根目录内
         const normalizedPath = result.filepath.replace(/\\/g, "/");
         const isInRoot = normalizedPath.startsWith(TEST_ROOT) ||
-                         normalizedPath.startsWith("www");
+          normalizedPath.startsWith("www");
         assertEquals(isInRoot, true, `URL编码的路径应该在根目录内: ${path}`);
       }
     }

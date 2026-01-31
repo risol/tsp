@@ -31,7 +31,7 @@ const ALLOWED_EXTENSIONS = [".tsx"];
 export function resolvePath(
   pathname: string,
   root: string,
-  additionalExtensions: string[] = []
+  additionalExtensions: string[] = [],
 ): PathResult {
   try {
     // 移除开头的斜杠并解码
@@ -46,10 +46,13 @@ export function resolvePath(
     }
 
     // 合并所有允许的扩展名
-    const allAllowedExtensions = [...ALLOWED_EXTENSIONS, ...additionalExtensions];
+    const allAllowedExtensions = [
+      ...ALLOWED_EXTENSIONS,
+      ...additionalExtensions,
+    ];
 
     // 检查路径是否已经有允许的扩展名
-    const hasExtension = allAllowedExtensions.some(ext =>
+    const hasExtension = allAllowedExtensions.some((ext) =>
       decoded.endsWith(ext)
     );
 
@@ -110,7 +113,10 @@ async function findFile(basePath: string): Promise<string | null> {
  * @param additionalExtensions 额外允许的扩展名
  * @returns 是否允许
  */
-function checkExtension(filepath: string, additionalExtensions: string[] = []): boolean {
+function checkExtension(
+  filepath: string,
+  additionalExtensions: string[] = [],
+): boolean {
   const allAllowedExtensions = [...ALLOWED_EXTENSIONS, ...additionalExtensions];
   return allAllowedExtensions.some((ext) => filepath.endsWith(ext));
 }
@@ -125,7 +131,7 @@ function checkExtension(filepath: string, additionalExtensions: string[] = []): 
 export async function securityCheck(
   filepath: string,
   root: string,
-  additionalExtensions: string[] = []
+  additionalExtensions: string[] = [],
 ): Promise<SecurityResult> {
   try {
     // 1. 检查文件扩展名

@@ -7,8 +7,8 @@
  */
 export function formatDate(date: Date): string {
   const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
@@ -17,12 +17,12 @@ export function formatDate(date: Date): string {
  */
 export function getGreeting(name?: string): string {
   const hour = new Date().getHours();
-  let timeGreeting = '早上好';
+  let timeGreeting = "早上好";
 
   if (hour >= 12 && hour < 18) {
-    timeGreeting = '下午好';
+    timeGreeting = "下午好";
   } else if (hour >= 18) {
-    timeGreeting = '晚上好';
+    timeGreeting = "晚上好";
   }
 
   return name ? `${timeGreeting}，${name}！` : `${timeGreeting}！`;
@@ -42,5 +42,5 @@ export function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) {
     return text;
   }
-  return text.substring(0, maxLength) + '...';
+  return text.substring(0, maxLength) + "...";
 }

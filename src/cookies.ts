@@ -22,7 +22,7 @@ export interface CookieOptions {
   /** No JavaScript access */
   httpOnly?: boolean;
   /** Same-site policy */
-  sameSite?: 'Strict' | 'Lax' | 'None';
+  sameSite?: "Strict" | "Lax" | "None";
 }
 
 /**
@@ -32,11 +32,19 @@ export interface CookieManager {
   /** Set a single cookie */
   set: (name: string, value: string, options?: CookieOptions) => void;
   /** Delete a single cookie */
-  delete: (name: string, options?: Pick<CookieOptions, 'domain' | 'path'>) => void;
+  delete: (
+    name: string,
+    options?: Pick<CookieOptions, "domain" | "path">,
+  ) => void;
   /** Set multiple cookies at once */
-  setMultiple: (cookies: Record<string, { value: string; options?: CookieOptions }>) => void;
+  setMultiple: (
+    cookies: Record<string, { value: string; options?: CookieOptions }>,
+  ) => void;
   /** Delete multiple cookies at once */
-  deleteMultiple: (names: string[], options?: Pick<CookieOptions, 'domain' | 'path'>) => void;
+  deleteMultiple: (
+    names: string[],
+    options?: Pick<CookieOptions, "domain" | "path">,
+  ) => void;
 }
 
 /**
@@ -63,7 +71,7 @@ const cookieContextMap = new WeakMap<PageContext, RequestContext>();
 export function serializeCookie(
   name: string,
   value: string,
-  options: CookieOptions = {}
+  options: CookieOptions = {},
 ): string {
   const parts: string[] = [];
 
@@ -92,12 +100,12 @@ export function serializeCookie(
 
   // Secure
   if (options.secure) {
-    parts.push('Secure');
+    parts.push("Secure");
   }
 
   // HttpOnly
   if (options.httpOnly) {
-    parts.push('HttpOnly');
+    parts.push("HttpOnly");
   }
 
   // SameSite
@@ -105,7 +113,7 @@ export function serializeCookie(
     parts.push(`SameSite=${options.sameSite}`);
   }
 
-  return parts.join('; ');
+  return parts.join("; ");
 }
 
 /**
@@ -133,10 +141,13 @@ export function createCookieManager(ctx: PageContext): CookieManager {
     /**
      * Delete a single cookie by setting maxAge=0
      */
-    delete(name: string, options?: Pick<CookieOptions, 'domain' | 'path'>): void {
+    delete(
+      name: string,
+      options?: Pick<CookieOptions, "domain" | "path">,
+    ): void {
       // To delete a cookie, set it with maxAge=0 and expires in the past
       // Must match domain and path from when it was set
-      const header = serializeCookie(name, '', {
+      const header = serializeCookie(name, "", {
         ...options,
         maxAge: 0,
         expires: new Date(0),
@@ -147,7 +158,9 @@ export function createCookieManager(ctx: PageContext): CookieManager {
     /**
      * Set multiple cookies at once
      */
-    setMultiple(cookies: Record<string, { value: string; options?: CookieOptions }>): void {
+    setMultiple(
+      cookies: Record<string, { value: string; options?: CookieOptions }>,
+    ): void {
       for (const [name, { value, options }] of Object.entries(cookies)) {
         this.set(name, value, options);
       }
@@ -156,7 +169,10 @@ export function createCookieManager(ctx: PageContext): CookieManager {
     /**
      * Delete multiple cookies at once
      */
-    deleteMultiple(names: string[], options?: Pick<CookieOptions, 'domain' | 'path'>): void {
+    deleteMultiple(
+      names: string[],
+      options?: Pick<CookieOptions, "domain" | "path">,
+    ): void {
       for (const name of names) {
         this.delete(name, options);
       }
@@ -170,7 +186,9 @@ export function createCookieManager(ctx: PageContext): CookieManager {
  * @param ctx Page context
  * @returns Array of Set-Cookie header values, or undefined if none
  */
-export function extractSetCookieHeaders(ctx: PageContext): string[] | undefined {
+export function extractSetCookieHeaders(
+  ctx: PageContext,
+): string[] | undefined {
   const requestContext = cookieContextMap.get(ctx);
   return requestContext?.setCookieHeaders;
 }

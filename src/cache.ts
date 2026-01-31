@@ -7,7 +7,11 @@
 import { join, toFileUrl } from "std/path";
 import { render } from "preact-render-to-string";
 import { ensureDir } from "https://deno.land/std@0.224.0/fs/ensure_dir.ts";
-import { compileFile, analyzeDependencies, getCachePath } from "./precompiler_lib.ts";
+import {
+  analyzeDependencies,
+  compileFile,
+  getCachePath,
+} from "./precompiler_lib.ts";
 import type { PageContext } from "./context.ts";
 
 // 重新导出 PageContext 类型，供页面使用
@@ -42,7 +46,7 @@ export interface RedirectResult {
  * - Response 对象：直接返回
  */
 export type PageFunction = (
-  context: PageContext
+  context: PageContext,
 ) => Promise<PageResult> | PageResult;
 
 // 缓存条目类型
@@ -77,11 +81,11 @@ let globalLoadVersion = 0;
  */
 export async function getPage(
   filepath: string,
-  forceReload: boolean = false
+  forceReload: boolean = false,
 ): Promise<PageFunction> {
   // filepath might already be absolute (from resolvePath with resolved root)
   // or relative (for backward compatibility)
-  const absPath = filepath.startsWith('/') || filepath.match(/^[a-zA-Z]:/)
+  const absPath = filepath.startsWith("/") || filepath.match(/^[a-zA-Z]:/)
     ? filepath
     : join(Deno.cwd(), filepath);
 
@@ -115,14 +119,16 @@ export async function getPage(
   // ⭐ 递增全局加载版本，确保生成唯一的 import URL
   // 这对于绕过 Deno 的 import 缓存至关重要
   globalLoadVersion++;
-  console.log(`[LOAD VERSION] Global load version incremented to ${globalLoadVersion}`);
+  console.log(
+    `[LOAD VERSION] Global load version incremented to ${globalLoadVersion}`,
+  );
 
   // 1. 检查远程导入
   const { checkRemoteImports } = await import("./precompiler_lib.ts");
   const remoteImports = await checkRemoteImports(absPath);
   if (remoteImports.length > 0) {
     throw new Error(
-      `Remote imports are not allowed: ${remoteImports.join(", ")}`
+      `Remote imports are not allowed: ${remoteImports.join(", ")}`,
     );
   }
 
@@ -167,10 +173,13 @@ export async function getPage(
   // 计算 SHA-256 哈希
   const hashBuffer = await crypto.subtle.digest(
     "SHA-256",
-    new TextEncoder().encode(compiledContent)
+    new TextEncoder().encode(compiledContent),
   );
   const hashArray = Array.from(new Uint8Array(hashBuffer));
-  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).slice(0, 8).join('');
+  const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).slice(
+    0,
+    8,
+  ).join("");
 
   console.log(`[IMPORT] Loading module: ${cacheUrl}`);
 
@@ -178,7 +187,7 @@ export async function getPage(
   const module = await import(cacheUrl);
 
   // 检查模块是否导出默认函数
-  if (typeof module.default !== 'function') {
+  if (typeof module.default !== "function") {
     throw new Error(`Module ${filepath} must export a default function`);
   }
 
@@ -200,7 +209,7 @@ export async function getPage(
  */
 async function needsRecompilation(
   filepath: string,
-  currentMtime: number
+  currentMtime: number,
 ): Promise<boolean> {
   const cached = moduleCache.get(filepath);
 
@@ -234,7 +243,7 @@ async function needsRecompilation(
  */
 async function checkDependencyModified(
   depPath: string,
-  parentPath: string
+  parentPath: string,
 ): Promise<boolean> {
   try {
     const depStat = await Deno.stat(depPath);
@@ -245,11 +254,15 @@ async function checkDependencyModified(
 
     // 如果依赖文件修改了，或者还没有编译过
     if (!depCompiledMtime || depMtime > depCompiledMtime) {
-      console.log(`[INFO] Dependency modified: ${depPath} (parent: ${parentPath})`);
+      console.log(
+        `[INFO] Dependency modified: ${depPath} (parent: ${parentPath})`,
+      );
 
       // ⭐ 主动通知所有依赖此文件的缓存失效（递归）
       const invalidated = invalidateDependents(depPath);
-      console.log(`[INFO] Batch invalidated ${invalidated.length} file(s) due to ${depPath} change`);
+      console.log(
+        `[INFO] Batch invalidated ${invalidated.length} file(s) due to ${depPath} change`,
+      );
 
       // 返回 true，当前文件需要重新编译
       return true;
@@ -283,7 +296,7 @@ async function checkDependencyModified(
 export function clearCache(): void {
   moduleCache.clear();
   dependencyGraph.clear();
-  reverseDeps.clear();  // ⭐ 清除反向依赖图
+  reverseDeps.clear(); // ⭐ 清除反向依赖图
   compiledMtimes.clear();
 }
 
@@ -296,9 +309,13 @@ export function clearCache(): void {
 async function compileDependencyRecursively(
   filepath: string,
   version: number,
-  parentFile?: string
+  parentFile?: string,
 ): Promise<void> {
-  console.log(`[COMPILE_DEP] Recursively compiling: ${filepath}${parentFile ? ` (from ${parentFile})` : ""} (v=${version})`);
+  console.log(
+    `[COMPILE_DEP] Recursively compiling: ${filepath}${
+      parentFile ? ` (from ${parentFile})` : ""
+    } (v=${version})`,
+  );
 
   // 1. 编译当前文件（传递版本号）
   await compileFile(filepath, version);
@@ -330,7 +347,11 @@ async function compileDependencyRecursively(
       reverseDeps.set(filepath, new Set());
     }
     reverseDeps.get(filepath)!.add(parentFile);
-    console.log(`[REVERSE_DEPS] ${filepath} → [${Array.from(reverseDeps.get(filepath)!).join(", ")}]`);
+    console.log(
+      `[REVERSE_DEPS] ${filepath} → [${
+        Array.from(reverseDeps.get(filepath)!).join(", ")
+      }]`,
+    );
   }
 
   // 5. 递归编译依赖文件（包括 TSX 和 TS）
@@ -359,7 +380,11 @@ async function compileDependencyRecursively(
             reverseDeps.set(dep, new Set());
           }
           reverseDeps.get(dep)!.add(filepath);
-          console.log(`[REVERSE_DEPS] ${dep} → [${Array.from(reverseDeps.get(dep)!).join(", ")}]`);
+          console.log(
+            `[REVERSE_DEPS] ${dep} → [${
+              Array.from(reverseDeps.get(dep)!).join(", ")
+            }]`,
+          );
         }
 
         // 更新编译时间戳
@@ -374,14 +399,21 @@ async function compileDependencyRecursively(
  * @param filepath 当前文件路径
  * @param dependencies 当前文件的依赖列表
  */
-function trackReverseDependencies(filepath: string, dependencies: string[]): void {
+function trackReverseDependencies(
+  filepath: string,
+  dependencies: string[],
+): void {
   for (const dep of dependencies) {
     if (!reverseDeps.has(dep)) {
       reverseDeps.set(dep, new Set());
     }
     reverseDeps.get(dep)!.add(filepath);
 
-    console.log(`[REVERSE_DEPS] ${dep} → [${Array.from(reverseDeps.get(dep)!).join(", ")}]`);
+    console.log(
+      `[REVERSE_DEPS] ${dep} → [${
+        Array.from(reverseDeps.get(dep)!).join(", ")
+      }]`,
+    );
   }
 }
 
@@ -399,7 +431,10 @@ export function invalidateDependents(dependencyFile: string): string[] {
   }
 
   console.log(`[REVERSE_DEPS] File modified: ${dependencyFile}`);
-  console.log(`[REVERSE_DEPS] Invalidating ${dependents.size} direct dependent(s):`, Array.from(dependents));
+  console.log(
+    `[REVERSE_DEPS] Invalidating ${dependents.size} direct dependent(s):`,
+    Array.from(dependents),
+  );
 
   const invalidated: string[] = [];
 

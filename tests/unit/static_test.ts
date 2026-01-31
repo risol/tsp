@@ -3,7 +3,10 @@
  * 测试 src/static.ts 中的静态文件服务功能
  */
 
-import { assertEquals, assertExists } from "https://deno.land/std@0.210.0/testing/asserts.ts";
+import {
+  assertEquals,
+  assertExists,
+} from "https://deno.land/std@0.210.0/testing/asserts.ts";
 import {
   getMimeType,
   isStaticFileAllowed,
@@ -166,14 +169,14 @@ Deno.test("static - serveStaticFile: 读取 CSS 文件", async () => {
     const response = await serveStaticFile(
       TEST_FILES.css,
       DEFAULT_EXTENSIONS,
-      false
+      false,
     );
 
     assertExists(response);
     assertEquals(response?.status, 200);
     assertEquals(
       response?.headers.get("Content-Type"),
-      "text/css; charset=utf-8"
+      "text/css; charset=utf-8",
     );
 
     // 验证 ETag 存在（生产模式）
@@ -191,14 +194,14 @@ Deno.test("static - serveStaticFile: 读取 JS 文件", async () => {
     const response = await serveStaticFile(
       TEST_FILES.js,
       DEFAULT_EXTENSIONS,
-      false
+      false,
     );
 
     assertExists(response);
     assertEquals(response?.status, 200);
     assertEquals(
       response?.headers.get("Content-Type"),
-      "application/javascript; charset=utf-8"
+      "application/javascript; charset=utf-8",
     );
   } finally {
     await cleanupTestFiles();
@@ -212,14 +215,14 @@ Deno.test("static - serveStaticFile: 读取文本文件", async () => {
     const response = await serveStaticFile(
       TEST_FILES.txt,
       DEFAULT_EXTENSIONS,
-      false
+      false,
     );
 
     assertExists(response);
     assertEquals(response?.status, 200);
     assertEquals(
       response?.headers.get("Content-Type"),
-      "text/plain; charset=utf-8"
+      "text/plain; charset=utf-8",
     );
 
     // 验证内容
@@ -237,7 +240,7 @@ Deno.test("static - serveStaticFile: 开发模式无缓存", async () => {
     const response = await serveStaticFile(
       TEST_FILES.css,
       DEFAULT_EXTENSIONS,
-      true // dev mode
+      true, // dev mode
     );
 
     assertExists(response);
@@ -246,7 +249,7 @@ Deno.test("static - serveStaticFile: 开发模式无缓存", async () => {
     // 开发模式应该禁用缓存
     assertEquals(
       response?.headers.get("Cache-Control"),
-      "no-cache, no-store, must-revalidate"
+      "no-cache, no-store, must-revalidate",
     );
     assertEquals(response?.headers.get("Pragma"), "no-cache");
   } finally {
@@ -261,7 +264,7 @@ Deno.test("static - serveStaticFile: 不允许的文件类型", async () => {
     const response = await serveStaticFile(
       TEST_FILES.html, // HTML 不在默认列表中
       DEFAULT_EXTENSIONS,
-      false
+      false,
     );
 
     // 应该返回 null（不处理）
@@ -278,7 +281,7 @@ Deno.test("static - serveStaticFile: 文件不存在", async () => {
     const response = await serveStaticFile(
       `${TEST_DIR}/notexist.css`,
       DEFAULT_EXTENSIONS,
-      false
+      false,
     );
 
     // 文件不存在应该返回 null
@@ -297,7 +300,7 @@ Deno.test("static - serveStaticFileWithCache: ETag 验证", async () => {
       TEST_FILES.css,
       DEFAULT_EXTENSIONS,
       new Headers(),
-      false
+      false,
     );
 
     assertExists(response1);
@@ -314,7 +317,7 @@ Deno.test("static - serveStaticFileWithCache: ETag 验证", async () => {
       TEST_FILES.css,
       DEFAULT_EXTENSIONS,
       headers,
-      false
+      false,
     );
 
     // 应该返回 304 Not Modified
@@ -333,7 +336,7 @@ Deno.test("static - serveStaticFileWithCache: If-Modified-Since 验证", async (
       TEST_FILES.css,
       DEFAULT_EXTENSIONS,
       new Headers(),
-      false
+      false,
     );
 
     assertExists(response1);
@@ -352,7 +355,7 @@ Deno.test("static - serveStaticFileWithCache: If-Modified-Since 验证", async (
       TEST_FILES.css,
       DEFAULT_EXTENSIONS,
       headers,
-      false
+      false,
     );
 
     // 应该返回 304 Not Modified
@@ -373,7 +376,7 @@ Deno.test("static - serveStaticFileWithCache: 开发模式不使用缓存", asyn
       TEST_FILES.css,
       DEFAULT_EXTENSIONS,
       headers,
-      true // dev mode
+      true, // dev mode
     );
 
     assertExists(response);
@@ -417,7 +420,7 @@ Deno.test("static - MIME 类型: 所有默认支持的类型", () => {
     assertEquals(
       mimeType,
       expectedMime,
-      `MIME type for ${filename} should be ${expectedMime}`
+      `MIME type for ${filename} should be ${expectedMime}`,
     );
   }
 });

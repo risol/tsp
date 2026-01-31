@@ -57,7 +57,7 @@ export function getMimeType(filepath: string): string {
  */
 export function isStaticFileAllowed(
   filepath: string,
-  allowedExtensions: string[]
+  allowedExtensions: string[],
 ): boolean {
   const ext = extname(filepath).toLowerCase();
   return allowedExtensions.includes(ext);
@@ -69,7 +69,10 @@ export function isStaticFileAllowed(
  * @param mtime 文件修改时间
  * @returns ETag 字符串
  */
-async function generateETag(content: ArrayBuffer, mtime: number): Promise<string> {
+async function generateETag(
+  content: ArrayBuffer,
+  mtime: number,
+): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", content);
   const hashSlice = hash.slice(0, 16);
   const hex = Array.from(new Uint8Array(hashSlice))
@@ -88,7 +91,7 @@ async function generateETag(content: ArrayBuffer, mtime: number): Promise<string
 export async function serveStaticFile(
   filepath: string,
   allowedExtensions: string[],
-  isDev: boolean = false
+  isDev: boolean = false,
 ): Promise<Response | null> {
   // 检查文件扩展名是否在允许列表中
   if (!isStaticFileAllowed(filepath, allowedExtensions)) {
@@ -155,7 +158,7 @@ export async function serveStaticFileWithCache(
   filepath: string,
   allowedExtensions: string[],
   requestHeaders: Headers,
-  isDev: boolean = false
+  isDev: boolean = false,
 ): Promise<Response | null> {
   // 检查文件扩展名是否在允许列表中
   if (!isStaticFileAllowed(filepath, allowedExtensions)) {

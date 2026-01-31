@@ -3,7 +3,10 @@
  * 测试 src/context.ts 中的上下文构建功能
  */
 
-import { assertEquals, assertExists } from "https://deno.land/std@0.210.0/testing/asserts.ts";
+import {
+  assertEquals,
+  assertExists,
+} from "https://deno.land/std@0.210.0/testing/asserts.ts";
 import { buildContext, type PageContext } from "../../src/context.ts";
 
 // 使用相对于项目根目录的路径
@@ -39,7 +42,14 @@ async function buildContextFromRequest(
 
   // 解析请求体
   let body: unknown = null;
-  const method = request.method as "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS";
+  const method = request.method as
+    | "GET"
+    | "POST"
+    | "PUT"
+    | "PATCH"
+    | "DELETE"
+    | "HEAD"
+    | "OPTIONS";
 
   if (method !== "GET" && method !== "HEAD" && method !== "DELETE") {
     const contentType = request.headers.get("Content-Type") || "";
@@ -77,7 +87,11 @@ async function buildContextFromRequest(
 
 Deno.test("context - buildContext: 基本请求", async () => {
   const request = new Request("http://localhost:9000/?name=test");
-  const context = await buildContextFromRequest(request, "/test.tsx", TEST_ROOT);
+  const context = await buildContextFromRequest(
+    request,
+    "/test.tsx",
+    TEST_ROOT,
+  );
 
   assertEquals(context.method, "GET");
   assertEquals(context.query.name, "test");
@@ -86,8 +100,14 @@ Deno.test("context - buildContext: 基本请求", async () => {
 });
 
 Deno.test("context - buildContext: 多个查询参数", async () => {
-  const request = new Request("http://localhost:9000/?name=test&page=1&limit=10");
-  const context = await buildContextFromRequest(request, "/test.tsx", TEST_ROOT);
+  const request = new Request(
+    "http://localhost:9000/?name=test&page=1&limit=10",
+  );
+  const context = await buildContextFromRequest(
+    request,
+    "/test.tsx",
+    TEST_ROOT,
+  );
 
   assertEquals(context.query.name, "test");
   assertEquals(context.query.page, "1");
@@ -103,7 +123,11 @@ Deno.test("context - buildContext: POST JSON 请求", async () => {
     },
   });
 
-  const context = await buildContextFromRequest(request, "/test.tsx", TEST_ROOT);
+  const context = await buildContextFromRequest(
+    request,
+    "/test.tsx",
+    TEST_ROOT,
+  );
 
   assertEquals(context.method, "POST");
   assertExists(context.body);
@@ -120,7 +144,11 @@ Deno.test("context - buildContext: POST 表单请求", async () => {
     },
   });
 
-  const context = await buildContextFromRequest(request, "/test.tsx", TEST_ROOT);
+  const context = await buildContextFromRequest(
+    request,
+    "/test.tsx",
+    TEST_ROOT,
+  );
 
   assertEquals(context.method, "POST");
   assertExists(context.body);
@@ -135,7 +163,11 @@ Deno.test("context - buildContext: Cookie 解析", async () => {
     },
   });
 
-  const context = await buildContextFromRequest(request, "/test.tsx", TEST_ROOT);
+  const context = await buildContextFromRequest(
+    request,
+    "/test.tsx",
+    TEST_ROOT,
+  );
 
   assertEquals(context.cookies.sessionId, "abc123");
   assertEquals(context.cookies.theme, "dark");
@@ -151,7 +183,11 @@ Deno.test("context - buildContext: 多个请求头", async () => {
     },
   });
 
-  const context = await buildContextFromRequest(request, "/test.tsx", TEST_ROOT);
+  const context = await buildContextFromRequest(
+    request,
+    "/test.tsx",
+    TEST_ROOT,
+  );
 
   assertEquals(context.headers.get("User-Agent"), "Mozilla/5.0");
   assertEquals(context.headers.get("Accept"), "text/html");

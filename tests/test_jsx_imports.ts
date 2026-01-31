@@ -6,7 +6,10 @@
  * 注意：此测试只在源码模式下运行，因为编译后的二进制文件有已知的 import 问题
  */
 
-import { assertEquals, assertExists } from "https://deno.land/std@0.210.0/testing/asserts.ts";
+import {
+  assertEquals,
+  assertExists,
+} from "https://deno.land/std@0.210.0/testing/asserts.ts";
 
 const TEST_PORT = 9102;
 const TEST_ROOT = "./tests/test_www";
@@ -119,9 +122,15 @@ async function stopServer(): Promise<void> {
 }
 
 function printSection(title: string) {
-  console.log(`\n${COLORS.cyan}${COLORS.bright}╔════════════════════════════════════════════╗${COLORS.reset}`);
-  console.log(`${COLORS.cyan}${COLORS.bright}║   ${title.padEnd(38)}║${COLORS.reset}`);
-  console.log(`${COLORS.cyan}${COLORS.bright}╚════════════════════════════════════════════╝${COLORS.reset}`);
+  console.log(
+    `\n${COLORS.cyan}${COLORS.bright}╔════════════════════════════════════════════╗${COLORS.reset}`,
+  );
+  console.log(
+    `${COLORS.cyan}${COLORS.bright}║   ${title.padEnd(38)}║${COLORS.reset}`,
+  );
+  console.log(
+    `${COLORS.cyan}${COLORS.bright}╚════════════════════════════════════════════╝${COLORS.reset}`,
+  );
 }
 
 function printSubsection(title: string) {
@@ -132,7 +141,9 @@ function printSubsection(title: string) {
 function printTestResult(name: string, passed: boolean, duration?: number) {
   const symbol = passed ? "✓" : "✗";
   const color = passed ? COLORS.green : COLORS.red;
-  const durationStr = duration ? ` ${COLORS.dim}(${duration}ms)${COLORS.reset}` : "";
+  const durationStr = duration
+    ? ` ${COLORS.dim}(${duration}ms)${COLORS.reset}`
+    : "";
   console.log(`  ${color}${symbol} ${name}${durationStr}${COLORS.reset}`);
 }
 
@@ -157,7 +168,9 @@ async function runTests(): Promise<void> {
       console.log(`  ${COLORS.green}✓ 端口 ${TEST_PORT} 已清理${COLORS.reset}`);
 
       await startDevServer();
-      console.log(`  ${COLORS.green}✓ 开发服务器已启动在端口 ${TEST_PORT}${COLORS.reset}`);
+      console.log(
+        `  ${COLORS.green}✓ 开发服务器已启动在端口 ${TEST_PORT}${COLORS.reset}`,
+      );
 
       const duration = Date.now() - startTime;
       printTestResult("启动开发服务器", true, duration);
@@ -172,7 +185,9 @@ async function runTests(): Promise<void> {
 
       printSubsection("测试 JSX 组件导入");
 
-      const response = await fetch(`http://localhost:${TEST_PORT}/jsx-imports.tsx`);
+      const response = await fetch(
+        `http://localhost:${TEST_PORT}/jsx-imports.tsx`,
+      );
       assertEquals(response.status, 200);
 
       const text = await response.text();
@@ -199,11 +214,16 @@ async function runTests(): Promise<void> {
 
       printSubsection("测试 TS 工具函数导入");
 
-      const response = await fetch(`http://localhost:${TEST_PORT}/jsx-imports.tsx`);
+      const response = await fetch(
+        `http://localhost:${TEST_PORT}/jsx-imports.tsx`,
+      );
       const text = await response.text();
 
       // 验证工具函数执行结果
-      assertExists(text.includes("下午好") || text.includes("早上好") || text.includes("晚上好"));
+      assertExists(
+        text.includes("下午好") || text.includes("早上好") ||
+          text.includes("晚上好"),
+      );
       assertExists(text.includes("1+2+3+4+5 = 15"));
       assertExists(text.includes("文本截断测试"));
 
@@ -225,7 +245,9 @@ async function runTests(): Promise<void> {
 
       printSubsection("测试非src目录导入");
 
-      const response = await fetch(`http://localhost:${TEST_PORT}/jsx-imports.tsx`);
+      const response = await fetch(
+        `http://localhost:${TEST_PORT}/jsx-imports.tsx`,
+      );
       const text = await response.text();
 
       // 验证功能验证列表
@@ -258,9 +280,15 @@ async function runTests(): Promise<void> {
       const duration = Date.now() - startTime;
       printTestResult("清理资源", true, duration);
 
-      console.log(`\n${COLORS.cyan}${COLORS.bright}╔════════════════════════════════════════════╗${COLORS.reset}`);
-      console.log(`${COLORS.cyan}${COLORS.bright}║   JSX Import 测试完成                    ║${COLORS.reset}`);
-      console.log(`${COLORS.cyan}${COLORS.bright}╚════════════════════════════════════════════╝${COLORS.reset}`);
+      console.log(
+        `\n${COLORS.cyan}${COLORS.bright}╔════════════════════════════════════════════╗${COLORS.reset}`,
+      );
+      console.log(
+        `${COLORS.cyan}${COLORS.bright}║   JSX Import 测试完成                    ║${COLORS.reset}`,
+      );
+      console.log(
+        `${COLORS.cyan}${COLORS.bright}╚════════════════════════════════════════════╝${COLORS.reset}`,
+      );
     },
   });
 
@@ -282,18 +310,28 @@ async function runTests(): Promise<void> {
   }
 
   // 打印总结
-  console.log(`\n${COLORS.cyan}${COLORS.bright}╔════════════════════════════════════════════╗${COLORS.reset}`);
-  console.log(`${COLORS.cyan}${COLORS.bright}║   测试总结                                 ║${COLORS.reset}`);
-  console.log(`${COLORS.cyan}${COLORS.bright}╚════════════════════════════════════════════╝${COLORS.reset}`);
+  console.log(
+    `\n${COLORS.cyan}${COLORS.bright}╔════════════════════════════════════════════╗${COLORS.reset}`,
+  );
+  console.log(
+    `${COLORS.cyan}${COLORS.bright}║   测试总结                                 ║${COLORS.reset}`,
+  );
+  console.log(
+    `${COLORS.cyan}${COLORS.bright}╚════════════════════════════════════════════╝${COLORS.reset}`,
+  );
 
   console.log(`\n${COLORS.bright}总测试数: ${tests.length}${COLORS.reset}`);
   console.log(`${COLORS.green}通过: ${passedTests}${COLORS.reset}`);
   if (failedTests > 0) {
     console.log(`${COLORS.red}失败: ${failedTests}${COLORS.reset}`);
-    console.log(`\n${COLORS.red}${COLORS.bright}❌ 部分测试失败！${COLORS.reset}`);
+    console.log(
+      `\n${COLORS.red}${COLORS.bright}❌ 部分测试失败！${COLORS.reset}`,
+    );
     Deno.exit(1);
   } else {
-    console.log(`\n${COLORS.green}${COLORS.bright}🎉 所有 JSX Import 测试通过！${COLORS.reset}`);
+    console.log(
+      `\n${COLORS.green}${COLORS.bright}🎉 所有 JSX Import 测试通过！${COLORS.reset}`,
+    );
   }
 }
 
