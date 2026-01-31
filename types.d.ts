@@ -271,6 +271,191 @@ declare global {
   type MySQLFactory = (config: MySQLConfig) => Promise<MySQLClient>;
 
   /**
+   * Redis 客户端接口
+   * 提供完整的 Redis 操作功能
+   */
+  interface RedisClient {
+    /**
+     * 设置键值对
+     * @param key - 键
+     * @param value - 值
+     * @param ttl - 过期时间（秒），可选
+     */
+    set(key: string, value: string, ttl?: number): Promise<void>;
+
+    /**
+     * 获取键值
+     * @param key - 键
+     * @returns 值，如果不存在则返回 null
+     */
+    get(key: string): Promise<string | null>;
+
+    /**
+     * 删除键
+     * @param keys - 一个或多个键
+     * @returns 删除的键数量
+     */
+    del(...keys: string[]): Promise<number>;
+
+    /**
+     * 检查键是否存在
+     * @param key - 键
+     * @returns 是否存在
+     */
+    exists(key: string): Promise<boolean>;
+
+    /**
+     * 设置键的过期时间
+     * @param key - 键
+     * @param seconds - 过期时间（秒）
+     * @returns 是否设置成功
+     */
+    expire(key: string, seconds: number): Promise<boolean>;
+
+    /**
+     * 获取键的剩余生存时间
+     * @param key - 键
+     * @returns 剩余秒数，-1 表示永不过期，-2 表示键不存在
+     */
+    ttl(key: string): Promise<number>;
+
+    /**
+     * 列表操作：在列表左侧推入元素
+     */
+    lpush(key: string, ...values: string[]): Promise<number>;
+
+    /**
+     * 列表操作：在列表右侧推入元素
+     */
+    rpush(key: string, ...values: string[]): Promise<number>;
+
+    /**
+     * 列表操作：从列表左侧弹出元素
+     */
+    lpop(key: string): Promise<string | null>;
+
+    /**
+     * 列表操作：从列表右侧弹出元素
+     */
+    rpop(key: string): Promise<string | null>;
+
+    /**
+     * 列表操作：获取列表指定范围内的元素
+     */
+    lrange(key: string, start: number, stop: number): Promise<string[]>;
+
+    /**
+     * 集合操作：向集合添加成员
+     */
+    sadd(key: string, ...members: string[]): Promise<number>;
+
+    /**
+     * 集合操作：获取集合所有成员
+     */
+    smembers(key: string): Promise<string[]>;
+
+    /**
+     * 集合操作：移除并返回集合中的一个随机成员
+     */
+    spop(key: string): Promise<string | null>;
+
+    /**
+     * 集合操作：检查成员是否在集合中
+     */
+    sismember(key: string, member: string): Promise<boolean>;
+
+    /**
+     * 哈希操作：设置哈希字段值
+     */
+    hset(key: string, field: string, value: string): Promise<number>;
+
+    /**
+     * 哈希操作：获取哈希字段值
+     */
+    hget(key: string, field: string): Promise<string | null>;
+
+    /**
+     * 哈希操作：获取哈希所有字段和值
+     */
+    hgetall(key: string): Promise<Record<string, string>>;
+
+    /**
+     * 哈希操作：删除哈希字段
+     */
+    hdel(key: string, ...fields: string[]): Promise<number>;
+
+    /**
+     * 有序集合操作：添加或更新成员
+     */
+    zadd(key: string, score: number, member: string): Promise<number>;
+
+    /**
+     * 有序集合操作：按分数范围返回成员
+     */
+    zrange(key: string, start: number, stop: number): Promise<string[]>;
+
+    /**
+     * 有序集合操作：移除成员
+     */
+    zrem(key: string, ...members: string[]): Promise<number>;
+
+    /**
+     * 递增操作
+     */
+    incr(key: string): Promise<number>;
+
+    /**
+     * 递减操作
+     */
+    decr(key: string): Promise<number>;
+
+    /**
+     * 按指定值递增
+     */
+    incrBy(key: string, increment: number): Promise<number>;
+
+    /**
+     * 发布消息到频道
+     */
+    publish(channel: string, message: string): Promise<number>;
+
+    /**
+     * 订阅频道
+     * @param channel - 频道名
+     * @param callback - 消息回调函数
+     */
+    subscribe(
+      channel: string,
+      callback: (message: string) => void | Promise<void>
+    ): Promise<void>;
+
+    /**
+     * 关闭连接
+     */
+    close(): Promise<void>;
+  }
+
+  /**
+   * Redis 连接配置
+   */
+  interface RedisConfig {
+    /** Redis 主机地址 */
+    host: string;
+    /** Redis 端口 */
+    port?: number;
+    /** 密码 */
+    password?: string;
+    /** 数据库索引（0-15） */
+    database?: number;
+  }
+
+  /**
+   * Redis 工厂函数类型
+   * 用于创建 Redis 客户端实例
+   */
+  type RedisFactory = (config: RedisConfig) => Promise<RedisClient>;
+
+  /**
    * 应用依赖类型
    * 在此声明所有可注入的依赖及其类型
    *
@@ -280,6 +465,7 @@ declare global {
    * interface AppDeps {
    *   testFunc: () => string;
    *   createMySQL: MySQLFactory;
+   *   createRedis: RedisFactory;
    * }
    * ```
    */
@@ -310,6 +496,28 @@ declare global {
      * ```
      */
     createMySQL: MySQLFactory;
+
+    /**
+     * Redis 客户端工厂函数
+     * 在 TSX 中调用以创建 Redis 连接
+     *
+     * @example
+     * ```tsx
+     * export default Page(async function(ctx, { createRedis, response }) {
+     *   const redis = await createRedis({
+     *     host: '127.0.0.1',
+     *     port: 6379,
+     *     password: 'your_password',
+     *     database: 0
+     *   });
+     *
+     *   await redis.set('key', 'value');
+     *   const value = await redis.get('key');
+     *   return response.json({ key, value });
+     * });
+     * ```
+     */
+    createRedis: RedisFactory;
 
     /**
      * Session 管理

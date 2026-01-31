@@ -1002,7 +1002,219 @@ export function HotReloadWrapper() {
     },
   });
 
-  // 测试 9: 清理资源
+  // 测试 9: Redis 功能测试
+  tests.push({
+    name: "redis - Redis 缓存功能",
+    fn: async () => {
+      const startTime = Date.now();
+
+      printSubsection("Redis 功能测试");
+
+      // 检查 Redis 是否运行
+      console.log(`  ${COLORS.dim}检查 Redis 服务状态...${COLORS.reset}`);
+
+      let redisRunning = false;
+      try {
+        const checkCommand = new Deno.Command("redis-cli", {
+          args: ["ping"],
+          stdout: "piped",
+          stderr: "piped",
+        });
+
+        const { stdout } = await checkCommand.output();
+        const output = new TextDecoder().decode(stdout).trim();
+
+        if (output.includes("PONG")) {
+          redisRunning = true;
+          console.log(`  ${COLORS.green}✓ Redis 服务正在运行${COLORS.reset}`);
+        } else {
+          console.log(`  ${COLORS.yellow}⚠ Redis 服务未响应，跳过测试${COLORS.reset}`);
+          console.log(`  ${COLORS.dim}提示: 运行 docker run -d -p 6379:6379 redis:latest${COLORS.reset}`);
+          return;
+        }
+      } catch (error) {
+        console.log(`  ${COLORS.yellow}⚠ 无法检查 Redis 状态，尝试继续测试${COLORS.reset}`);
+        console.log(`  ${COLORS.dim}错误: ${(error as Error).message}${COLORS.reset}`);
+        // 继续测试，可能 redis-cli 未安装但 Redis 在运行
+      }
+
+      // 测试1: 基本 CRUD
+      console.log(`  ${COLORS.dim}测试1: 基本 CRUD${COLORS.reset}`);
+      const basicResponse = await fetch(
+        `http://localhost:${TEST_PORT}/redis_e2e.tsx?action=basic`,
+      );
+
+      if (basicResponse.status !== 200) {
+        const text = await basicResponse.text();
+        if (text.includes("ECONNREFUSED") || text.includes("connection")) {
+          console.log(`  ${COLORS.yellow}⚠ Redis 连接失败，跳过测试${COLORS.reset}`);
+          console.log(`  ${COLORS.dim}提示: 运行 docker run -d -p 6379:6379 redis:latest${COLORS.reset}`);
+          return;
+        }
+        throw new Error(`基本测试失败: ${text.substring(0, 200)}`);
+      }
+
+      const basicResult = await basicResponse.json();
+
+      if (!basicResult.success) {
+        throw new Error(`基本测试失败: ${basicResult.error}`);
+      }
+
+      console.log(
+        `  ${COLORS.dim}键值: ${basicResult.data.key} = ${basicResult.data.value}${COLORS.reset}`,
+      );
+      printTestResult("基本 CRUD", true);
+
+      // 测试2: 过期时间
+      console.log(`  ${COLORS.dim}测试2: 过期时间${COLORS.reset}`);
+      const expireResponse = await fetch(
+        `http://localhost:${TEST_PORT}/redis_e2e.tsx?action=expire`,
+      );
+
+      assertEquals(expireResponse.status, 200);
+      const expireResult = await expireResponse.json();
+
+      if (!expireResult.success) {
+        throw new Error(`过期时间测试失败: ${expireResult.error}`);
+      }
+
+      console.log(
+        `  ${COLORS.dim}TTL: ${expireResult.data.ttl} 秒${COLORS.reset}`,
+      );
+      printTestResult("过期时间", true);
+
+      // 测试3: 列表操作
+      console.log(`  ${COLORS.dim}测试3: 列表操作${COLORS.reset}`);
+      const listResponse = await fetch(
+        `http://localhost:${TEST_PORT}/redis_e2e.tsx?action=list`,
+      );
+
+      assertEquals(listResponse.status, 200);
+      const listResult = await listResponse.json();
+
+      if (!listResult.success) {
+        throw new Error(`列表测试失败: ${listResult.error}`);
+      }
+
+      console.log(
+        `  ${COLORS.dim}列表长度: ${listResult.data.list.length}${COLORS.reset}`,
+      );
+      printTestResult("列表操作", true);
+
+      // 测试4: 集合操作
+      console.log(`  ${COLORS.dim}测试4: 集合操作${COLORS.reset}`);
+      const setResponse = await fetch(
+        `http://localhost:${TEST_PORT}/redis_e2e.tsx?action=set`,
+      );
+
+      assertEquals(setResponse.status, 200);
+      const setResult = await setResponse.json();
+
+      if (!setResult.success) {
+        throw new Error(`集合测试失败: ${setResult.error}`);
+      }
+
+      console.log(
+        `  ${COLORS.dim}成员数: ${setResult.data.members.length}${COLORS.reset}`,
+      );
+      printTestResult("集合操作", true);
+
+      // 测试5: 哈希操作
+      console.log(`  ${COLORS.dim}测试5: 哈希操作${COLORS.reset}`);
+      const hashResponse = await fetch(
+        `http://localhost:${TEST_PORT}/redis_e2e.tsx?action=hash`,
+      );
+
+      assertEquals(hashResponse.status, 200);
+      const hashResult = await hashResponse.json();
+
+      if (!hashResult.success) {
+        throw new Error(`哈希测试失败: ${hashResult.error}`);
+      }
+
+      console.log(
+        `  ${COLORS.dim}字段: ${Object.keys(hashResult.data.allFields).join(", ")}${COLORS.reset}`,
+      );
+      printTestResult("哈希操作", true);
+
+      // 测试6: 有序集合
+      console.log(`  ${COLORS.dim}测试6: 有序集合${COLORS.reset}`);
+      const zsetResponse = await fetch(
+        `http://localhost:${TEST_PORT}/redis_e2e.tsx?action=zset`,
+      );
+
+      assertEquals(zsetResponse.status, 200);
+      const zsetResult = await zsetResponse.json();
+
+      if (!zsetResult.success) {
+        throw new Error(`有序集合测试失败: ${zsetResult.error}`);
+      }
+
+      console.log(
+        `  ${COLORS.dim}成员数: ${zsetResult.data.members.length}${COLORS.reset}`,
+      );
+      printTestResult("有序集合", true);
+
+      // 测试7: 计数器
+      console.log(`  ${COLORS.dim}测试7: 计数器${COLORS.reset}`);
+      const counterResponse = await fetch(
+        `http://localhost:${TEST_PORT}/redis_e2e.tsx?action=counter`,
+      );
+
+      assertEquals(counterResponse.status, 200);
+      const counterResult = await counterResponse.json();
+
+      if (!counterResult.success) {
+        throw new Error(`计数器测试失败: ${counterResult.error}`);
+      }
+
+      console.log(
+        `  ${COLORS.dim}最终值: ${counterResult.data.afterDecr}${COLORS.reset}`,
+      );
+      printTestResult("计数器", true);
+
+      // 测试8: 发布订阅
+      console.log(`  ${COLORS.dim}测试8: 发布订阅${COLORS.reset}`);
+      const pubsubResponse = await fetch(
+        `http://localhost:${TEST_PORT}/redis_e2e.tsx?action=pubsub`,
+      );
+
+      assertEquals(pubsubResponse.status, 200);
+      const pubsubResult = await pubsubResponse.json();
+
+      if (!pubsubResult.success) {
+        throw new Error(`发布订阅测试失败: ${pubsubResult.error}`);
+      }
+
+      console.log(
+        `  ${COLORS.dim}订阅者数: ${pubsubResult.data.subscribers}${COLORS.reset}`,
+      );
+      printTestResult("发布订阅", true);
+
+      // 测试9: 压力测试
+      console.log(`  ${COLORS.dim}测试9: 压力测试（100次操作）${COLORS.reset}`);
+      const stressResponse = await fetch(
+        `http://localhost:${TEST_PORT}/redis_e2e.tsx?action=stress`,
+      );
+
+      assertEquals(stressResponse.status, 200);
+      const stressResult = await stressResponse.json();
+
+      if (!stressResult.success) {
+        throw new Error(`压力测试失败: ${stressResult.error}`);
+      }
+
+      console.log(
+        `  ${COLORS.dim}迭代次数: ${stressResult.data.iterations}${COLORS.reset}`,
+      );
+      printTestResult("压力测试", true);
+
+      const duration = Date.now() - startTime;
+      console.log(`  ${COLORS.dim}${duration}ms}${COLORS.reset}`);
+    },
+  });
+
+  // 测试 10: 清理资源
   tests.push({
     name: "binary build - 停止服务器",
     fn: async () => {

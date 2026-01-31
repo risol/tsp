@@ -29,7 +29,8 @@
     "preact": "npm:preact@10.25.4",
     "preact-render-to-string": "npm:preact-render-to-string@6.6.3",
     "nanoid": "npm:nanoid@5.0.9",
-    "mysql2": "npm:mysql2@^2.3.3"
+    "mysql2": "npm:mysql2@^2.3.3",
+    "redis": "npm:redis@^4.6.0"
   },
   "compilerOptions": {
     "jsx": "react-jsx",

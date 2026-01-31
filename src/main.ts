@@ -13,6 +13,7 @@ import { compileAll, setCacheBaseDir } from "./precompiler_lib.ts";
 import { serveStaticFileWithCache } from "./static.ts";
 import { join, relative, resolve, dirname } from "std/path";
 import { createMySQL } from "./mysql/factory.ts";
+import { createRedis } from "./redis/factory.ts";
 import {
   createSessionManager,
   getDefaultOptions,
@@ -704,6 +705,11 @@ async function main(): Promise<void> {
   // 注册 createMySQL 工厂函数
   registerDep("createMySQL", () => {
     return createMySQL;
+  });
+
+  // 注册 createRedis 工厂函数
+  registerDep("createRedis", () => {
+    return createRedis;
   });
 
   // 记录服务器启动信息

@@ -274,6 +274,55 @@ export default async function (context: PageContext) {
             </tbody>
           </table>
 
+          <h3 style={{ marginBottom: "16px", color: "#667eea" }}>🔴 Redis 缓存</h3>
+          <table style={{ width: "100%", marginBottom: "30px" }}>
+            <thead>
+              <tr>
+                <th>功能</th>
+                <th>描述</th>
+                <th>链接</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <strong>Redis 演示仪表板</strong>
+                </td>
+                <td>交互式 Redis 功能演示和测试</td>
+                <td>
+                  <a href="/redis-demo">查看演示 →</a>
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <strong>高级功能测试</strong>
+                </td>
+                <td>10 种 Redis 高级功能测试（9 种数据结构）</td>
+                <td>
+                  <a href="/redis-advanced">查看演示 →</a>
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <strong>性能测试</strong>
+                </td>
+                <td>Redis 客户端性能基准测试</td>
+                <td>
+                  <a href="/redis-performance">查看演示 →</a>
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <strong>基本操作 API</strong>
+                </td>
+                <td>简单的 JSON API 操作示例</td>
+                <td>
+                  <a href="/test-redis">查看演示 →</a>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
           <h3 style={{ marginBottom: "16px", color: "#667eea" }}>📦 其他功能</h3>
           <table style={{ width: "100%" }}>
             <thead>
@@ -459,6 +508,17 @@ export default async function(context: PageContext) {
               </ul>
             </div>
 
+            {/* Redis Cache */}
+            <div style={{ padding: "12px", background: "#fee2e2", borderRadius: "8px" }}>
+              <strong style={{ color: "#dc2626" }}>🔴 Redis 缓存</strong>
+              <ul style={{ marginTop: "8px", marginBottom: "0", paddingLeft: "20px" }}>
+                <li><a href="/redis-demo">📈 演示仪表板</a></li>
+                <li><a href="/redis-advanced">🔬 高级功能</a></li>
+                <li><a href="/redis-performance">⚡ 性能测试</a></li>
+                <li><a href="/test-redis">基本 API</a></li>
+              </ul>
+            </div>
+
             {/* Test Pages */}
             <div style={{ padding: "12px", background: "#fce7f3", borderRadius: "8px" }}>
               <strong style={{ color: "#be185d" }}>🧪 测试页面</strong>
@@ -473,7 +533,7 @@ export default async function(context: PageContext) {
           <div style={{ marginTop: "20px", padding: "16px", background: "#fffbeb", borderRadius: "8px", border: "2px solid #fbbf24" }}>
             <h4 style={{ margin: "0 0 8px 0", color: "#b45309" }}>💡 提示</h4>
             <p style={{ margin: "0", fontSize: "14px", color: "#78350f" }}>
-              • MySQL 功能需要先启动 Docker 容器：<code>.\docker-start.ps1</code><br />
+              • MySQL/Redis 功能需要先启动 Docker 容器：<code>.\docker-start.ps1</code><br />
               • 所有页面都支持热重载，修改文件后自动刷新<br />
               • 点击任意链接即可查看对应功能的详细演示
             </p>
