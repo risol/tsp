@@ -1010,35 +1010,7 @@ export function HotReloadWrapper() {
 
       printSubsection("Redis 功能测试");
 
-      // 检查 Redis 是否运行
-      console.log(`  ${COLORS.dim}检查 Redis 服务状态...${COLORS.reset}`);
-
-      let redisRunning = false;
-      try {
-        const checkCommand = new Deno.Command("redis-cli", {
-          args: ["ping"],
-          stdout: "piped",
-          stderr: "piped",
-        });
-
-        const { stdout } = await checkCommand.output();
-        const output = new TextDecoder().decode(stdout).trim();
-
-        if (output.includes("PONG")) {
-          redisRunning = true;
-          console.log(`  ${COLORS.green}✓ Redis 服务正在运行${COLORS.reset}`);
-        } else {
-          console.log(`  ${COLORS.yellow}⚠ Redis 服务未响应，跳过测试${COLORS.reset}`);
-          console.log(`  ${COLORS.dim}提示: 运行 docker run -d -p 6379:6379 redis:latest${COLORS.reset}`);
-          return;
-        }
-      } catch (error) {
-        console.log(`  ${COLORS.yellow}⚠ 无法检查 Redis 状态，尝试继续测试${COLORS.reset}`);
-        console.log(`  ${COLORS.dim}错误: ${(error as Error).message}${COLORS.reset}`);
-        // 继续测试，可能 redis-cli 未安装但 Redis 在运行
-      }
-
-      // 测试1: 基本 CRUD
+      // 测试1: 基本 CRUD（同时检查 Redis 是否运行）
       console.log(`  ${COLORS.dim}测试1: 基本 CRUD${COLORS.reset}`);
       const basicResponse = await fetch(
         `http://localhost:${TEST_PORT}/redis_e2e.tsx?action=basic`,
@@ -1046,9 +1018,13 @@ export function HotReloadWrapper() {
 
       if (basicResponse.status !== 200) {
         const text = await basicResponse.text();
-        if (text.includes("ECONNREFUSED") || text.includes("connection")) {
-          console.log(`  ${COLORS.yellow}⚠ Redis 连接失败，跳过测试${COLORS.reset}`);
-          console.log(`  ${COLORS.dim}提示: 运行 docker run -d -p 6379:6379 redis:latest${COLORS.reset}`);
+        // 检查是否是连接错误
+        if (text.includes("ECONNREFUSED") ||
+            text.includes("connection") ||
+            text.includes("connect") ||
+            text.includes("Connection")) {
+          console.log(`  ${COLORS.yellow}⚠ Redis 服务未运行，跳过测试${COLORS.reset}`);
+          console.log(`  ${COLORS.dim}提示: docker-compose restart redis${COLORS.reset}`);
           return;
         }
         throw new Error(`基本测试失败: ${text.substring(0, 200)}`);
@@ -1057,6 +1033,16 @@ export function HotReloadWrapper() {
       const basicResult = await basicResponse.json();
 
       if (!basicResult.success) {
+        // 如果 Redis 连接失败，跳过测试
+        if (basicResult.error && (
+            basicResult.error.includes("ECONNREFUSED") ||
+            basicResult.error.includes("connection") ||
+            basicResult.error.includes("connect") ||
+            basicResult.error.includes("Connection"))) {
+          console.log(`  ${COLORS.yellow}⚠ Redis 服务未运行，跳过测试${COLORS.reset}`);
+          console.log(`  ${COLORS.dim}提示: docker-compose restart redis${COLORS.reset}`);
+          return;
+        }
         throw new Error(`基本测试失败: ${basicResult.error}`);
       }
 
@@ -1064,6 +1050,7 @@ export function HotReloadWrapper() {
         `  ${COLORS.dim}键值: ${basicResult.data.key} = ${basicResult.data.value}${COLORS.reset}`,
       );
       printTestResult("基本 CRUD", true);
+      console.log(`  ${COLORS.green}✓ Redis 服务正在运行${COLORS.reset}`);
 
       // 测试2: 过期时间
       console.log(`  ${COLORS.dim}测试2: 过期时间${COLORS.reset}`);
