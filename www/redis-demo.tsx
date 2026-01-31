@@ -21,7 +21,7 @@ export default Page(async function(ctx, { createRedis, response }) {
             <title>Redis 功能演示</title>
             <meta charset="utf-8" />
             <meta name="viewport" content="width=device-width, initial-scale=1" />
-            <link href="/assets/bootstrap.min.css" rel="stylesheet" />
+            <link href="/static/css/bootstrap.min.css" rel="stylesheet" />
           </head>
           <body className="container py-4">
             <div className="bg-danger text-white rounded p-5 mb-5 shadow text-center">

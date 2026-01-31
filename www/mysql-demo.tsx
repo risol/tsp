@@ -21,7 +21,7 @@ export default Page(async function(ctx, { createMySQL, response }) {
             <title>MySQL 功能演示</title>
             <meta charset="utf-8" />
             <meta name="viewport" content="width=device-width, initial-scale=1" />
-            <link href="/assets/bootstrap.min.css" rel="stylesheet" />
+            <link href="/static/css/bootstrap.min.css" rel="stylesheet" />
           </head>
           <body className="container py-4">
             <h1 className="display-5 mb-4 pb-2 border-bottom border-primary">🗄️ MySQL 功能演示仪表板</h1>

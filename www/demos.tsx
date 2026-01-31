@@ -394,7 +394,7 @@ export default async function (context: PageContext) {
               <li>Context 访问</li>
             </ul>
             <div style={{ marginTop: "auto" }}>
-              <span className="badge badge-success">已集成</span>
+              <span className="badge bg-success">已集成</span>
               <span
                 style={{
                   marginLeft: "8px",
@@ -440,7 +440,7 @@ export default async function (context: PageContext) {
               <li>支持嵌套组件</li>
             </ul>
             <div style={{ marginTop: "auto" }}>
-              <span className="badge badge-info">开发模式</span>
+              <span className="badge bg-info">开发模式</span>
               <span
                 style={{
                   marginLeft: "8px",
@@ -486,7 +486,7 @@ export default async function (context: PageContext) {
               <li>自定义错误页面</li>
             </ul>
             <div style={{ marginTop: "auto" }}>
-              <span className="badge badge-success">已集成</span>
+              <span className="badge bg-success">已集成</span>
             </div>
           </div>
         </div>

@@ -15,7 +15,7 @@ export default async function (context: PageContext) {
         <div className="info-item">
           <div className="info-label">HTTP 方法</div>
           <div className="info-value">
-            <span className="badge badge-info">{method}</span>
+            <span className="badge bg-info">{method}</span>
           </div>
         </div>
         <div className="info-item">

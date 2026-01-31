@@ -27,7 +27,7 @@ export default Page(async function(ctx, { createRedis, response }) {
             <title>Redis 高级功能测试</title>
             <meta charset="utf-8" />
             <meta name="viewport" content="width=device-width, initial-scale=1" />
-            <link href="/assets/bootstrap.min.css" rel="stylesheet" />
+            <link href="/static/css/bootstrap.min.css" rel="stylesheet" />
           </head>
           <body>
             <div className="container">

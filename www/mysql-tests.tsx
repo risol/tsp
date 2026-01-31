@@ -17,7 +17,7 @@ export default Page(async function(ctx, { createMySQL }) {
           <title>MySQL 测试中心</title>
           <meta charset="utf-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1" />
-          <link href="/assets/bootstrap.min.css" rel="stylesheet" />
+          <link href="/static/css/bootstrap.min.css" rel="stylesheet" />
         </head>
         <body className="container py-4">
           <div className="card shadow-lg">
@@ -287,7 +287,7 @@ export default Page(async function(ctx, { createMySQL }) {
           <title>数据库连接错误</title>
           <meta charset="utf-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1" />
-          <link href="/assets/bootstrap.min.css" rel="stylesheet" />
+          <link href="/static/css/bootstrap.min.css" rel="stylesheet" />
         </head>
         <body className="container py-5">
           <div className="row justify-content-center">
