@@ -7,11 +7,17 @@
 
 import { resolvePath, securityCheck } from "./router.ts";
 import { buildContext } from "./context.ts";
-import { getPage, renderJSX, type RedirectResult } from "./cache.ts";
+import { getPage, type RedirectResult, renderJSX } from "./cache.ts";
 import { registerDep } from "./injection-typed.ts";
 import { compileAll, setCacheBaseDir } from "./precompiler_lib.ts";
 import { serveStaticFileWithCache } from "./static.ts";
-import { join, resolve } from "std/path";
+import { join, relative, resolve } from "std/path";
+import {
+  createSessionManager,
+  getDefaultOptions,
+  SessionStore,
+} from "./session.ts";
+import { createCookieManager } from "./cookies.ts";
 
 // 配置接口
 export interface Config {
@@ -70,9 +76,9 @@ interface ConfigFile {
  */
 function stripJsonComments(content: string): string {
   // 移除单行注释 //
-  content = content.replace(/\/\/.*$/gm, '');
+  content = content.replace(/\/\/.*$/gm, "");
   // 移除多行注释 /* */
-  content = content.replace(/\/\*[\s\S]*?\*\//g, '');
+  content = content.replace(/\/\*[\s\S]*?\*\//g, "");
   return content;
 }
 
@@ -85,7 +91,7 @@ function stripJsonComments(content: string): string {
 export async function logAccess(
   req: Request,
   resp: Response,
-  config: Config
+  config: Config,
 ): Promise<void> {
   const url = new URL(req.url);
   const now = new Date();
@@ -104,7 +110,7 @@ export async function logAccess(
       await Deno.writeTextFile(
         config.accessLogPath,
         logLine + "\n",
-        { append: true, create: true }
+        { append: true, create: true },
       );
     } catch (error) {
       console.error(`Failed to write access log: ${error}`);
@@ -125,7 +131,7 @@ async function loadConfigFile(filepath: string): Promise<Config> {
     let content = await Deno.readTextFile(filepath);
 
     // 如果是 JSONC 文件，移除注释
-    if (filepath.endsWith('.jsonc')) {
+    if (filepath.endsWith(".jsonc")) {
       content = stripJsonComments(content);
     }
 
@@ -280,7 +286,7 @@ TSP: TypeScript Server Page
 // 处理请求
 async function handleRequest(
   req: Request,
-  config: Config
+  config: Config,
 ): Promise<Response> {
   try {
     const url = new URL(req.url);
@@ -299,7 +305,11 @@ async function handleRequest(
     const filepath = fileResult.filepath!;
 
     // 安全检查（包含静态文件扩展名）
-    const securityResult = await securityCheck(filepath, config.root, staticExtensions);
+    const securityResult = await securityCheck(
+      filepath,
+      config.root,
+      staticExtensions,
+    );
     if (!securityResult.success) {
       // 根据错误类型决定状态码
       const error = securityResult.error || "";
@@ -308,9 +318,15 @@ async function handleRequest(
       // 权限拒绝 → 403
       // 其他错误 → 500
       let status = 500;
-      if (error.includes("File not found") || error.includes("not found") || error.includes("Directory index")) {
+      if (
+        error.includes("File not found") || error.includes("not found") ||
+        error.includes("Directory index")
+      ) {
         status = 404;
-      } else if (error.includes("Access denied") || error.includes("File type not allowed")) {
+      } else if (
+        error.includes("Access denied") ||
+        error.includes("File type not allowed")
+      ) {
         status = 403;
       }
 
@@ -327,7 +343,7 @@ async function handleRequest(
       filepath,
       allowedExtensions,
       req.headers,
-      config.dev
+      config.dev,
     );
 
     // 如果是静态文件，直接返回
@@ -338,7 +354,9 @@ async function handleRequest(
     // 解析请求体
     let body: unknown = null;
     const contentType = req.headers.get("content-type") || "";
-    if (req.method === "POST" || req.method === "PUT" || req.method === "PATCH") {
+    if (
+      req.method === "POST" || req.method === "PUT" || req.method === "PATCH"
+    ) {
       if (contentType.includes("application/json")) {
         try {
           body = await req.json();
@@ -373,7 +391,14 @@ async function handleRequest(
 
     // 构建上下文
     const context = buildContext({
-      method: req.method as "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS",
+      method: req.method as
+        | "GET"
+        | "POST"
+        | "PUT"
+        | "PATCH"
+        | "DELETE"
+        | "HEAD"
+        | "OPTIONS",
       url,
       headers: req.headers,
       query,
@@ -394,7 +419,8 @@ async function handleRequest(
     // 检查是否是重定向对象
     if (result && typeof result === "object" && "redirect" in result) {
       // 更严格地检查：确保不是 VNode
-      const isVNode = "type" in result || "props" in result || "__k" in result || "__" in result;
+      const isVNode = "type" in result || "props" in result ||
+        "__k" in result || "__" in result;
 
       if (!isVNode) {
         const redirectResult = result as RedirectResult;
@@ -413,7 +439,8 @@ async function handleRequest(
           for (const header of setCookieHeaders) {
             cookieHeaders.push(header);
           }
-          (headers as Record<string, string | string[]>)["Set-Cookie"] = cookieHeaders;
+          (headers as Record<string, string | string[]>)["Set-Cookie"] =
+            cookieHeaders;
         }
 
         return new Response(null, {
@@ -429,7 +456,7 @@ async function handleRequest(
       if (setCookieHeaders && setCookieHeaders.length > 0) {
         const newHeaders = new Headers(result.headers);
         for (const header of setCookieHeaders) {
-          newHeaders.append('Set-Cookie', header);
+          newHeaders.append("Set-Cookie", header);
         }
         return new Response(result.body, {
           status: result.status,
@@ -461,7 +488,8 @@ async function handleRequest(
       for (const header of setCookieHeaders) {
         cookieHeaders.push(header);
       }
-      (headers as Record<string, string | string[]>)["Set-Cookie"] = cookieHeaders;
+      (headers as Record<string, string | string[]>)["Set-Cookie"] =
+        cookieHeaders;
     }
 
     return new Response(html, {
@@ -525,17 +553,44 @@ async function main(): Promise<void> {
   setCacheBaseDir(Deno.cwd());
 
   // 注册依赖注入函数（类型安全版本）
-  registerDep('testFunc', () => {
+  registerDep("testFunc", () => {
     return function testFunc() {
-      console.log('testFunc called');
-      return 'testFunc called';
+      console.log("testFunc called");
+      return "testFunc called";
     };
   });
 
   // 注册cookie管理器
-  registerDep('cookies', async (ctx) => {
+  registerDep("cookies", async (ctx) => {
     const { createCookieManager } = await import("./cookies.ts");
     return createCookieManager(ctx);
+  });
+
+  // 全局SessionStore单例
+  let sessionStore: SessionStore | null = null;
+
+  // 注册session依赖 (now synchronous!)
+  registerDep("session", (ctx) => {
+    // 初始化全局store（仅一次）
+    if (!sessionStore) {
+      // 从环境变量读取密钥
+      const secret = Deno.env.get("TSP_SESSION_SECRET");
+      const secretBytes = secret ? new TextEncoder().encode(secret) : undefined; // 开发环境会自动生成
+
+      const options = {
+        ...getDefaultOptions(),
+        secret: secretBytes,
+      };
+
+      sessionStore = new SessionStore(options);
+      console.log("[Session] Session store initialized");
+    }
+
+    // Get cookie manager for setting cookies
+    const cookieManager = createCookieManager(ctx);
+
+    // 创建session管理器
+    return createSessionManager(ctx, sessionStore, cookieManager);
   });
 
   console.log(`
@@ -558,7 +613,9 @@ Starting server...
     console.log("\n🔨 Precompiling TSX files...");
     const { compileAll } = await import("./precompiler_lib.ts");
     try {
-      const compiledFiles = await compileAll();
+      // 计算相对于CWD的根目录路径
+      const rootDir = relative(Deno.cwd(), config.root);
+      const compiledFiles = await compileAll(rootDir);
 
       // 预热缓存：加载所有编译后的模块到内存
       console.log("🔥 Warming up cache...");
@@ -571,7 +628,10 @@ Starting server...
           await getPage(cacheKey);
         } catch (error) {
           const err = error as Error;
-          console.warn(`[WARN] Failed to load ${relPath} into cache:`, err.message);
+          console.warn(
+            `[WARN] Failed to load ${relPath} into cache:`,
+            err.message,
+          );
         }
       }
 

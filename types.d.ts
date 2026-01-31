@@ -80,12 +80,9 @@ declare global {
     };
 
     /**
-     * Session 管理（示例）
+     * Session 管理
      */
-    session: {
-      getUser: () => Promise<{ id: string; name: string } | null>;
-      set: (key: string, value: unknown) => Promise<void>;
-    };
+    session: import("./src/session.ts").SessionManager;
 
     /**
      * 日志函数（示例）
