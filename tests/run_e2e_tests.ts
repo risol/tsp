@@ -696,7 +696,142 @@ export function HotReloadWrapper() {
     },
   });
 
-  // 测试 7: 清理资源
+  // 测试 7: 文件上传功能
+  tests.push({
+    name: "file upload - 文件上传功能",
+    fn: async () => {
+      const startTime = Date.now();
+
+      printSubsection("文件上传测试");
+
+      // 测试1: 单文件上传
+      console.log(`  ${COLORS.dim}测试1: 单文件上传${COLORS.reset}`);
+
+      // 创建测试文件内容
+      const testContent = "Hello from E2E test!";
+      const encoder = new TextEncoder();
+
+      // 创建 multipart/form-data (注意：边界不要包含前缀的 --)
+      const boundary = "E2ETestBoundary" + Date.now().toString(36);
+      const multipartData = [
+        `--${boundary}`,
+        'Content-Disposition: form-data; name="file"; filename="test.txt"',
+        "Content-Type: text/plain",
+        "",
+        testContent,
+        `--${boundary}--`,
+        "",
+      ].join("\r\n");
+
+      const uploadResponse = await fetch(
+        `http://localhost:${TEST_PORT}/file_upload_e2e.tsx?action=upload-single`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": `multipart/form-data; boundary=${boundary}`,
+          },
+          body: multipartData,
+        },
+      );
+
+      assertEquals(uploadResponse.status, 200);
+
+      const uploadResult = await uploadResponse.json();
+      if (!uploadResult.success) {
+        throw new Error(`单文件上传失败: ${uploadResult.error}`);
+      }
+      console.log(
+        `  ${COLORS.dim}文件名: ${uploadResult.file.name}${COLORS.reset}`,
+      );
+      console.log(
+        `  ${COLORS.dim}文件大小: ${uploadResult.file.size} 字节${COLORS.reset}`,
+      );
+      printTestResult("单文件上传", true);
+
+      // 测试2: 多文件上传
+      console.log(`  ${COLORS.dim}测试2: 多文件上传${COLORS.reset}`);
+
+      const testContent2 = "Second test file";
+
+      const multipartData2 = [
+        `--${boundary}`,
+        'Content-Disposition: form-data; name="files"; filename="test1.txt"',
+        "Content-Type: text/plain",
+        "",
+        testContent,
+        `--${boundary}`,
+        'Content-Disposition: form-data; name="files"; filename="test2.txt"',
+        "Content-Type: text/plain",
+        "",
+        testContent2,
+        `--${boundary}--`,
+        "",
+      ].join("\r\n");
+
+      const multiUploadResponse = await fetch(
+        `http://localhost:${TEST_PORT}/file_upload_e2e.tsx?action=upload-multiple`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": `multipart/form-data; boundary=${boundary}`,
+          },
+          body: multipartData2,
+        },
+      );
+
+      assertEquals(multiUploadResponse.status, 200);
+
+      const multiUploadResult = await multiUploadResponse.json();
+      if (!multiUploadResult.success) {
+        throw new Error(`多文件上传失败: ${multiUploadResult.error}`);
+      }
+      console.log(
+        `  ${COLORS.dim}上传文件数: ${multiUploadResult.count}${COLORS.reset}`,
+      );
+      printTestResult("多文件上传", true);
+
+      // 测试3: 查看文件列表
+      console.log(`  ${COLORS.dim}测试3: 文件列表${COLORS.reset}`);
+
+      const listResponse = await fetch(
+        `http://localhost:${TEST_PORT}/file_upload_e2e.tsx?action=list`,
+      );
+
+      assertEquals(listResponse.status, 200);
+
+      const listResult = await listResponse.json();
+      console.log(
+        `  ${COLORS.dim}文件列表中的文件数: ${listResult.files.length}${COLORS.reset}`,
+      );
+
+      if (listResult.files.length < 3) {
+        throw new Error(
+          `文件列表中的文件数量不足: 期望 >= 3, 实际 ${listResult.files.length}`,
+        );
+      }
+      printTestResult("文件列表", true);
+
+      // 测试4: 清理测试文件
+      console.log(`  ${COLORS.dim}测试4: 清理测试文件${COLORS.reset}`);
+
+      const cleanupResponse = await fetch(
+        `http://localhost:${TEST_PORT}/file_upload_e2e.tsx?action=cleanup`,
+      );
+
+      assertEquals(cleanupResponse.status, 200);
+
+      const cleanupResult = await cleanupResponse.json();
+      if (!cleanupResult.success) {
+        throw new Error(`清理测试文件失败: ${cleanupResult.error || "未知错误"}`);
+      }
+      printTestResult("清理测试文件", true);
+
+      const duration = Date.now() - startTime;
+      console.log(`  ${COLORS.dim}${duration}ms}${COLORS.reset}`);
+    },
+  });
+
+  // 测试 8: 清理资源
   tests.push({
     name: "binary build - 停止服务器",
     fn: async () => {

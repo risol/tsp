@@ -168,6 +168,32 @@ export default async function (context: PageContext) {
           </a>
         </div>
 
+        {/* File Upload */}
+        <div className="card">
+          <h3
+            style={{ fontSize: "20px", marginBottom: "12px", color: "#667eea" }}
+          >
+            📁 文件上传
+          </h3>
+          <p style={{ marginBottom: "16px", color: "#64748b" }}>
+            完整的文件上传处理功能
+          </p>
+          <ul style={{ marginLeft: "20px", color: "#64748b" }}>
+            <li>multipart/form-data 解析</li>
+            <li>单文件上传</li>
+            <li>多文件上传</li>
+            <li>文件大小限制</li>
+            <li>自动保存到服务器</li>
+          </ul>
+          <a
+            href="/features/file-upload"
+            className="btn btn-primary"
+            style={{ marginTop: "16px" }}
+          >
+            查看演示 →
+          </a>
+        </div>
+
         {/* Dependency Injection */}
         <div className="card">
           <h3
@@ -293,6 +319,14 @@ export default async function (context: PageContext) {
                 </td>
                 <td style={{ textAlign: "right", color: "#64748b" }}>
                   查看 API 响应示例
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <a href="/features/file-upload">文件上传演示</a>
+                </td>
+                <td style={{ textAlign: "right", color: "#64748b" }}>
+                  文件上传功能
                 </td>
               </tr>
             </tbody>

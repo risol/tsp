@@ -80,6 +80,7 @@ async function buildContextFromRequest(
     query,
     body,
     cookies,
+    files: {},
     file,
     root,
   });

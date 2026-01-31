@@ -33,6 +33,11 @@ declare global {
     readonly body: unknown;
     /** Cookie 数据 */
     readonly cookies: Record<string, string>;
+    /** 上传的文件（multipart/form-data）
+     * - 单个文件：UploadedFile
+     * - 多个同名文件：UploadedFile[]
+     */
+    readonly files: Record<string, UploadedFile | UploadedFile[]>;
     /** 当前 TSX 页面文件的路径 */
     readonly file: string;
     /** 文档根目录路径 */
@@ -48,6 +53,32 @@ declare global {
     redirect: string;
     /** 重定向状态码，默认 302 */
     status?: 301 | 302 | 303 | 307 | 308;
+  }
+
+  /**
+   * 上传的文件接口
+   * 表示通过 multipart/form-data 上传的文件
+   */
+  interface UploadedFile {
+    /** 原始文件名 */
+    readonly name: string;
+    /** MIME 类型 */
+    readonly type: string;
+    /** 文件大小（字节） */
+    readonly size: number;
+    /** 文件内容（Uint8Array） */
+    readonly data: Uint8Array;
+
+    /**
+     * 保存文件到指定路径
+     * @param path - 目标路径（可以是相对路径或绝对路径）
+     */
+    save(path: string): Promise<void>;
+
+    /**
+     * 将文件内容转换为文本（适用于文本文件）
+     */
+    text(): Promise<string>;
   }
 
   /**

@@ -19,6 +19,7 @@ import {
 } from "./session.ts";
 import { createCookieManager } from "./cookies.ts";
 import { createResponseHelper } from "./response.ts";
+import { parseMultipartFormData, type UploadedFile } from "./files.ts";
 
 // 配置接口
 export interface Config {
@@ -354,6 +355,8 @@ async function handleRequest(
 
     // 解析请求体
     let body: unknown = null;
+    // 解析上传的文件
+    let files: Record<string, UploadedFile | UploadedFile[]> = {};
     const contentType = req.headers.get("content-type") || "";
     if (
       req.method === "POST" || req.method === "PUT" || req.method === "PATCH"
@@ -367,6 +370,21 @@ async function handleRequest(
       } else if (contentType.includes("application/x-www-form-urlencoded")) {
         const text = await req.text();
         body = Object.fromEntries(new URLSearchParams(text));
+      } else if (contentType.includes("multipart/form-data")) {
+        // 解析文件上传
+        try {
+          const arrayBuffer = await req.arrayBuffer();
+          const requestBody = new Uint8Array(arrayBuffer);
+          const result = await parseMultipartFormData(requestBody, contentType, {
+            maxSize: 10 * 1024 * 1024, // 10MB 默认限制
+          });
+          body = result.fields;
+          files = result.files;
+        } catch (error) {
+          console.error("Failed to parse multipart form data:", error);
+          body = null;
+          files = {};
+        }
       } else {
         body = await req.text();
       }
@@ -405,6 +423,7 @@ async function handleRequest(
       query,
       body,
       cookies,
+      files,
       file: filepath,
       root: config.root,
     });

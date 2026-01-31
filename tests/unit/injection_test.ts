@@ -24,6 +24,7 @@ function createMockContext(pathname: string = "/"): PageContext {
     query: {},
     body: null,
     cookies: {},
+    files: {},
     file: "/test.tsx",
     root: "./www",
   };

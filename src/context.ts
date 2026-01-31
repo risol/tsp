@@ -3,6 +3,8 @@
  * 负责构建页面上下文对象
  */
 
+import type { UploadedFile } from "./files.ts";
+
 /**
  * HTTP 请求方法类型
  */
@@ -25,6 +27,7 @@ interface ContextParams {
   query: Record<string, string>;
   body: unknown;
   cookies: Record<string, string>;
+  files: Record<string, UploadedFile | UploadedFile[]>;
   file: string;
   root: string;
 }
@@ -49,6 +52,7 @@ export type PageContext = Readonly<{
   /** 请求体数据 (POST/PUT/PATCH)
    * - application/json → 解析为对象
    * - application/x-www-form-urlencoded → 解析为键值对
+   * - multipart/form-data → 解析为表单字段（文件在 ctx.files 中）
    * - 其他 → 原始文本字符串
    * - GET/HEAD/DELETE 等 → null
    */
@@ -56,6 +60,12 @@ export type PageContext = Readonly<{
 
   /** Cookie 数据 (已解析为键值对) */
   cookies: Record<string, string>;
+
+  /** 上传的文件（multipart/form-data）
+   * - 单个文件：UploadedFile
+   * - 多个同名文件：UploadedFile[]
+   */
+  files: Record<string, UploadedFile | UploadedFile[]>;
 
   /** 当前 TSX 页面文件的完整路径 (相对于项目根目录) */
   file: string;
@@ -77,6 +87,7 @@ export function buildContext(params: ContextParams): PageContext {
     query: params.query,
     body: params.body,
     cookies: params.cookies,
+    files: params.files,
     file: params.file,
     root: params.root,
   };
