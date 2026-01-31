@@ -147,6 +147,36 @@ declare global {
   }
 
   /**
+   * 日志记录器接口
+   * 提供结构化的日志记录功能
+   */
+  interface Logger {
+    /**
+     * 调试日志
+     * @param args - 要记录的消息内容
+     */
+    debug(...args: unknown[]): void;
+
+    /**
+     * 信息日志
+     * @param args - 要记录的消息内容
+     */
+    info(...args: unknown[]): void;
+
+    /**
+     * 警告日志
+     * @param args - 要记录的消息内容
+     */
+    warn(...args: unknown[]): void;
+
+    /**
+     * 错误日志
+     * @param args - 要记录的消息内容
+     */
+    error(...args: unknown[]): void;
+  }
+
+  /**
    * 应用依赖类型
    * 在此声明所有可注入的依赖及其类型
    *
@@ -181,11 +211,6 @@ declare global {
     session: import("./src/session.ts").SessionManager;
 
     /**
-     * 日志函数（示例）
-     */
-    logger: typeof console.log;
-
-    /**
      * Cookie管理器
      */
     cookies: import("./src/cookies.ts").CookieManager;
@@ -195,6 +220,12 @@ declare global {
      * 提供便捷的 HTTP 响应创建方法
      */
     response: ResponseHelper;
+
+    /**
+     * 日志记录器
+     * 提供结构化的日志记录功能
+     */
+    logger: import("./src/logger.ts").Logger;
   }
 
   /**

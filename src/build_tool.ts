@@ -13,6 +13,7 @@ import { exists } from "https://deno.land/std@0.224.0/fs/exists.ts";
 const DIST_DIR = "dist";
 const BINARY_NAME = "tspserver";
 const CONFIG_FILES = ["config.json", "config.jsonc"];
+const EXAMPLE_CONFIG = "config.example.jsonc";
 
 /**
  * 获取平台相关的二进制文件名
@@ -96,6 +97,7 @@ async function copyWwwDir(): Promise<void> {
 async function copyConfigFiles(): Promise<void> {
   let copied = false;
 
+  // 优先复制实际配置文件
   for (const filename of CONFIG_FILES) {
     const sourcePath = filename;
     const targetPath = join(DIST_DIR, filename);
@@ -104,7 +106,16 @@ async function copyConfigFiles(): Promise<void> {
       await Deno.copyFile(sourcePath, targetPath);
       console.log(`✓ 配置文件已复制: ${filename}`);
       copied = true;
+      break; // 找到一个就停止
     }
+  }
+
+  // 如果没有实际配置文件，复制示例配置文件
+  if (!copied && await exists(EXAMPLE_CONFIG)) {
+    const targetPath = join(DIST_DIR, "config.jsonc");
+    await Deno.copyFile(EXAMPLE_CONFIG, targetPath);
+    console.log(`✓ 示例配置文件已复制: config.jsonc`);
+    copied = true;
   }
 
   if (!copied) {

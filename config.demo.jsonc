@@ -1,0 +1,12 @@
+{
+  "root": "./www",
+  "port": 9000,
+  "dev": true,
+
+  "logger": {
+    "level": "DEBUG",
+    "file": ".logs/app.log",
+    "colorize": true,
+    "format": "text"
+  }
+}

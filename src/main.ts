@@ -11,7 +11,7 @@ import { getPage, type RedirectResult, renderJSX } from "./cache.ts";
 import { registerDep } from "./injection-typed.ts";
 import { compileAll, setCacheBaseDir } from "./precompiler_lib.ts";
 import { serveStaticFileWithCache } from "./static.ts";
-import { join, relative, resolve } from "std/path";
+import { join, relative, resolve, dirname } from "std/path";
 import {
   createSessionManager,
   getDefaultOptions,
@@ -20,6 +20,23 @@ import {
 import { createCookieManager } from "./cookies.ts";
 import { createResponseHelper } from "./response.ts";
 import { parseMultipartFormData, type UploadedFile } from "./files.ts";
+import {
+  createDefaultLogger,
+  createProductionLogger,
+  type Logger,
+} from "./logger.ts";
+
+// 日志配置接口
+export interface LoggerConfig {
+  /** 最小日志级别：DEBUG, INFO, WARN, ERROR */
+  level?: "DEBUG" | "INFO" | "WARN" | "ERROR";
+  /** 日志文件路径（可选） */
+  file?: string;
+  /** 是否启用彩色输出 */
+  colorize?: boolean;
+  /** 日志格式：text 或 json */
+  format?: "text" | "json";
+}
 
 // 配置接口
 export interface Config {
@@ -28,6 +45,8 @@ export interface Config {
   dev: boolean;
   accessLogPath?: string;
   staticExtensions?: string[];
+  /** 日志配置 */
+  logger?: LoggerConfig;
 }
 
 // 默认支持的静态文件扩展名
@@ -69,6 +88,8 @@ interface ConfigFile {
   dev?: boolean;
   accessLogPath?: string;
   staticExtensions?: string[];
+  /** 日志配置 */
+  logger?: LoggerConfig;
 }
 
 /**
@@ -89,11 +110,13 @@ function stripJsonComments(content: string): string {
  * @param req 请求对象
  * @param resp 响应对象
  * @param config 配置对象
+ * @param logger 可选的 logger 实例
  */
 export async function logAccess(
   req: Request,
   resp: Response,
   config: Config,
+  logger?: Logger,
 ): Promise<void> {
   const url = new URL(req.url);
   const now = new Date();
@@ -109,13 +132,17 @@ export async function logAccess(
   if (config.accessLogPath) {
     // 写入文件
     try {
+      // 确保日志目录存在
+      const logDir = dirname(config.accessLogPath);
+      await Deno.mkdir(logDir, { recursive: true });
+
       await Deno.writeTextFile(
         config.accessLogPath,
         logLine + "\n",
         { append: true, create: true },
       );
     } catch (error) {
-      console.error(`Failed to write access log: ${error}`);
+      logger?.error("写入访问日志失败", error);
     }
   } else {
     // 输出到控制台
@@ -126,9 +153,13 @@ export async function logAccess(
 /**
  * 从配置文件加载配置
  * @param filepath 配置文件路径
+ * @param logger 可选的 logger 实例
  * @returns 配置对象
  */
-async function loadConfigFile(filepath: string): Promise<Config> {
+async function loadConfigFile(
+  filepath: string,
+  logger?: Logger,
+): Promise<Config> {
   try {
     let content = await Deno.readTextFile(filepath);
 
@@ -146,10 +177,14 @@ async function loadConfigFile(filepath: string): Promise<Config> {
     };
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) {
-      console.error(`配置文件不存在: ${filepath}`);
+      const msg = `配置文件不存在: ${filepath}`;
+      logger?.error(msg);
+      console.error(msg);
       Deno.exit(1);
     } else if (error instanceof SyntaxError) {
-      console.error(`配置文件格式错误: ${error.message}`);
+      const msg = `配置文件格式错误: ${error.message}`;
+      logger?.error(msg);
+      console.error(msg);
       Deno.exit(1);
     } else {
       throw error;
@@ -158,7 +193,7 @@ async function loadConfigFile(filepath: string): Promise<Config> {
 }
 
 // 解析命令行参数
-async function parseArgs(): Promise<Config> {
+async function parseArgs(logger?: Logger): Promise<Config> {
   const args = Deno.args;
   let config = { ...DEFAULT_CONFIG };
   let configFile: string | null = null;
@@ -174,7 +209,7 @@ async function parseArgs(): Promise<Config> {
 
   // 如果指定了配置文件，先加载配置文件
   if (configFile) {
-    config = await loadConfigFile(configFile);
+    config = await loadConfigFile(configFile, logger);
   } else {
     // 尝试自动查找默认配置文件
     const defaultConfigFiles = [
@@ -185,8 +220,10 @@ async function parseArgs(): Promise<Config> {
     for (const filename of defaultConfigFiles) {
       try {
         await Deno.stat(filename);
-        console.log(`✓ 找到配置文件: ${filename}`);
-        config = await loadConfigFile(filename);
+        const msg = `✓ 找到配置文件: ${filename}`;
+        logger?.info(msg);
+        console.log(msg);
+        config = await loadConfigFile(filename, logger);
         break;
       } catch {
         // 文件不存在，继续查找
@@ -289,6 +326,7 @@ TSP: TypeScript Server Page
 async function handleRequest(
   req: Request,
   config: Config,
+  serverLogger: Logger,
 ): Promise<Response> {
   try {
     const url = new URL(req.url);
@@ -375,13 +413,17 @@ async function handleRequest(
         try {
           const arrayBuffer = await req.arrayBuffer();
           const requestBody = new Uint8Array(arrayBuffer);
-          const result = await parseMultipartFormData(requestBody, contentType, {
-            maxSize: 10 * 1024 * 1024, // 10MB 默认限制
-          });
+          const result = await parseMultipartFormData(
+            requestBody,
+            contentType,
+            {
+              maxSize: 10 * 1024 * 1024, // 10MB 默认限制
+            },
+          );
           body = result.fields;
           files = result.files;
         } catch (error) {
-          console.error("Failed to parse multipart form data:", error);
+          serverLogger.error("解析 multipart 表单数据失败", error);
           body = null;
           files = {};
         }
@@ -521,7 +563,13 @@ async function handleRequest(
     const errorMessage = error instanceof Error ? error.message : String(error);
     const stackTrace = error instanceof Error ? error.stack : "";
 
-    console.error("Request error:", errorMessage);
+    // 使用 logger 记录错误
+    serverLogger.error("请求处理错误", {
+      error: errorMessage,
+      stack: stackTrace,
+      url: req.url,
+      method: req.method,
+    });
 
     if (config.dev) {
       // 开发模式：显示详细错误
@@ -562,7 +610,10 @@ async function handleRequest(
 
 // 启动服务器
 async function main(): Promise<void> {
-  const config = await parseArgs();
+  // 创建临时 logger 用于配置加载阶段
+  const tempLogger = createDefaultLogger();
+
+  const config = await parseArgs(tempLogger);
 
   // 将根目录解析为绝对路径
   config.root = resolve(config.root);
@@ -575,7 +626,7 @@ async function main(): Promise<void> {
   // 注册依赖注入函数（类型安全版本）
   registerDep("testFunc", () => {
     return function testFunc() {
-      console.log("testFunc called");
+      serverLogger.debug("testFunc called");
       return "testFunc called";
     };
   });
@@ -603,7 +654,6 @@ async function main(): Promise<void> {
       };
 
       sessionStore = new SessionStore(options);
-      console.log("[Session] Session store initialized");
     }
 
     // 获取用于设置 cookies 的 cookie 管理器
@@ -618,7 +668,44 @@ async function main(): Promise<void> {
     return createResponseHelper(ctx);
   });
 
-  console.log(`
+  // 注册 Logger（单例）
+  let loggerInstance: Logger | null = null;
+
+  // 创建 logger 实例（在 registerDep 之前，确保 serverLogger 能使用）
+  const loggerConfig = config.logger;
+  if (loggerConfig) {
+    // 使用配置文件创建 logger
+    loggerInstance = createProductionLogger(loggerConfig);
+  } else if (config.dev) {
+    // 开发模式默认日志
+    loggerInstance = createDefaultLogger();
+  } else {
+    // 生产模式默认日志（无文件输出）
+    loggerInstance = createProductionLogger();
+  }
+
+  registerDep("logger", () => {
+    return loggerInstance!;
+  });
+
+  // 创建服务器级 logger 实例（用于服务器启动、错误等系统日志）
+  const serverLogger = loggerInstance;
+
+  // 设置缓存模块和预编译模块的 logger
+  const { setCacheLogger } = await import("./cache.ts");
+  const { setPrecompilerLogger } = await import("./precompiler_lib.ts");
+  setCacheLogger(serverLogger);
+  setPrecompilerLogger(serverLogger);
+
+  // 记录服务器启动信息
+  serverLogger.info("TSP Server 启动中", {
+    root: config.root,
+    port: config.port,
+    mode: config.dev ? "Development" : "Production",
+  });
+
+  // 打印启动 banner（保留用于用户友好的控制台输出）
+  const banner = `
 ╔════════════════════════════════════════╗
 ║            TSP Server                  ║
 ╚════════════════════════════════════════╝
@@ -628,22 +715,34 @@ Port: ${config.port}
 Mode: ${config.dev ? "Development" : "Production"}
 
 Starting server...
-  `);
+  `;
+  console.log(banner);
+  serverLogger.debug("服务器配置", {
+    root: config.root,
+    port: config.port,
+    mode: config.dev ? "Development" : "Production",
+  });
 
   // 预编译所有 TSX 文件
   if (config.dev) {
-    console.log("\n⏭️  Development mode: skipping precompilation");
-    console.log("   Files will be compiled on-demand.\n");
+    const devMsg = "\n⏭️  Development mode: skipping precompilation\n   Files will be compiled on-demand.\n";
+    console.log(devMsg);
+    serverLogger.info("开发模式：跳过预编译");
   } else {
-    console.log("\n🔨 Precompiling TSX files...");
+    const precompileMsg = "\n🔨 Precompiling TSX files...";
+    console.log(precompileMsg);
+    serverLogger.info("开始预编译 TSX 文件");
     const { compileAll } = await import("./precompiler_lib.ts");
     try {
       // 计算相对于 CWD 的根目录路径
       const rootDir = relative(Deno.cwd(), config.root);
       const compiledFiles = await compileAll(rootDir);
+      serverLogger.info("预编译完成", { count: compiledFiles.length });
 
       // 预热缓存：加载所有编译后的模块到内存
-      console.log("🔥 Warming up cache...");
+      const warmupMsg = "🔥 Warming up cache...";
+      console.log(warmupMsg);
+      serverLogger.info("开始预热缓存");
       const { getPage } = await import("./cache.ts");
 
       for (const relPath of compiledFiles) {
@@ -653,17 +752,26 @@ Starting server...
           await getPage(cacheKey);
         } catch (error) {
           const err = error as Error;
-          console.warn(
-            `[WARN] Failed to load ${relPath} into cache:`,
-            err.message,
-          );
+          const warnMsg = `[WARN] Failed to load ${relPath} into cache: ${err.message}`;
+          console.warn(warnMsg);
+          serverLogger.warn("缓存加载失败", {
+            file: relPath,
+            error: err.message,
+          });
         }
       }
 
-      console.log("✓ Cache warmed up");
+      const warmupDoneMsg = "✓ Cache warmed up";
+      console.log(warmupDoneMsg);
+      serverLogger.info("缓存预热完成", { count: compiledFiles.length });
     } catch (error) {
       const err = error as Error;
-      console.error("\n❌ Precompilation failed:", err.message);
+      const errorMsg = `\n❌ Precompilation failed: ${err.message}`;
+      console.error(errorMsg);
+      serverLogger.error("预编译失败", {
+        error: err.message,
+        stack: err.stack,
+      });
       Deno.exit(1);
     }
   }
@@ -672,18 +780,30 @@ Starting server...
   Deno.serve({
     port: config.port,
     onListen: ({ port, hostname }) => {
-      console.log(`✓ Server running at http://${hostname}:${port}/`);
+      const serverUrl = `http://${hostname}:${port}/`;
+      console.log(`✓ Server running at ${serverUrl}`);
       console.log("按 Ctrl+C 停止。\n");
+      serverLogger.info("服务器启动成功", {
+        url: serverUrl,
+        port,
+        hostname,
+      });
     },
   }, async (req) => {
-    const resp = await handleRequest(req, config);
+    const resp = await handleRequest(req, config, serverLogger);
     // 记录访问日志
-    await logAccess(req, resp, config);
+    await logAccess(req, resp, config, serverLogger);
     return resp;
   });
 }
 
 // 启动程序
 if (import.meta.main) {
-  main().catch(console.error);
+  main().catch((error) => {
+    // 创建临时 logger 用于记录启动错误
+    const tempLogger = createDefaultLogger();
+    tempLogger.error("Fatal error:", error);
+    console.error("Fatal error:", error);
+    Deno.exit(1);
+  });
 }

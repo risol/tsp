@@ -13,6 +13,38 @@ import {
   getCachePath,
 } from "./precompiler_lib.ts";
 import type { PageContext } from "./context.ts";
+import type { Logger } from "./logger.ts";
+
+// 模块级 logger 实例（可通过 setCacheLogger 设置）
+let cacheLogger: Logger | null = null;
+
+/**
+ * 设置缓存模块使用的 logger
+ * @param logger Logger 实例
+ */
+export function setCacheLogger(logger: Logger | null): void {
+  cacheLogger = logger;
+}
+
+/**
+ * 获取缓存日志输出函数（如果没有 logger 则使用 console）
+ */
+function getLogOutput() {
+  if (!cacheLogger) {
+    return {
+      debug: console.log.bind(console),
+      info: console.log.bind(console),
+      warn: console.warn.bind(console),
+      error: console.error.bind(console),
+    };
+  }
+  return {
+    debug: cacheLogger.debug.bind(cacheLogger),
+    info: cacheLogger.info.bind(cacheLogger),
+    warn: cacheLogger.warn.bind(cacheLogger),
+    error: cacheLogger.error.bind(cacheLogger),
+  };
+}
 
 // 重新导出 PageContext 类型，供页面使用
 export type { PageContext };
@@ -95,8 +127,9 @@ export async function getPage(
 
   // ⭐ 在开发模式下，如果检测到依赖修改或强制重载，总是重新加载
   // 这绕过了 Deno 的 import 缓存问题
+  const log = getLogOutput();
   if (forceReload) {
-    console.log(`[FORCE RELOAD] ${filepath} - bypassing all caches`);
+    log.debug(`[FORCE RELOAD] ${filepath} - bypassing all caches`);
     moduleCache.delete(filepath);
     compiledMtimes.delete(filepath);
   }
@@ -109,17 +142,17 @@ export async function getPage(
 
   if (cached && !needsRecompile && !forceReload) {
     // 缓存有效，使用缓存的模块
-    console.log(`[CACHE HIT] ${filepath} (mtime: ${currentMtime})`);
+    log.debug(`[CACHE HIT] ${filepath} (mtime: ${currentMtime})`);
     return cached.module;
   }
 
   // 需要重新编译
-  console.log(`[CACHE MISS] ${filepath} - recompiling...`);
+  log.debug(`[CACHE MISS] ${filepath} - recompiling...`);
 
   // ⭐ 递增全局加载版本，确保生成唯一的 import URL
   // 这对于绕过 Deno 的 import 缓存至关重要
   globalLoadVersion++;
-  console.log(
+  log.debug(
     `[LOAD VERSION] Global load version incremented to ${globalLoadVersion}`,
   );
 
@@ -135,7 +168,7 @@ export async function getPage(
   // 2. 分析依赖
   const { analyzeDependencies } = await import("./precompiler_lib.ts");
   const dependencies = await analyzeDependencies(absPath);
-  console.log(`[INFO] Dependencies: ${dependencies.join(", ")}`);
+  log.debug(`[INFO] Dependencies: ${dependencies.join(", ")}`);
 
   // 3. 编译当前文件（传递全局版本号）
   const { compileFile } = await import("./precompiler_lib.ts");
@@ -144,7 +177,7 @@ export async function getPage(
   // 4. 编译所有依赖的 TSX 文件（传递全局版本号）
   for (const dep of dependencies) {
     if (dep.endsWith(".tsx")) {
-      console.log(`[INFO] Compiling dependency: ${dep}`);
+      log.debug(`[INFO] Compiling dependency: ${dep}`);
 
       // 递归编译依赖文件及其依赖（传递版本号）
       await compileDependencyRecursively(dep, globalLoadVersion);
@@ -181,7 +214,7 @@ export async function getPage(
     8,
   ).join("");
 
-  console.log(`[IMPORT] Loading module: ${cacheUrl}`);
+  log.debug(`[IMPORT] Loading module: ${cacheUrl}`);
 
   // 加载模块
   const module = await import(cacheUrl);
@@ -245,6 +278,7 @@ async function checkDependencyModified(
   depPath: string,
   parentPath: string,
 ): Promise<boolean> {
+  const log = getLogOutput();
   try {
     const depStat = await Deno.stat(depPath);
     const depMtime = depStat.mtime?.getTime() || 0;
@@ -254,13 +288,13 @@ async function checkDependencyModified(
 
     // 如果依赖文件修改了，或者还没有编译过
     if (!depCompiledMtime || depMtime > depCompiledMtime) {
-      console.log(
+      log.debug(
         `[INFO] Dependency modified: ${depPath} (parent: ${parentPath})`,
       );
 
       // ⭐ 主动通知所有依赖此文件的缓存失效（递归）
       const invalidated = invalidateDependents(depPath);
-      console.log(
+      log.debug(
         `[INFO] Batch invalidated ${invalidated.length} file(s) due to ${depPath} change`,
       );
 
@@ -285,7 +319,8 @@ async function checkDependencyModified(
     return false;
   } catch (error) {
     // 文件不存在，可能被删除了
-    console.log(`[WARN] Dependency not found: ${depPath}`);
+    const log = getLogOutput();
+    log.warn(`[WARN] Dependency not found: ${depPath}`);
     return true;
   }
 }
@@ -311,7 +346,8 @@ async function compileDependencyRecursively(
   version: number,
   parentFile?: string,
 ): Promise<void> {
-  console.log(
+  const log = getLogOutput();
+  log.debug(
     `[COMPILE_DEP] Recursively compiling: ${filepath}${
       parentFile ? ` (from ${parentFile})` : ""
     } (v=${version})`,
@@ -324,7 +360,7 @@ async function compileDependencyRecursively(
   const { analyzeDependencies } = await import("./precompiler_lib.ts");
   const dependencies = await analyzeDependencies(filepath);
 
-  console.log(`[COMPILE_DEP] Dependencies of ${filepath}:`, dependencies);
+  log.debug(`[COMPILE_DEP] Dependencies of ${filepath}:`, dependencies);
 
   // 3. 获取文件修改时间并缓存到 moduleCache
   const stat = await Deno.stat(filepath);
@@ -338,7 +374,7 @@ async function compileDependencyRecursively(
       module: async () => {}, // 占位函数，实际不会被使用
       dependencies: dependencies,
     });
-    console.log(`[COMPILE_DEP] Cached dependency info for: ${filepath}`);
+    log.debug(`[COMPILE_DEP] Cached dependency info for: ${filepath}`);
   }
 
   // 4. 为父文件建立反向依赖关系
@@ -347,7 +383,7 @@ async function compileDependencyRecursively(
       reverseDeps.set(filepath, new Set());
     }
     reverseDeps.get(filepath)!.add(parentFile);
-    console.log(
+    log.debug(
       `[REVERSE_DEPS] ${filepath} → [${
         Array.from(reverseDeps.get(filepath)!).join(", ")
       }]`,
@@ -373,14 +409,14 @@ async function compileDependencyRecursively(
             module: async () => {},
             dependencies: depDependencies,
           });
-          console.log(`[COMPILE_DEP] Cached .ts dependency info for: ${dep}`);
+          log.debug(`[COMPILE_DEP] Cached .ts dependency info for: ${dep}`);
 
           // 建立 TS 文件的反向依赖关系
           if (!reverseDeps.has(dep)) {
             reverseDeps.set(dep, new Set());
           }
           reverseDeps.get(dep)!.add(filepath);
-          console.log(
+          log.debug(
             `[REVERSE_DEPS] ${dep} → [${
               Array.from(reverseDeps.get(dep)!).join(", ")
             }]`,
@@ -403,13 +439,14 @@ function trackReverseDependencies(
   filepath: string,
   dependencies: string[],
 ): void {
+  const log = getLogOutput();
   for (const dep of dependencies) {
     if (!reverseDeps.has(dep)) {
       reverseDeps.set(dep, new Set());
     }
     reverseDeps.get(dep)!.add(filepath);
 
-    console.log(
+    log.debug(
       `[REVERSE_DEPS] ${dep} → [${
         Array.from(reverseDeps.get(dep)!).join(", ")
       }]`,
@@ -423,15 +460,16 @@ function trackReverseDependencies(
  * @returns 被失效的文件列表
  */
 export function invalidateDependents(dependencyFile: string): string[] {
+  const log = getLogOutput();
   const dependents = reverseDeps.get(dependencyFile);
 
   if (!dependents || dependents.size === 0) {
-    console.log(`[REVERSE_DEPS] No files depend on ${dependencyFile}`);
+    log.debug(`[REVERSE_DEPS] No files depend on ${dependencyFile}`);
     return [];
   }
 
-  console.log(`[REVERSE_DEPS] File modified: ${dependencyFile}`);
-  console.log(
+  log.debug(`[REVERSE_DEPS] File modified: ${dependencyFile}`);
+  log.debug(
     `[REVERSE_DEPS] Invalidating ${dependents.size} direct dependent(s):`,
     Array.from(dependents),
   );
@@ -444,7 +482,7 @@ export function invalidateDependents(dependencyFile: string): string[] {
     compiledMtimes.delete(dependent);
     invalidated.push(dependent);
 
-    console.log(`[CACHE] Invalidated: ${dependent}`);
+    log.debug(`[CACHE] Invalidated: ${dependent}`);
 
     // ⭐ 递归失效：如果这个依赖文件又被其他文件依赖，也需要失效
     const transitiveInvalidated = invalidateDependents(dependent);

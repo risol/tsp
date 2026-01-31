@@ -5,6 +5,7 @@
 
 import { dirname, join, relative, resolve, toFileUrl } from "std/path";
 import { ensureDir } from "https://deno.land/std@0.224.0/fs/ensure_dir.ts";
+import type { Logger } from "./logger.ts";
 
 const WWW_DIR = "./www";
 const CACHE_DIR = ".cache/tsp";
@@ -18,6 +19,37 @@ let cacheBaseDir: string | null = null;
  */
 export function setCacheBaseDir(dir: string): void {
   cacheBaseDir = dir;
+}
+
+// 模块级 logger 实例（可通过 setPrecompilerLogger 设置）
+let precompilerLogger: Logger | null = null;
+
+/**
+ * 设置预编译模块使用的 logger
+ * @param logger Logger 实例
+ */
+export function setPrecompilerLogger(logger: Logger | null): void {
+  precompilerLogger = logger;
+}
+
+/**
+ * 获取预编译日志输出函数（如果没有 logger 则使用 console）
+ */
+function getLogOutput() {
+  if (!precompilerLogger) {
+    return {
+      debug: console.log.bind(console),
+      info: console.log.bind(console),
+      warn: console.warn.bind(console),
+      error: console.error.bind(console),
+    };
+  }
+  return {
+    debug: precompilerLogger.debug.bind(precompilerLogger),
+    info: precompilerLogger.info.bind(precompilerLogger),
+    warn: precompilerLogger.warn.bind(precompilerLogger),
+    error: precompilerLogger.error.bind(precompilerLogger),
+  };
 }
 
 /**
@@ -217,7 +249,8 @@ export async function analyzeDependencies(filepath: string): Promise<string[]> {
     }
 
     if (!found) {
-      console.warn(`[WARN] Dependency not found: ${importPath} in ${filepath}`);
+      const log = getLogOutput();
+      log.warn(`[WARN] Dependency not found: ${importPath} in ${filepath}`);
     }
   }
 
@@ -233,6 +266,8 @@ export async function compileFile(
   filepath: string,
   version?: number,
 ): Promise<void> {
+  const log = getLogOutput();
+
   // 检查远程导入
   const remoteImports = await checkRemoteImports(filepath);
   if (remoteImports.length > 0) {
@@ -266,12 +301,12 @@ export async function compileFile(
       await Deno.copyFile(dep, depCachePath);
       // ⭐ 等待文件系统完成写入
       await new Promise((resolve) => setTimeout(resolve, 10));
-      console.log(`[COPIED] ${dep} -> ${relative(Deno.cwd(), depCachePath)}`);
+      log.debug(`[COPIED] ${dep} -> ${relative(Deno.cwd(), depCachePath)}`);
     }
   }
 
   const versionSuffix = version !== undefined ? ` (v=${version})` : "";
-  console.log(
+  log.debug(
     `[COMPILED] ${filepath} -> ${
       relative(Deno.cwd(), cachePath)
     }${versionSuffix}`,
@@ -284,7 +319,8 @@ export async function compileFile(
  * @returns 编译的文件列表（相对于根目录）
  */
 export async function compileAll(rootDir: string = WWW_DIR): Promise<string[]> {
-  console.log("🚀 Starting TSX compilation...\n");
+  const log = getLogOutput();
+  log.info("🚀 Starting TSX compilation...\n");
 
   // 确保 cache 目录存在
   await ensureDir(join(Deno.cwd(), CACHE_DIR));
@@ -308,7 +344,7 @@ export async function compileAll(rootDir: string = WWW_DIR): Promise<string[]> {
 
   await findTSXFiles(join(Deno.cwd(), rootDir));
 
-  console.log(`[INFO] Found ${tsxFiles.length} TSX files`);
+  log.info(`[INFO] Found ${tsxFiles.length} TSX files`);
 
   // 编译所有文件
   for (const filepath of tsxFiles) {
@@ -316,12 +352,12 @@ export async function compileAll(rootDir: string = WWW_DIR): Promise<string[]> {
       await compileFile(filepath);
     } catch (error) {
       const err = error as Error;
-      console.error(`[ERROR] Failed to compile ${filepath}:`, err.message);
+      log.error(`[ERROR] Failed to compile ${filepath}:`, err.message);
       throw error;
     }
   }
 
-  console.log(`\n✅ Compiled ${tsxFiles.length} files to cache/`);
+  log.info(`\n✅ Compiled ${tsxFiles.length} files to cache/`);
 
   // 返回编译的文件列表（转换为相对于根目录的路径）
   return tsxFiles.map((f) => relative(Deno.cwd(), f));
@@ -331,9 +367,10 @@ export async function compileAll(rootDir: string = WWW_DIR): Promise<string[]> {
  * 清理 cache 目录
  */
 export async function cleanCache(): Promise<void> {
+  const log = getLogOutput();
   try {
     await Deno.remove(join(Deno.cwd(), CACHE_DIR), { recursive: true });
-    console.log(`[CLEAN] Removed cache/ directory`);
+    log.debug(`[CLEAN] Removed cache/ directory`);
   } catch (error) {
     if (!(error instanceof Deno.errors.NotFound)) {
       throw error;

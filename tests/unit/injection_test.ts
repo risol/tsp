@@ -176,11 +176,16 @@ Deno.test("injection - Page: 依赖可以访问 context", async () => {
 });
 
 Deno.test("injection - Page: 页面函数返回 JSX", async () => {
-  registerDep("logger" as never, (ctx) => console.log);
+  registerDep("logger" as never, () => ({
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+  }));
 
   const wrapper = Page((ctx: PageContext, deps: AppDeps) => {
-    const log = deps.logger as typeof console.log;
-    log("页面函数执行中");
+    const log = deps.logger;
+    log?.info("页面函数执行中");
 
     return {
       type: "div",
