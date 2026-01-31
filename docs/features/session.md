@@ -1,89 +1,89 @@
-# Session Management
+# Session 管理
 
-TSP provides a secure, type-safe session management system built on top of the cookie functionality. Sessions allow you to maintain user state across requests with built-in security features.
+TSP 提供了一个安全、类型安全的 session 管理系统，基于 cookie 功能构建。Session 让你可以在多个请求之间维护用户状态，并内置安全功能。
 
-## Features
+## 特性
 
-- **Secure**: HMAC-SHA256 signed session IDs prevent forgery
-- **Cookie-based**: Uses httpOnly + secure + sameSite for protection
-- **In-memory storage**: Fast session data access with automatic cleanup
-- **Sliding expiration**: Optional automatic refresh of session timeout
-- **Session fixation protection**: Regenerate session IDs on login
-- **Type-safe**: Full TypeScript support with dependency injection
+- **安全**：HMAC-SHA256 签名的 session ID 防止伪造
+- **基于 Cookie**：使用 httpOnly + secure + sameSite 提供保护
+- **内存存储**：快速的 session 数据访问，自动清理
+- **滑动过期**：可选的自动刷新 session 超时时间
+- **Session 固定防护**：登录时重新生成 session ID
+- **类型安全**：完整的 TypeScript 支持和依赖注入
 
-## Quick Start
+## 快速开始
 
-### 1. Enable Session Dependency
+### 1. 启用 Session 依赖
 
-Session is automatically registered in `src/main.ts`. No additional setup needed.
+Session 在 `src/main.ts` 中自动注册，无需额外设置。
 
-### 2. Use Sessions in Your Pages
+### 2. 在页面中使用 Session
 
 ```tsx
 export default Page(async function(ctx, { session }) {
   const user = await session.getUser();
 
   if (!user) {
-    // Redirect to login if not authenticated
+    // 如果未认证，重定向到登录页
     return { redirect: '/login.tsx', status: 302 };
   }
 
-  return <div>Welcome, {user.name}!</div>;
+  return <div>欢迎, {user.name}!</div>;
 });
 ```
 
 ## SessionManager API
 
-The `SessionManager` provides the following methods:
+`SessionManager` 提供以下方法：
 
-### User Management
+### 用户管理
 
 #### `getUser(): Promise<SessionUser | null>`
 
-Get the current user from the session.
+从 session 中获取当前用户。
 
 ```tsx
 const user = await session.getUser();
 if (user) {
-  console.log(`User: ${user.name} (${user.email})`);
+  console.log(`用户: ${user.name} (${user.email})`);
 }
 ```
 
 #### `login(userId: string, userData?: Partial<SessionUser>): Promise<void>`
 
-Create or update a session for a user.
+为用户创建或更新 session。
 
 ```tsx
 await session.login('user-123', {
-  name: 'John Doe',
-  email: 'john@example.com',
+  name: '张三',
+  email: 'zhangsan@example.com',
   role: 'admin',
 });
 ```
 
 #### `logout(): Promise<void>`
 
-Destroy the current session.
+销毁当前 session。
 
 ```tsx
 await session.logout();
 ```
 
-### Data Storage
+### 数据存储
 
 #### `set(key: string, value: unknown): Promise<void>`
 
-Store data in the session.
+在 session 中存储数据。
 
 ```tsx
-await session.set('cart', ['item1', 'item2']);
+await session.set('cart', ['商品1', '商品2']);
 await session.set('preferences', { theme: 'dark' });
 await session.set('visits', 5);
 ```
 
 #### `get<T>(key: string): Promise<T | null>`
 
-Retrieve data from the session.
+从 session 中检索数据。
 
 ```tsx
 const cart = await session.get<string[]>('cart');
@@ -92,26 +92,26 @@ const visits = await session.get<number>('visits');
 
 #### `delete(key: string): Promise<void>`
 
-Remove data from the session.
+从 session 中删除数据。
 
 ```tsx
 await session.delete('cart');
 ```
 
-### Session Management
+### Session 管理
 
 #### `regenerateId(): Promise<void>`
 
-Generate a new session ID (prevents session fixation attacks).
+生成新的 session ID（防止 session 固定攻击）。
 
 ```tsx
-// After sensitive operations like login
+// 在登录等敏感操作后
 await session.regenerateId();
 ```
 
 #### `touch(): Promise<void>`
 
-Refresh the session expiration time.
+刷新 session 过期时间。
 
 ```tsx
 await session.touch();
@@ -119,7 +119,7 @@ await session.touch();
 
 #### `isValid(): Promise<boolean>`
 
-Check if the current session is valid.
+检查当前 session 是否有效。
 
 ```tsx
 const valid = await session.isValid();
@@ -127,76 +127,76 @@ const valid = await session.isValid();
 
 #### `getId(): string`
 
-Get the current session ID.
+获取当前 session ID。
 
 ```tsx
 const sessionId = session.getId();
 ```
 
-## Common Patterns
+## 常见模式
 
-### Authentication Flow
+### 认证流程
 
-#### Login Page
+#### 登录页面
 
 ```tsx
 export default Page(async function(ctx, { session }) {
   if (ctx.method === 'POST') {
     const { username, password } = ctx.body as { username: string; password: string };
 
-    // Verify credentials (e.g., against database)
+    // 验证凭证（例如，从数据库）
     if (username === 'admin' && password === 'password') {
-      // Create session
+      // 创建 session
       await session.login('user-123', {
-        name: 'Administrator',
+        name: '管理员',
         email: 'admin@example.com',
         role: 'admin',
       });
 
-      // Regenerate ID to prevent session fixation
+      // 重新生成 ID 防止 session 固定
       await session.regenerateId();
 
       return { redirect: '/dashboard.tsx', status: 302 };
     }
 
-    return <div>Invalid credentials</div>;
+    return <div>凭证无效</div>;
   }
 
   return (
     <form method="POST">
-      <input type="text" name="username" placeholder="Username" />
-      <input type="password" name="password" placeholder="Password" />
-      <button type="submit">Login</button>
+      <input type="text" name="username" placeholder="用户名" />
+      <input type="password" name="password" placeholder="密码" />
+      <button type="submit">登录</button>
     </form>
   );
 });
 ```
 
-#### Protected Page
+#### 受保护页面
 
 ```tsx
 export default Page(async function(ctx, { session }) {
-  // Check authentication
+  // 检查认证
   const user = await session.getUser();
   if (!user) {
     return { redirect: '/login.tsx', status: 302 };
   }
 
-  // Update visit counter
+  // 更新访问计数
   const visits = await session.get<number>('visits') || 0;
   await session.set('visits', visits + 1);
 
   return (
     <div>
-      <h1>Welcome, {user.name}!</h1>
-      <p>Visits: {visits + 1}</p>
-      <a href="/logout.tsx">Logout</a>
+      <h1>欢迎, {user.name}!</h1>
+      <p>访问次数: {visits + 1}</p>
+      <a href="/logout.tsx">登出</a>
     </div>
   );
 });
 ```
 
-#### Logout Page
+#### 登出页面
 
 ```tsx
 export default Page(async function(ctx, { session }) {
@@ -205,11 +205,11 @@ export default Page(async function(ctx, { session }) {
 });
 ```
 
-### Shopping Cart
+### 购物车
 
 ```tsx
 export default Page(async function(ctx, { session }) {
-  // Get current cart
+  // 获取当前购物车
   const cart = await session.get<string[]>('cart') || [];
 
   if (ctx.method === 'POST') {
@@ -228,26 +228,26 @@ export default Page(async function(ctx, { session }) {
 
   return (
     <div>
-      <h1>Shopping Cart</h1>
+      <h1>购物车</h1>
       <ul>
         {cart.map(item => <li key={item}>{item}</li>)}
       </ul>
 
       <form method="POST">
-        <input type="text" name="item" placeholder="Item name" />
+        <input type="text" name="item" placeholder="商品名称" />
         <input type="hidden" name="action" value="add" />
-        <button type="submit">Add to Cart</button>
+        <button type="submit">添加到购物车</button>
       </form>
     </div>
   );
 });
 ```
 
-### Flash Messages
+### Flash 消息
 
 ```tsx
 export default Page(async function(ctx, { session }) {
-  // Get and clear flash message
+  // 获取并清除 flash 消息
   const flash = await session.get<string>('flash');
   if (flash) {
     await session.delete('flash');
@@ -256,18 +256,18 @@ export default Page(async function(ctx, { session }) {
   return (
     <div>
       {flash && <div class="flash">{flash}</div>}
-      <h1>Page Content</h1>
+      <h1>页面内容</h1>
     </div>
   );
 });
 
-// Setting flash message elsewhere
-await session.set('flash', 'Operation successful!');
+// 在其他地方设置 flash 消息
+await session.set('flash', '操作成功！');
 ```
 
-## Configuration
+## 配置
 
-### Environment Variables
+### 环境变量
 
 ```bash
 # .env
@@ -275,14 +275,14 @@ TSP_SESSION_SECRET=your-random-secret-key-min-32-chars
 TSP_SESSION_MAX_AGE=86400
 ```
 
-### Programmatic Configuration
+### 程序化配置
 
-You can modify session options in `src/main.ts`:
+你可以在 `src/main.ts` 中修改 session 选项：
 
 ```typescript
 const options = {
   ...getDefaultOptions(),
-  maxAge: 3600,  // 1 hour (in seconds)
+  maxAge: 3600,  // 1 小时（秒）
   secret: new TextEncoder().encode(Deno.env.get('TSP_SESSION_SECRET')),
   cookieName: 'myapp_session',
   secure: true,
@@ -293,36 +293,36 @@ const options = {
 sessionStore = new SessionStore(options);
 ```
 
-### Session Options
+### Session 选项
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `cookieName` | string | `'tsp_session'` | Cookie name for session ID |
-| `maxAge` | number | `86400` | Session max age in seconds (1 day) |
-| `cleanupInterval` | number | `300000` | Cleanup interval in milliseconds (5 minutes) |
-| `secret` | Uint8Array | auto-generated | Secret key for HMAC signing |
-| `secure` | boolean | `true` | Set secure flag on cookie |
-| `httpOnly` | boolean | `true` | Set httpOnly flag on cookie |
-| `sameSite` | string | `'Strict'` | SameSite attribute ('Strict', 'Lax', 'None') |
-| `path` | string | `'/'` | Cookie path |
-| `rolling` | boolean | `true` | Enable rolling sessions (refresh on access) |
-| `autoTouch` | boolean | `true` | Auto-touch session on access |
+| 选项 | 类型 | 默认值 | 描述 |
+|------|------|--------|------|
+| `cookieName` | string | `'tsp_session'` | session ID 的 cookie 名称 |
+| `maxAge` | number | `86400` | session 最长有效期（秒，1 天） |
+| `cleanupInterval` | number | `300000` | 清理间隔（毫秒，5 分钟） |
+| `secret` | Uint8Array | 自动生成 | HMAC 签名的密钥 |
+| `secure` | boolean | `true` | 设置 cookie 的 secure 标志 |
+| `httpOnly` | boolean | `true` | 设置 cookie 的 httpOnly 标志 |
+| `sameSite` | string | `'Strict'` | SameSite 属性（'Strict'、'Lax'、'None'）|
+| `path` | string | `'/'` | Cookie 路径 |
+| `rolling` | boolean | `true` | 启用滚动 session（访问时刷新）|
+| `autoTouch` | boolean | `true` | 访问时自动刷新 session |
 
-## Security Best Practices
+## 安全最佳实践
 
-### 1. Always Use HTTPS in Production
+### 1. 生产环境始终使用 HTTPS
 
 ```typescript
 const options = {
   ...getDefaultOptions(),
-  secure: true,  // Requires HTTPS
+  secure: true,  // 需要 HTTPS
 };
 ```
 
-### 2. Set a Strong Session Secret
+### 2. 设置强 Session 密钥
 
 ```bash
-# Generate a random secret
+# 生成随机密钥
 openssl rand -base64 32
 ```
 
@@ -331,107 +331,107 @@ openssl rand -base64 32
 TSP_SESSION_SECRET=<generated-secret>
 ```
 
-### 3. Regenerate Session ID After Login
+### 3. 登录后重新生成 Session ID
 
 ```tsx
 await session.login(userId, userData);
-await session.regenerateId();  // Prevents session fixation
+await session.regenerateId();  // 防止 session 固定
 ```
 
-### 4. Use Appropriate Cookie Settings
+### 4. 使用适当的 Cookie 设置
 
-- **httpOnly**: Prevents JavaScript access to cookies (prevents XSS theft)
-- **secure**: Only sends cookie over HTTPS
-- **sameSite**: Prevents CSRF attacks
+- **httpOnly**：防止 JavaScript 访问 cookie（防止 XSS 窃取）
+- **secure**：仅通过 HTTPS 发送 cookie
+- **sameSite**：防止 CSRF 攻击
 
-### 5. Set Reasonable Expiration Times
+### 5. 设置合理的过期时间
 
 ```typescript
 const options = {
   ...getDefaultOptions(),
-  maxAge: 3600,  // 1 hour for sensitive apps
-  // maxAge: 86400,  // 1 day for general apps
-  // maxAge: 604800,  // 1 week for "remember me" functionality
+  maxAge: 3600,  // 敏感应用 1 小时
+  // maxAge: 86400,  // 一般应用 1 天
+  // maxAge: 604800,  // "记住我"功能 1 周
 };
 ```
 
-### 6. Implement Proper Logout
+### 6. 实现正确的登出
 
 ```tsx
 export default Page(async function(ctx, { session }) {
-  await session.logout();  // Destroy session
+  await session.logout();  // 销毁 session
   return { redirect: '/login.tsx', status: 302 };
 });
 ```
 
-## Session Storage
+## Session 存储
 
-### Current Limitations
+### 当前限制
 
-- Sessions are stored in memory
-- Sessions are lost when the server restarts
-- Not suitable for distributed/clustered deployments
+- Session 存储在内存中
+- 服务器重启时 session 会丢失
+- 不适合分布式/集群部署
 
-### Future Enhancements
+### 未来增强
 
-Planned support for:
-- Redis storage
-- Database storage
-- Distributed session stores
-- Session persistence across restarts
+计划支持：
+- Redis 存储
+- 数据库存储
+- 分布式 session 存储
+- 跨重启的 session 持久化
 
-## Troubleshooting
+## 故障排查
 
-### Session Not Persisting
+### Session 未持久化
 
-**Problem**: Session data is lost on page refresh.
+**问题**：页面刷新时 session 数据丢失。
 
-**Solution**: Check that:
-1. Cookies are enabled in the browser
-2. `secure` flag is set to `false` for HTTP development
-3. Browser is not blocking third-party cookies
+**解决方案**：检查：
+1. 浏览器中启用了 cookie
+2. HTTP 开发环境将 `secure` 标志设置为 `false`
+3. 浏览器未阻止第三方 cookie
 
-### Session ID Not Changing
+### Session ID 未更改
 
-**Problem**: `regenerateId()` doesn't seem to work.
+**问题**：`regenerateId()` 似乎不起作用。
 
-**Solution**: Ensure you're checking `session.getId()` after calling `regenerateId()`.
+**解决方案**：确保在调用 `regenerateId()` 后检查 `session.getId()`。
 
-### Production Deployment
+### 生产部署
 
-**Problem**: Sessions fail in production.
+**问题**：生产环境中 session 失败。
 
-**Solution**:
-1. Set `TSP_SESSION_SECRET` environment variable
-2. Use HTTPS (set `secure: true`)
-3. Check cookie domain settings if using subdomains
+**解决方案**：
+1. 设置 `TSP_SESSION_SECRET` 环境变量
+2. 使用 HTTPS（设置 `secure: true`）
+3. 如果使用子域名，检查 cookie 域名设置
 
-### Memory Issues
+### 内存问题
 
-**Problem**: Too many sessions consuming memory.
+**问题**：太多 session 消耗内存。
 
-**Solution**:
-1. Reduce `maxAge` to expire sessions sooner
-2. Adjust `cleanupInterval` to run more frequently
-3. Monitor session count in production
+**解决方案**：
+1. 减少 `maxAge` 使 session 更快过期
+2. 调整 `cleanupInterval` 更频繁地运行
+3. 在生产环境中监控 session 数量
 
-## Demo
+## 演示
 
-A complete demo is available at `/session_demo.tsx` when running the dev server:
+运行开发服务器时，可以在 `/session_demo.tsx` 访问完整的演示：
 
 ```bash
 deno task dev
-# Visit http://localhost:9000/session_demo.tsx
+# 访问 http://localhost:9000/session_demo.tsx
 ```
 
-The demo demonstrates:
-- Login/logout
-- Session data storage
-- Session regeneration
-- User information
-- Session status
+演示内容包括：
+- 登录/登出
+- Session 数据存储
+- Session 重新生成
+- 用户信息
+- Session 状态
 
-## Type Definitions
+## 类型定义
 
 ```typescript
 interface SessionUser {
@@ -456,8 +456,12 @@ interface SessionManager {
 }
 ```
 
-## See Also
+## 参见
 
-- [Cookie Management](./cookies.md)
-- [Dependency Injection](../architecture/injection.md)
-- [Security Best Practices](./security.md)
+- [Cookie 管理](./cookies.md)
+- [依赖注入](./injection.md)
+- [AppDeps 使用指南](./appdeps.md)
+
+---
+
+[← 返回功能特性](./README.md) | [← 返回文档中心](../README.md)

@@ -1,14 +1,14 @@
 /**
- * Session Management Module
+ * Session 管理模块
  *
- * Provides secure session management with HMAC-SHA256 signed session IDs,
- * cookie-based storage, and automatic cleanup of expired sessions.
+ * 提供安全的 session 管理，支持 HMAC-SHA256 签名的 session ID，
+ * 基于 cookie 的存储，以及自动清理过期的 session。
  */
 
 // ============== Type Definitions ==============
 
 /**
- * User information stored in session
+ * 存储在 session 中的用户信息
  */
 export interface SessionUser {
   id: string;
@@ -19,7 +19,7 @@ export interface SessionUser {
 }
 
 /**
- * Session options configuration
+ * Session 选项配置
  */
 export interface SessionOptions {
   /** Cookie name for session ID (default: 'tsp_session') */
@@ -45,7 +45,7 @@ export interface SessionOptions {
 }
 
 /**
- * Internal session data structure
+ * 内部 session 数据结构
  */
 interface SessionData {
   /** Signed session ID (rawId.signature) */
@@ -66,7 +66,7 @@ interface SessionData {
 
 /**
  * Session Manager API
- * Provides type-safe session operations for page handlers
+ * 为页面处理器提供类型安全的 session 操作
  */
 export interface SessionManager {
   /** Get current user from session */
@@ -94,10 +94,10 @@ export interface SessionManager {
 // ============== SessionStore Class ==============
 
 /**
- * Session Store - Manages session storage and lifecycle
+ * Session Store - 管理 session 存储和生命周期
  *
- * This is an internal class that should be used as a singleton.
- * All sessions are stored in memory with automatic cleanup of expired sessions.
+ * 这是一个内部类，应该作为单例使用。
+ * 所有 session 都存储在内存中，并自动清理过期的 session。
  */
 class SessionStore {
   private sessions: Map<string, SessionData>;
@@ -126,7 +126,7 @@ class SessionStore {
   }
 
   /**
-   * Create a new session
+   * 创建新的 session
    */
   async create(
     userId: string,
@@ -175,8 +175,8 @@ class SessionStore {
   }
 
   /**
-   * Get session by signed ID
-   * Returns null if session is invalid, expired, or destroyed
+   * 通过签名 ID 获取 session
+   * 如果 session 无效、过期或已销毁，则返回 null
    */
   async get(signedId: string): Promise<SessionData | null> {
     const rawId = await this.verifySignedId(signedId);
@@ -204,7 +204,7 @@ class SessionStore {
   }
 
   /**
-   * Save session (update existing)
+   * 保存 session（更新现有的）
    */
   async save(session: SessionData): Promise<void> {
     if (session.isDestroyed) {
@@ -215,7 +215,7 @@ class SessionStore {
   }
 
   /**
-   * Destroy session
+   * 销毁 session
    */
   async destroy(signedId: string): Promise<void> {
     const session = this.sessions.get(signedId);
@@ -226,7 +226,7 @@ class SessionStore {
   }
 
   /**
-   * Refresh session expiration time
+   * 刷新 session 过期时间
    */
   async touch(signedId: string): Promise<void> {
     const session = this.sessions.get(signedId);
@@ -237,8 +237,8 @@ class SessionStore {
   }
 
   /**
-   * Regenerate session ID
-   * Returns new signed ID
+   * 重新生成 session ID
+   * 返回新的签名 ID
    */
   async regenerateId(signedId: string): Promise<string> {
     const session = this.sessions.get(signedId);
@@ -263,10 +263,10 @@ class SessionStore {
     return newSignedId;
   }
 
-  // ============== Signing Methods ==============
+  // ============== 签名方法 ==============
 
   /**
-   * Sign session ID with HMAC-SHA256
+   * 使用 HMAC-SHA256 签名 session ID
    */
   private async signId(id: string): Promise<string> {
     const key = await this.getCryptoKey();
@@ -277,8 +277,8 @@ class SessionStore {
   }
 
   /**
-   * Verify signed session ID
-   * Returns raw ID if valid, null otherwise
+   * 验证签名 session ID
+   * 如果有效则返回原始 ID，否则返回 null
    */
   private async verifySignedId(signedId: string): Promise<string | null> {
     const parts = signedId.split(".");
@@ -306,7 +306,7 @@ class SessionStore {
   }
 
   /**
-   * Get or create HMAC key
+   * 获取或创建 HMAC 密钥
    */
   private async getCryptoKey(): Promise<CryptoKey> {
     if (!this.cryptoKey) {
@@ -327,7 +327,7 @@ class SessionStore {
   }
 
   /**
-   * Base64 URL encode (URL-safe variant)
+   * Base64 URL 编码（URL 安全变体）
    */
   private base64UrlEncode(data: Uint8Array): string {
     const base64 = btoa(String.fromCharCode(...data));
@@ -335,7 +335,7 @@ class SessionStore {
   }
 
   /**
-   * Base64 URL decode
+   * Base64 URL 解码
    */
   private base64UrlDecode(str: string): Uint8Array {
     let base64 = str.replace(/-/g, "+").replace(/_/g, "/");
@@ -347,7 +347,7 @@ class SessionStore {
   }
 
   /**
-   * Generate random secret (for development only)
+   * 生成随机密钥（仅用于开发环境）
    */
   private generateSecret(): Uint8Array {
     const bytes = new Uint8Array(32);
@@ -355,17 +355,17 @@ class SessionStore {
     return bytes;
   }
 
-  // ============== Cleanup Methods ==============
+  // ============== 清理方法 ==============
 
   /**
-   * Check if session is expired
+   * 检查 session 是否过期
    */
   private isExpired(session: SessionData): boolean {
     return Date.now() >= session.expiresAt;
   }
 
   /**
-   * Clean up expired sessions
+   * 清理过期的 session
    */
   private cleanupExpiredSessions(): void {
     const now = Date.now();
@@ -384,7 +384,7 @@ class SessionStore {
   }
 
   /**
-   * Start automatic cleanup timer
+   * 启动自动清理定时器
    */
   private startCleanup(): void {
     this.cleanupTimer = setInterval(() => {
@@ -393,7 +393,7 @@ class SessionStore {
   }
 
   /**
-   * Stop cleanup timer
+   * 停止清理定时器
    */
   private stopCleanup(): void {
     if (this.cleanupTimer !== null) {
@@ -403,14 +403,14 @@ class SessionStore {
   }
 
   /**
-   * Get options
+   * 获取选项
    */
   getOptions(): Required<SessionOptions> {
     return this.options;
   }
 
   /**
-   * Cleanup and destroy store (for testing)
+   * 清理和销毁 store（用于测试）
    */
   cleanupStore(): void {
     this.stopCleanup();
@@ -418,10 +418,10 @@ class SessionStore {
   }
 }
 
-// ============== SessionManager Factory ==============
+// ============== SessionManager 工厂 ==============
 
 /**
- * Create a SessionManager instance for the current request
+ * 为当前请求创建 SessionManager 实例
  */
 export function createSessionManager(
   ctx: {
@@ -592,10 +592,10 @@ export function createSessionManager(
   return manager;
 }
 
-// ============== Default Options ==============
+// ============== 默认选项 ==============
 
 /**
- * Get default session options
+ * 获取默认 session 选项
  */
 export function getDefaultOptions(): SessionOptions {
   return {
@@ -611,6 +611,6 @@ export function getDefaultOptions(): SessionOptions {
   };
 }
 
-// ============== Export SessionStore for main.ts ==============
+// ============== 导出 SessionStore 供 main.ts 使用 ==============
 
 export { SessionStore };

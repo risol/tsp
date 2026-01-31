@@ -88,7 +88,7 @@
 
 ### 基础使用
 ```tsx
-export default Page(['cookies'], async function(ctx, { cookies }) {
+export default Page(, async function(ctx, { cookies }) {
   cookies.set('username', 'john_doe');
   return <div>Cookie set!</div>;
 });

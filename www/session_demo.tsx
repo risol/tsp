@@ -79,7 +79,7 @@ export default Page(async function (context, { session }) {
   return (
     <html>
       <head>
-        <title>Session Demo</title>
+        <title>Session 演示</title>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <style>
@@ -291,18 +291,18 @@ export default Page(async function (context, { session }) {
       </head>
       <body>
         <div class="container">
-          <h1>🔐 Session Demo</h1>
+          <h1>🔐 Session 演示</h1>
 
           {/* Session Status Card */}
           <div class="card">
-            <h2>Session Status</h2>
+            <h2>Session 状态</h2>
             <div class="status">
               <span
                 class={`status-badge ${
                   isValid ? "status-valid" : "status-invalid"
                 }`}
               >
-                {isValid ? "✓ Valid" : "✗ Invalid"}
+                {isValid ? "✓ 有效" : "✗ 无效"}
               </span>
               <span
                 style={{
@@ -311,40 +311,40 @@ export default Page(async function (context, { session }) {
                   color: "#666",
                 }}
               >
-                Max Age: 1 day (86400s)
+                最大存活时间：1 天（86400秒）
               </span>
             </div>
 
             <div class="info-row">
               <div class="info-label">Session ID:</div>
               <div class="info-value">
-                {sessionId || <span class="empty">No active session</span>}
+                {sessionId || <span class="empty">没有活动的会话</span>}
               </div>
             </div>
 
             <div class="info-row">
-              <div class="info-label">Valid Until:</div>
+              <div class="info-label">有效期至：</div>
               <div class="info-value">
                 {sessionId
                   ? (
                     <span>
-                      {isValid ? "Active" : "Expired"}
+                      {isValid ? "活跃" : "已过期"}
                     </span>
                   )
-                  : <span class="empty">N/A</span>}
+                  : <span class="empty">不适用</span>}
               </div>
             </div>
           </div>
 
           {/* User Info Card */}
           <div class="card">
-            <h2>User Information</h2>
+            <h2>用户信息</h2>
             {user
               ? (
                 <div>
                   <div class="user-card">
                     <div class="user-name">{user.name}</div>
-                    <div class="user-email">{user.email || "No email"}</div>
+                    <div class="user-email">{user.email || "没有邮箱"}</div>
                     <div
                       style={{
                         marginTop: "10px",
@@ -352,37 +352,37 @@ export default Page(async function (context, { session }) {
                         opacity: 0.8,
                       }}
                     >
-                      ID: {user.id} | Role: {user.role || "N/A"}
+                      ID: {user.id} | 角色: {user.role || "未设置"}
                     </div>
                   </div>
 
                   <div class="info-row">
-                    <div class="info-label">User ID:</div>
+                    <div class="info-label">用户ID：</div>
                     <div class="info-value">{user.id}</div>
                   </div>
                   <div class="info-row">
-                    <div class="info-label">Name:</div>
+                    <div class="info-label">姓名：</div>
                     <div class="info-value">{user.name}</div>
                   </div>
                   <div class="info-row">
-                    <div class="info-label">Email:</div>
+                    <div class="info-label">邮箱：</div>
                     <div class="info-value">
-                      {user.email || <span class="empty">Not set</span>}
+                      {user.email || <span class="empty">未设置</span>}
                     </div>
                   </div>
                   <div class="info-row">
-                    <div class="info-label">Role:</div>
+                    <div class="info-label">角色：</div>
                     <div class="info-value">
-                      {user.role || <span class="empty">Not set</span>}
+                      {user.role || <span class="empty">未设置</span>}
                     </div>
                   </div>
                 </div>
               )
               : (
                 <div class="no-session">
-                  <p>No user logged in</p>
+                  <p>没有用户登录</p>
                   <p style={{ fontSize: "0.9rem", marginTop: "10px" }}>
-                    Click "Login" below to create a session
+                    点击下面的"登录"按钮创建会话
                   </p>
                 </div>
               )}
@@ -390,19 +390,19 @@ export default Page(async function (context, { session }) {
 
           {/* Session Data Card */}
           <div class="card">
-            <h2>Session Data</h2>
+            <h2>Session 数据</h2>
             <div class="info-row">
-              <div class="info-label">Visits:</div>
+              <div class="info-label">访问次数：</div>
               <div class="info-value">{visits}</div>
             </div>
             <div class="info-row">
-              <div class="info-label">Last Visit:</div>
+              <div class="info-label">最后访问：</div>
               <div class="info-value">
-                {lastVisit || <span class="empty">Not set</span>}
+                {lastVisit || <span class="empty">未设置</span>}
               </div>
             </div>
             <div class="info-row">
-              <div class="info-label">Cart Items:</div>
+              <div class="info-label">购物车项目：</div>
               <div class="info-value">
                 {cart
                   ? (
@@ -410,14 +410,14 @@ export default Page(async function (context, { session }) {
                       {JSON.stringify(cart, null, 2)}
                     </div>
                   )
-                  : <span class="empty">Cart is empty</span>}
+                  : <span class="empty">购物车为空</span>}
               </div>
             </div>
           </div>
 
           {/* Actions Card */}
           <div class="card">
-            <h2>Actions</h2>
+            <h2>操作</h2>
             <div class="actions">
               {!user
                 ? (
@@ -425,7 +425,7 @@ export default Page(async function (context, { session }) {
                     href="/session_demo.tsx?action=login"
                     class="btn btn-success"
                   >
-                    Login
+                    登录
                   </a>
                 )
                 : (
@@ -434,48 +434,48 @@ export default Page(async function (context, { session }) {
                       href="/session_demo.tsx?action=set-data"
                       class="btn btn-primary"
                     >
-                      Set Demo Data
+                      设置演示数据
                     </a>
                     {cart && (
                       <a
                         href="/session_demo.tsx?action=delete-data"
                         class="btn btn-warning"
                       >
-                        Clear Cart
+                        清空购物车
                       </a>
                     )}
                     <a
                       href="/session_demo.tsx?action=regenerate"
                       class="btn btn-info"
                     >
-                      Regenerate ID
+                      重新生成ID
                     </a>
                     <a
                       href="/session_demo.tsx?action=logout"
                       class="btn btn-danger"
                     >
-                      Logout
+                      退出登录
                     </a>
                   </>
                 )}
               <a href="/session_demo.tsx" class="btn btn-secondary">
-                Refresh Page
+                刷新页面
               </a>
             </div>
 
             <div class="hint">
-              <strong>💡 Tips:</strong>
+              <strong>💡 提示：</strong>
               <ul style={{ marginLeft: "20px", marginTop: "10px" }}>
-                <li>Login creates a new session with user data</li>
-                <li>"Set Demo Data" adds sample data to the session</li>
+                <li>登录创建一个包含用户数据的新会话</li>
+                <li>"设置演示数据"向会话添加示例数据</li>
                 <li>
-                  "Regenerate ID" creates a new session ID (security feature)
+                  "重新生成ID"创建一个新的会话ID（安全功能）
                 </li>
-                <li>Session data persists across page refreshes</li>
-                <li>Session expires after 1 day of inactivity</li>
+                <li>会话数据在页面刷新后保持不变</li>
+                <li>会话在1天不活动后过期</li>
                 <li>
-                  Check browser DevTools → Application → Cookies to see the
-                  session cookie
+                  检查浏览器开发者工具 → 应用 → Cookies 查看
+                  会话 Cookie
                 </li>
               </ul>
             </div>

@@ -16,6 +16,9 @@ Welcome to TSP (TypeScript Server Page) documentation.
 ## Features
 
 - [Dependency Injection](./features/injection.md) - Type-safe dependency injection
+- [AppDeps Guide](./features/appdeps.md) - How to use AppDeps for session, cookies, and custom dependencies
+- [Session Management](./features/session.md) - User session management with HMAC-SHA256 signing
+- [Cookie Management](./features/cookies.md) - HTTP Cookie management with full API support
 - [Hot Reload](./HOT_RELOAD.md) - Automatic code reloading in dev mode
 - [Static Files](./features/static-files.md) - Serving static assets
 - [Error Handling](./features/error-handling.md) - Error handling mechanisms

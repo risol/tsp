@@ -1,6 +1,6 @@
 /**
- * Precompilation Module
- * Compile TSX files to JS in cache directory
+ * 预编译模块
+ * 将 TSX 文件编译为缓存目录中的 JS 文件
  */
 
 import { dirname, join, relative, toFileUrl } from "std/path";
@@ -9,31 +9,31 @@ import { ensureDir } from "https://deno.land/std@0.224.0/fs/ensure_dir.ts";
 const WWW_DIR = "./www";
 const CACHE_DIR = ".cache/tsp";
 
-// Global cache base directory - set from main.ts
+// 全局缓存基础目录 - 从 main.ts 设置
 let cacheBaseDir: string | null = null;
 
 /**
- * Set the base directory for cache calculations
- * Should be called with the parent directory of the www folder
+ * 设置缓存计算的基础目录
+ * 应该传入 www 文件夹的父目录调用
  */
 export function setCacheBaseDir(dir: string): void {
   cacheBaseDir = dir;
 }
 
 /**
- * Get the cache base directory
- * Returns the directory where .cache should be located
- * If setCacheBaseDir was called, uses that; otherwise uses Deno.cwd()
+ * 获取缓存基础目录
+ * 返回 .cache 应该位于的目录
+ * 如果调用了 setCacheBaseDir，则使用该目录；否则使用 Deno.cwd()
  */
 function getCacheBaseDir(): string {
   if (cacheBaseDir) {
     return cacheBaseDir;
   }
-  // Default to current working directory
+  // 默认为当前工作目录
   return Deno.cwd();
 }
 
-/** Get file path relative to current working directory or www directory */
+/** 获取相对于当前工作目录或 www 目录的文件路径 */
 function getRelativePath(filepath: string): string {
   const cacheBase = getCacheBaseDir();
   const absPath = filepath;
@@ -79,7 +79,7 @@ async function transpileTSX(
 ): Promise<string> {
   const { Workspace, RequestedModuleType } = await import("@deno/loader");
 
-  // filepath is already an absolute path
+  // filepath 已经是绝对路径
   const fileUrl = toFileUrl(filepath).href;
 
   const workspace = new Workspace();

@@ -9,8 +9,30 @@
 - [依赖注入](./injection.md) - 类型安全的依赖注入功能
   - 使用 `Page` 包装器注入依赖
   - 完整的 TypeScript 类型支持
-  - 线程安全的依赖管理
+  - Proxy 懒加载机制
   - 全局可用，无需 import
+
+- [AppDeps 使用指南](./appdeps.md) - 依赖注入完整指南
+  - Session 和 Cookies 使用方法
+  - 自定义依赖示例（数据库、缓存、API 客户端等）
+  - 最佳实践和常见场景
+
+- [Session 管理](./session.md) - 用户会话管理
+  - HMAC-SHA256 签名保护
+  - 用户登录/登出
+  - Session 数据存储
+  - 自动过期和清理
+
+- [Cookie 管理](./cookies.md) - HTTP Cookie 管理
+  - 设置和读取 Cookie
+  - 安全选项（httpOnly, secure, sameSite）
+  - 批量操作
+  - URL 编码处理
+
+- [静态文件服务](./static-files.md) - 静态资源服务
+  - 自动 MIME 类型检测
+  - ETag 和缓存支持
+  - 可配置文件扩展名白名单
 
 - [重定向功能](./redirect.md) - HTTP 重定向支持
   - 返回重定向对象触发 HTTP 重定向

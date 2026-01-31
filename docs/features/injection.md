@@ -2,248 +2,417 @@
 
 ## 概述
 
-TSP 支持类型安全的依赖注入功能，允许在页面函数中注入辅助函数和服务。
+TSP 支持类型安全的依赖注入功能，通过 `Page` 包装器自动将依赖注入到页面函数中。
+
+**重要**：Page 函数使用 **Proxy 懒加载机制**，只有在访问依赖时才构建它们。
 
 ## 核心概念
 
-依赖注入使用包装器模式，**显式声明需要的依赖**，然后将它们注入到页面函数：
+### 正确的 Page 用法
 
 ```tsx
-// 原来的写法
-export default async function(context) {
-  // ...
-}
-
-// 使用依赖注入（显式声明依赖）
-import { Page } from "../src/injection-typed.ts";
-
-export default Page(['db', 'logger'], async function(context, { db, logger }) {
-  // 使用 db 和 logger（完整的类型提示）
+// ✅ 正确 - 直接使用 Page 包装函数
+export default Page(async function(ctx, { session, db, logger }) {
+  const user = await session.getUser();
   const data = await db.query('SELECT * FROM users');
   logger('页面渲染成功');
-  return <div>Hello</div>;
+  return <div>Hello {user?.name}</div>;
 });
 
-// Page 已在全局作用域，无需 import
-export default Page(['session'], async function(context, { session }) {
+// ✅ 也可以不使用 async
+export default Page(function(ctx) {
+  return <div>No dependencies needed</div>;
+});
+
+// ❌ 错误 - 不要使用数组参数
+// export default Page(['session', 'db'], async function(ctx, { session, db }) {
+//   这是错误的语法！
+// });
+```
+
+### 工作原理
+
+依赖注入使用 **Proxy 懒加载机制**：
+
+1. **声明阶段**：在 `types.d.ts` 中声明 `AppDeps` 接口
+2. **注册阶段**：在 `main.ts` 中使用 `registerDep()` 注册依赖
+3. **注入阶段**：使用 `Page()` 包装函数，自动注入依赖
+4. **懒加载**：只有在访问依赖时才构建，未访问的依赖不会被构建
+
+```typescript
+// 1. types.d.ts - 声明依赖类型
+declare global {
+  interface AppDeps {
+    session: import("./src/session.ts").SessionManager;
+    cookies: import("./src/cookies.ts").CookieManager;
+    db: { query: (sql: string) => Promise<unknown[]> };
+    logger: typeof console.log;
+  }
+}
+
+// 2. main.ts - 注册依赖
+registerDep('db', (ctx) => {
+  return {
+    query: async (sql: string) => database.execute(sql),
+  };
+});
+
+// 3. page.tsx - 使用依赖
+export default Page(async function(ctx, { db, session }) {
+  // 只有 session 和 db 会被构建
+  // logger 未被访问，不会被构建
   const user = await session.getUser();
-  return <div>Hello {user?.name}</div>;
+  const data = await db.query('SELECT * FROM users');
+  return <div>{data}</div>;
 });
 ```
 
-**重要变更**：新版本要求显式声明依赖数组作为第一个参数，不再使用脆弱的 `fn.toString()` + 正则解析。
+## 完整使用流程
 
-## 使用方法
+### 步骤 1: 声明依赖类型
 
-### 1. 声明依赖类型
-
-在 `types.d.ts` 中声明依赖类型：
+在 `types.d.ts` 中声明所有依赖的类型：
 
 ```typescript
+// types.d.ts
 declare global {
-  interface AppDeps {
+  interface AppDeps extends Record<string, unknown> {
+    // Session 管理
+    session: import("./src/session.ts").SessionManager;
+
+    // Cookie 管理
+    cookies: import("./src/cookies.ts").CookieManager;
+
+    // 数据库（示例）
     db?: {
       query: (sql: string) => Promise<unknown[]>;
       insert: (table: string, data: Record<string, unknown>) => Promise<void>;
     };
-    session?: {
-      getUser: () => Promise<{ name: string }>;
-      set: (key: string, value: unknown) => Promise<void>;
-    };
-    logger?: (message: string) => void;
+
+    // 日志函数
+    logger?: typeof console.log;
+
+    // 测试函数
+    testFunc: () => string;
   }
 }
+
+export {}; // 确保类型被视为全局的
 ```
 
-### 2. 注册依赖
+### 步骤 2: 注册依赖
 
-在应用启动时（例如 `main.ts`）注册依赖：
+在 `main.ts` 中注册依赖实现：
 
 ```typescript
+// main.ts
 import { registerDep } from "./src/injection-typed.ts";
+import { createSessionManager, SessionStore, getDefaultOptions } from "./src/session.ts";
+import { createCookieManager } from "./src/cookies.ts";
 
-// 注册单个依赖
+// 全局 SessionStore 单例
+let sessionStore: SessionStore | null = null;
+
+// 注册 Session 依赖
+registerDep('session', (ctx) => {
+  if (!sessionStore) {
+    const secret = Deno.env.get('TSP_SESSION_SECRET');
+    const secretBytes = secret
+      ? new TextEncoder().encode(secret)
+      : new Uint8Array(32); // 开发环境使用随机密钥
+
+    const options = {
+      ...getDefaultOptions(),
+      secret: secretBytes,
+    };
+
+    sessionStore = new SessionStore(options);
+  }
+
+  const cookieManager = createCookieManager(ctx);
+  return createSessionManager(ctx, sessionStore, cookieManager);
+});
+
+// 注册 Cookies 依赖
+registerDep('cookies', (ctx) => {
+  return createCookieManager(ctx);
+});
+
+// 注册数据库依赖（示例）
 registerDep('db', (ctx) => {
   return {
-    query: async (sql: string) => database.execute(sql),
+    query: async (sql: string) => {
+      // 实际的数据库查询逻辑
+      return database.execute(sql);
+    },
     insert: async (table: string, data: Record<string, unknown>) => {
       return database.insert(table, data);
     },
   };
 });
 
-// 注册异步依赖
-registerDep('session', async (ctx) => {
-  const sessionId = ctx.cookies.session_id;
-  const session = await redis.get(`session:${sessionId}`);
+// 注册日志函数
+registerDep('logger', (ctx) => {
+  return (message: string) => console.log(`[LOG] ${message}`);
+});
+
+// 注册测试函数
+registerDep('testFunc', (ctx) => {
+  return () => {
+    console.log('testFunc called');
+    return 'testFunc called';
+  };
+});
+```
+
+### 步骤 3: 在页面中使用
+
+```tsx
+// www/my-page.tsx
+// 注意：无需 import Page，它已经是全局函数
+
+export default Page(async function(ctx, { session, db, logger }) {
+  // 获取当前用户
+  const user = await session.getUser();
+
+  if (!user) {
+    return { redirect: '/login', status: 302 };
+  }
+
+  // 查询数据
+  const data = await db.query('SELECT * FROM posts WHERE user_id = ?', [user.id]);
+
+  // 记录日志
+  logger(`Loaded ${data.length} posts for user ${user.id}`);
+
+  return (
+    <div>
+      <h1>Welcome, {user.name}!</h1>
+      <ul>
+        {data.map(post => <li>{post.title}</li>)}
+      </ul>
+    </div>
+  );
+});
+```
+
+## 懒加载机制
+
+依赖注入使用 Proxy 实现懒加载：
+
+```tsx
+export default Page(async function(ctx, { db, session, logger }) {
+  // 只有访问了的依赖会被构建
+
+  await session.getUser();  // ✅ session 会被构建
+
+  const data = await db.query('...');  // ✅ db 会被构建
+
+  // logger 没有被使用，不会被构建！
+  // 这样可以节省资源
+
+  return <div>Done</div>;
+});
+```
+
+**优点**：
+- 只有使用的依赖才会被构建
+- 减少不必要的资源消耗
+- 提高性能
+
+## 内置依赖
+
+TSP 内置了以下依赖：
+
+### Session
+
+用户会话管理：
+
+```tsx
+export default Page(async function(ctx, { session }) {
+  // 获取当前用户
+  const user = await session.getUser();
+
+  // 登录
+  await session.login('user-123', {
+    name: 'John Doe',
+    email: 'john@example.com',
+  });
+
+  // 存储数据
+  await session.set('cart', { items: [] });
+
+  // 读取数据
+  const cart = await session.get('cart');
+
+  // 登出
+  await session.logout();
+
+  return <div>Done</div>;
+});
+```
+
+详见：[Session 功能文档](./session.md)
+
+### Cookies
+
+HTTP Cookie 管理：
+
+```tsx
+export default Page(async function(ctx, { cookies }) {
+  // 设置 Cookie
+  cookies.set('theme', 'dark', {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Strict',
+    maxAge: 3600,
+  });
+
+  // 读取 Cookie（从 ctx.cookies）
+  const theme = ctx.cookies.theme;
+
+  // 删除 Cookie
+  cookies.delete('theme');
+
+  // 批量设置
+  cookies.setMultiple({
+    'theme': { value: 'dark', options: { maxAge: 31536000 } },
+    'language': { value: 'zh-CN', options: { maxAge: 31536000 } },
+  });
+
+  return <div>Done</div>;
+});
+```
+
+详见：[Cookie 功能文档](./cookies.md)
+
+## 自定义依赖
+
+### 示例 1: 数据库连接
+
+```typescript
+// types.d.ts
+declare global {
+  interface AppDeps {
+    db?: {
+      query: (sql: string, params?: unknown[]) => Promise<unknown[]>;
+      insert: (table: string, data: Record<string, unknown>) => Promise<void>;
+    };
+  }
+}
+
+// main.ts
+registerDep('db', (ctx) => {
+  const pool = new DatabasePool();
+
   return {
-    getUser: async () => session.user,
-    set: async (key: string, value: unknown) => {
-      session[key] = value;
-      await redis.set(`session:${sessionId}`, session);
+    query: async (sql: string, params?: unknown[]) => {
+      const conn = await pool.getConnection();
+      try {
+        return await conn.query(sql, params);
+      } finally {
+        conn.release();
+      }
+    },
+    insert: async (table: string, data: Record<string, unknown>) => {
+      return pool.insert(table, data);
     },
   };
 });
 
-// 注册工具函数
-registerDep('logger', (ctx) => {
-  return (message: string) => console.log(`[LOG] ${message}`);
+// page.tsx
+export default Page(async function(ctx, { db }) {
+  const users = await db?.query('SELECT * FROM users');
+  return <div>{JSON.stringify(users)}</div>;
 });
 ```
 
-### 3. 在页面中使用
-
-```tsx
-import { Page } from "../src/injection-typed.ts";
-
-// 显式声明依赖数组
-export default Page(['db', 'session', 'logger'], async function(context, { db, session, logger }) {
-  // 使用注入的依赖（完整的类型提示）
-  const user = await session?.getUser();
-  const data = await db?.query('SELECT * FROM users');
-  logger?.('页面渲染成功');
-
-  return <div>Hello {user?.name}</div>;
-});
-```
-
-或者使用全局 `Page`（无需 import）：
-
-```tsx
-export default Page(['db', 'session', 'logger'], async function(context, { db, session, logger }) {
-  // Page 已在全局作用域中
-  const user = await session?.getUser();
-  return <div>Hello {user?.name}</div>;
-});
-```
-
-## 实现原理
-
-依赖注入使用显式声明的方式工作，不依赖脆弱的字符串解析：
-
-1. **类型声明**：在 `types.d.ts` 中声明 `AppDeps` 接口
-2. **依赖注册**：使用 `registerDep(name, builder)` 注册依赖构建器
-3. **显式声明**：在页面函数中显式声明需要的依赖数组
-4. **按需注入**：包装器只构建请求的依赖，然后注入到页面函数
-
-### 代码流程
+### 示例 2: 缓存服务
 
 ```typescript
-// 1. 在 types.d.ts 中声明类型
+// types.d.ts
 declare global {
   interface AppDeps {
-    testFunc?: () => string;
+    cache?: {
+      get: <T>(key: string) => Promise<T | null>;
+      set: (key: string, value: unknown, ttl?: number) => Promise<void>;
+      delete: (key: string) => Promise<void>;
+    };
   }
 }
 
-// 2. 注册依赖
-registerDep('testFunc', (ctx) => () => {
-  console.log('testFunc called');
-  return 'testFunc called';
-});
+// main.ts
+registerDep('cache', (ctx) => {
+  const redis = new RedisClient();
 
-// 3. 包装函数（显式声明依赖）
-export default Page(['testFunc'], async function(ctx, { testFunc }) {
-  const result = testFunc();  // 调用注入的函数
-  return <div>{result}</div>;
-});
-
-// 4. 内部执行流程（由 Page 自动处理）
-// a. 读取依赖数组 ['testFunc']
-// b. 构建请求的依赖: { testFunc: await builder(ctx) }
-// c. 调用页面函数: return fn(ctx, deps)
-```
-
-### 为什么显式声明更好？
-
-旧版本使用 `fn.toString()` + 正则表达式解析参数：
-```typescript
-// ❌ 旧版本 - 脆弱且不可靠
-function Page(fn) {
-  const fnStr = fn.toString();
-  const depsMatch = fnStr.match(/\([^)]*,\s*{([^}]+)\}\s*\)/);
-  const expectedDeps = depsMatch ? depsMatch[1].split(',') : [];
-  // ...
-}
-```
-
-这种方式的问题：
-- 依赖函数的字符串格式
-- 正则表达式容易被各种格式破坏（换行、空格、注释等）
-- 无法处理复杂的解构模式
-- 编译后的代码可能无法正确解析
-
-新版本使用显式声明：
-```typescript
-// ✅ 新版本 - 可靠且类型安全
-function Page(deps: (keyof AppDeps)[], fn) {
-  // 直接读取 deps 数组
-  for (const depName of deps) {
-    // 构建依赖...
-  }
-}
-```
-
-### 全局可用性
-
-`Page` 在全局作用域中自动初始化，无需 import：
-
-```tsx
-// 无需 import，直接使用
-export default Page(['testFunc'], async function(ctx, { testFunc }) {
-  // ...
-});
-```
-
-### createPage()
-
-`Page` 函数由 `createPage()` 工厂函数创建：
-
-```typescript
-export function createPage() {
-  return function Page<T>(
-    deps: (keyof AppDeps)[],
-    fn: (ctx: PageContext, deps: AppDeps) => Promise<T> | T
-  ): (ctx: PageContext) => Promise<T> {
-    // 实现细节...
+  return {
+    get: async <T>(key: string) => {
+      const data = await redis.get(key);
+      return data ? JSON.parse(data) as T : null;
+    },
+    set: async (key: string, value: unknown, ttl = 3600) => {
+      await redis.setex(key, ttl, JSON.stringify(value));
+    },
+    delete: async (key: string) => {
+      await redis.del(key);
+    },
   };
+});
+
+// page.tsx
+export default Page(async function(ctx, { cache }) {
+  // 尝试从缓存获取
+  let data = await cache?.get('my-data');
+
+  if (!data) {
+    // 缓存未命中，从数据库获取
+    data = await fetchFromDatabase();
+    await cache?.set('my-data', data, 600); // 缓存 10 分钟
+  }
+
+  return <div>{JSON.stringify(data)}</div>;
+});
+```
+
+### 示例 3: API 客户端
+
+```typescript
+// types.d.ts
+declare global {
+  interface AppDeps {
+    api?: {
+      get: (url: string) => Promise<unknown>;
+      post: (url: string, data: unknown) => Promise<unknown>;
+    };
+  }
 }
+
+// main.ts
+registerDep('api', (ctx) => {
+  const baseUrl = 'https://api.example.com';
+
+  return {
+    get: async (url: string) => {
+      const response = await fetch(`${baseUrl}${url}`);
+      return response.json();
+    },
+    post: async (url: string, data: unknown) => {
+      const response = await fetch(`${baseUrl}${url}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      return response.json();
+    },
+  };
+});
+
+// page.tsx
+export default Page(async function(ctx, { api }) {
+  const posts = await api?.get('/posts');
+  return <div>{JSON.stringify(posts)}</div>;
+});
 ```
-
-如果你需要创建自定义的 Page 函数，可以使用 `createPage()`：
-
-## 测试
-
-### 单元测试
-
-运行依赖注入单元测试：
-
-```bash
-deno test --allow-all tests/unit/injection_test.ts
-```
-
-测试覆盖：
-- ✓ 注册单个依赖
-- ✓ 注册多个依赖
-- ✓ 取消注册依赖
-- ✓ 获取已注册的依赖列表
-- ✓ Page 函数包装
-- ✓ 单个依赖注入
-- ✓ 多个依赖注入
-- ✓ 异步依赖构建
-- ✓ 依赖可以访问 context
-- ✓ 类型安全和类型推断
-- ✓ 全局 Page 函数
-
-### E2E 测试
-
-E2E 测试会编译二进制文件并启动真实服务器进行测试：
-
-```bash
-deno run --allow-all tests/run_e2e_tests.ts
-```
-
-注意：由于编译环境的限制，E2E 测试中无法实际测试依赖注入功能，依赖注入主要由单元测试覆盖。
 
 ## API 参考
 
@@ -260,7 +429,7 @@ function registerDep<K extends keyof AppDeps>(
 
 **参数**:
 - `name`: 依赖名称（必须是 `AppDeps` 接口的键）
-- `builder`: 依赖构建器函数，接收 `PageContext`，返回依赖实例
+- `builder`: 依赖构建器函数，接收 `PageContext`，返回依赖实例或 Promise
 
 **示例**:
 ```typescript
@@ -328,150 +497,126 @@ export default Page(async function(ctx, { db, logger }) {
 });
 ```
 
-### createPage()
+## 类型安全
 
-创建自定义的 Page 函数。
+完整的类型推断：
 
-```typescript
-function createPage(): <T>(
-  fn: (ctx: PageContext, deps: AppDeps) => Promise<T> | T
-) => (ctx: PageContext) => Promise<T>
-```
+```tsx
+// ✅ 完整的类型提示
+export default Page(async function(ctx, { session, db }) {
+  // session 是 SessionManager 类型
+  // await session.getUser() 返回 SessionUser | null
+  const user = await session.getUser();
 
-### 类型定义
+  // db 是 db 类型
+  // db.query() 返回 Promise<unknown[]>
+  const data = await db.query('SELECT * FROM users');
 
-```typescript
-// 在 types.d.ts 中声明
-declare global {
-  interface AppDeps {
-    db?: {
-      query: (sql: string) => Promise<unknown[]>;
-      insert: (table: string, data: Record<string, unknown>) => Promise<void>;
-    };
-    session?: {
-      getUser: () => Promise<{ name: string }>;
-      set: (key: string, value: unknown) => Promise<void>;
-    };
-    logger?: (message: string) => void;
-  }
-}
-```
-
-## 示例
-
-### 示例 1：数据库连接
-
-```typescript
-// types.d.ts
-declare global {
-  interface AppDeps {
-    db?: {
-      query: (sql: string) => Promise<unknown[]>;
-      insert: (table: string, data: Record<string, unknown>) => Promise<void>;
-    };
-  }
-}
-
-// main.ts
-registerDep('db', (ctx) => {
-  return {
-    query: async (sql: string) => {
-      console.log(`Executing: ${sql}`);
-      return database.execute(sql);
-    },
-    insert: async (table: string, data: Record<string, unknown>) => {
-      return database.insert(table, data);
-    },
-  };
-});
-
-// page.tsx
-export default Page(async function(ctx, { db }) {
-  const users = await db?.query('SELECT * FROM users');
-  return <div>{JSON.stringify(users)}</div>;
+  return <div>{user?.name}</div>;
 });
 ```
 
-### 示例 2：Session 管理
+## 常见问题
 
-```typescript
-// types.d.ts
-declare global {
-  interface AppDeps {
-    session?: {
-      getUser: () => Promise<{ name: string }>;
-      set: (key: string, value: unknown) => Promise<void>;
-    };
-  }
-}
+### Q: Page 函数需要 async 吗？
 
-// main.ts
-registerDep('session', async (ctx) => {
-  const sessionId = ctx.cookies.session_id;
-  const session = await redis.get(`session:${sessionId}`);
-  return {
-    getUser: async () => session.user,
-    set: async (key: string, value: unknown) => {
-      session[key] = value;
-      await redis.set(`session:${sessionId}`, session);
-    },
-  };
+**A**: 不一定。只有当你需要使用 `await` 时才需要 `async`：
+
+```tsx
+// ✅ 不需要 async - 没有异步操作
+export default Page(function(ctx) {
+  return <div>Hello</div>;
 });
 
-// page.tsx
+// ✅ 需要 async - 有异步操作
 export default Page(async function(ctx, { session }) {
-  const user = await session?.getUser();
+  const user = await session.getUser();
   return <div>Hello {user?.name}</div>;
 });
 ```
 
-### 示例 3：多个依赖
+### Q: 为什么不能写成 `export default async Page(...)`？
 
-```typescript
-// types.d.ts
-declare global {
-  interface AppDeps {
-    db?: Database;
-    cache?: Cache;
-    logger?: (message: string) => void;
-  }
-}
+**A**: 因为 `Page` 已经返回了一个 async 函数，再加 `async` 会造成嵌套的 Promise：
 
-// main.ts
-registerDeps({
-  db: (ctx) => new Database(),
-  cache: (ctx) => new Cache(),
-  logger: (ctx) => (message: string) => console.log(`[LOG] ${message}`),
+```tsx
+// ❌ 错误 - 会创建 Promise<Promise<T>>
+export default async Page(async function(ctx, { session }) {
+  // ...
 });
 
-// page.tsx
-export default Page(async function(ctx, { db, cache, logger }) {
-  logger?.('开始处理请求');
-
-  const cached = await cache?.get('data');
-  if (cached) return <div>{cached}</div>;
-
-  const data = await db?.query('SELECT * FROM data');
-  await cache?.set('data', data);
-
-  return <div>{JSON.stringify(data)}</div>;
+// ✅ 正确 - 直接返回 Promise<T>
+export default Page(async function(ctx, { session }) {
+  // ...
 });
 ```
 
-## 注意事项
+### Q: 可以在 www/ 目录中 import Page 吗？
 
-1. **依赖构建时机**：依赖在每次请求时构建，不是单例
-2. **访问 Context**：依赖构建器可以访问 `context`，根据请求信息构建不同的依赖
-3. **异步支持**：依赖构建器可以是异步的，`Page` 会自动等待所有依赖构建完成
-4. **类型安全**：必须在 `types.d.ts` 中声明依赖类型，才能获得完整的类型提示
-5. **全局可用**：`Page` 已在全局作用域中，无需 import
+**A**: **不可以**！Page 函数是全局的，无需 import：
+
+```tsx
+// ❌ 错误 - 不要 import
+import { Page } from "../src/injection-typed.ts";
+
+// ✅ 正确 - 直接使用
+export default Page(async function(ctx, { session }) {
+  // ...
+});
+```
+
+### Q: 依赖每次请求都会重新构建吗？
+
+**A**: 是的，每个请求都会调用 `builder(ctx)` 重新构建依赖。这是设计使然，确保：
+1. 每个请求获得独立的依赖实例
+2. 可以基于请求上下文构建不同的依赖
+3. 避免请求间的状态污染
+
+如果需要单例，可以在 builder 外部缓存实例。
+
+### Q: 如何调试依赖注入？
+
+**A**: 使用 `getRegisteredDeps()` 查看已注册的依赖：
+
+```typescript
+// main.ts
+registerDep('db', (ctx) => new Database());
+
+console.log('已注册的依赖:', getRegisteredDeps());
+// 输出: ['db', 'session', 'cookies', ...]
+```
+
+## 测试
+
+### 单元测试
+
+运行依赖注入单元测试：
+
+```bash
+deno test --allow-all tests/unit/injection_test.ts
+```
+
+测试覆盖：
+- ✓ 注册单个依赖
+- ✓ 注册多个依赖
+- ✓ 取消注册依赖
+- ✓ 获取已注册的依赖列表
+- ✓ Page 函数包装
+- ✓ 单个依赖注入
+- ✓ 多个依赖注入
+- ✓ 异步依赖构建
+- ✓ 依赖可以访问 context
+- ✓ 类型安全和类型推断
+- ✓ 全局 Page 函数
+- ✓ 懒加载机制
 
 ## 相关文档
 
 - [功能特性首页](./README.md) - 查看其他功能
+- [Session 功能](./session.md) - Session 管理详细文档
+- [Cookie 功能](./cookies.md) - Cookie 管理详细文档
+- [AppDeps 使用指南](./appdeps.md) - 依赖注入最佳实践
 - [架构设计](../architecture.md) - 了解依赖注入的实现原理
-- [开发指南](../development.md) - 如何开发新功能
-- [历史文档](../history/README.md#依赖注入) - 依赖注入功能演进历史
 
 ---
 

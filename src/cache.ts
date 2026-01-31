@@ -83,8 +83,8 @@ export async function getPage(
   filepath: string,
   forceReload: boolean = false,
 ): Promise<PageFunction> {
-  // filepath might already be absolute (from resolvePath with resolved root)
-  // or relative (for backward compatibility)
+  // filepath 可能已经是绝对路径（来自 resolvePath 解析后的 root）
+  // 或者是相对路径（为了向后兼容）
   const absPath = filepath.startsWith("/") || filepath.match(/^[a-zA-Z]:/)
     ? filepath
     : join(Deno.cwd(), filepath);

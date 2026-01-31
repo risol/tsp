@@ -149,14 +149,14 @@ export function createPage() {
         // 构建依赖
         const dep = builder(ctx);
 
-        // 🔧 修复: 如果是Promise，直接返回Promise
+        // 🔧 修复：如果是 Promise，直接返回 Promise
         // 这样 user code 中 await session.getUser() 仍然有效
         if (dep instanceof Promise) {
-          // 先缓存Promise，避免重复构建
+          // 先缓存 Promise，避免重复构建
           cache.set(prop, dep);
 
-          // 直接返回Promise
-          // user code 可以这样使用: const session = await deps.session
+          // 直接返回 Promise
+          // user code 可以这样使用：const session = await deps.session
           return dep as unknown;
         }
 

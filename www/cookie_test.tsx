@@ -17,7 +17,7 @@ export default Page(async function (ctx, { cookies }) {
     return (
       <html>
         <head>
-          <title>Cookie E2E Tests</title>
+          <title>Cookie E2E 测试</title>
           <style>
             {`
             body { font-family: system-ui, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }
@@ -32,10 +32,10 @@ export default Page(async function (ctx, { cookies }) {
           </style>
         </head>
         <body>
-          <h1>🍪 Cookie Management E2E Tests</h1>
+          <h1>🍪 Cookie 管理 E2E 测试</h1>
 
           <div class="test-section">
-            <h2>Test 1: Basic Cookie Setting</h2>
+            <h2>测试 1：基础 Cookie 设置</h2>
             <p>
               Sets a simple cookie named <code>username</code>
             </p>
@@ -43,7 +43,7 @@ export default Page(async function (ctx, { cookies }) {
           </div>
 
           <div class="test-section">
-            <h2>Test 2: Cookie with Options</h2>
+            <h2>测试 2：带选项的 Cookie</h2>
             <p>
               Sets a cookie with httpOnly, secure, sameSite, and maxAge options
             </p>
@@ -51,13 +51,13 @@ export default Page(async function (ctx, { cookies }) {
           </div>
 
           <div class="test-section">
-            <h2>Test 3: Cookie Deletion</h2>
+            <h2>测试 3：Cookie 删除</h2>
             <p>First sets a cookie, then deletes it</p>
             <a href="?action=delete">Test Cookie Deletion</a>
           </div>
 
           <div class="test-section">
-            <h2>Test 4: Batch Operations</h2>
+            <h2>测试 4：批量操作</h2>
             <p>
               Sets multiple cookies at once using <code>setMultiple</code>
             </p>
@@ -65,27 +65,27 @@ export default Page(async function (ctx, { cookies }) {
           </div>
 
           <div class="test-section">
-            <h2>Test 5: Read Request Cookie</h2>
+            <h2>测试 5：读取请求 Cookie</h2>
             <p>Reads existing cookies and displays them</p>
             <a href="?action=read">Test Read Cookies</a>
           </div>
 
           <div class="test-section">
-            <h2>Test 6: Cookie with Redirect</h2>
+            <h2>测试 6：带重定向的 Cookie</h2>
             <p>Sets a cookie and redirects to another page</p>
             <a href="?action=redirect">Test Cookie with Redirect</a>
           </div>
 
           <div class="test-section">
-            <h2>Test 7: Special Characters</h2>
+            <h2>测试 7：特殊字符</h2>
             <p>Tests cookies with special characters and Unicode</p>
             <a href="?action=special-chars">Test Special Characters</a>
           </div>
 
           <div class="test-section">
-            <h2>Current Cookies</h2>
+            <h2>当前 Cookies</h2>
             <div class="result">
-              <strong>Request Cookies:</strong>
+              <strong>请求 Cookies：</strong>
               <pre>{JSON.stringify(ctx.cookies, null, 2)}</pre>
             </div>
           </div>
@@ -102,7 +102,7 @@ export default Page(async function (ctx, { cookies }) {
     return (
       <html>
         <head>
-          <title>Basic Cookie Test</title>
+          <title>基础 Cookie 测试</title>
           <style>
             {`
             body { font-family: system-ui, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }
@@ -113,8 +113,8 @@ export default Page(async function (ctx, { cookies }) {
         </head>
         <body>
           <div class="success">
-            <h1>✅ Basic Cookie Test Passed</h1>
-            <p>Set cookies:</p>
+            <h1>✅ 基础 Cookie 测试通过</h1>
+            <p>设置的 Cookie：</p>
             <ul>
               <li>
                 <code>username</code> = <code>john_doe</code>
@@ -125,11 +125,11 @@ export default Page(async function (ctx, { cookies }) {
             </ul>
             <p>
               <strong>
-                Check your browser's developer tools (Application → Cookies) to
-                verify!
+                检查浏览器的开发者工具（应用 → Cookies）以
+                验证！
               </strong>
             </p>
-            <a href="?action=demo">← Back to Tests</a>
+            <a href="?action=demo">← 返回测试</a>
           </div>
         </body>
       </html>
@@ -149,7 +149,7 @@ export default Page(async function (ctx, { cookies }) {
     return (
       <html>
         <head>
-          <title>Cookie Options Test</title>
+          <title>Cookie 选项测试</title>
           <style>
             {`
             body { font-family: system-ui, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }
@@ -160,8 +160,8 @@ export default Page(async function (ctx, { cookies }) {
         </head>
         <body>
           <div class="success">
-            <h1>✅ Cookie Options Test Passed</h1>
-            <p>Set cookie with options:</p>
+            <h1>✅ Cookie 选项测试通过</h1>
+            <p>设置带选项的 Cookie：</p>
             <ul>
               <li>
                 <code>sessionId</code> = <code>abc123xyz</code>
@@ -184,10 +184,10 @@ export default Page(async function (ctx, { cookies }) {
             </ul>
             <p>
               <strong>
-                Check browser dev tools to verify all options are set!
+                检查浏览器开发者工具验证所有选项都已设置！
               </strong>
             </p>
-            <a href="?action=demo">← Back to Tests</a>
+            <a href="?action=demo">← 返回测试</a>
           </div>
         </body>
       </html>
@@ -202,7 +202,7 @@ export default Page(async function (ctx, { cookies }) {
       return (
         <html>
           <head>
-            <title>Cookie Deletion Test - Step 1</title>
+            <title>Cookie 删除测试 - 步骤 1</title>
             <style>
               {`
               body { font-family: system-ui, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }
@@ -213,12 +213,12 @@ export default Page(async function (ctx, { cookies }) {
           </head>
           <body>
             <div class="info">
-              <h1>Step 1: Cookie Set</h1>
+              <h1>步骤 1：设置 Cookie</h1>
               <p>
                 Set cookie <code>tempCookie</code> ={" "}
                 <code>will_be_deleted</code>
               </p>
-              <a href="?action=delete">Step 2: Delete Cookie →</a>
+              <a href="?action=delete">步骤 2：删除 Cookie →</a>
             </div>
           </body>
         </html>
@@ -231,7 +231,7 @@ export default Page(async function (ctx, { cookies }) {
     return (
       <html>
         <head>
-          <title>Cookie Deletion Test - Step 2</title>
+          <title>Cookie 删除测试 - 步骤 2</title>
           <style>
             {`
             body { font-family: system-ui, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }
@@ -242,20 +242,20 @@ export default Page(async function (ctx, { cookies }) {
         </head>
         <body>
           <div class="success">
-            <h1>✅ Cookie Deletion Test Passed</h1>
+            <h1>✅ Cookie 删除测试通过</h1>
             <p>
               Deleted cookie <code>tempCookie</code>
             </p>
             <p>
               <strong>
-                The cookie should now be removed from your browser!
+              该 Cookie 现在应该已经从您的浏览器中移除！
               </strong>
             </p>
             <p>
-              Refresh this page - the cookie should not be present in request
-              cookies.
+              刷新此页面 - Cookie 不应该出现在请求
+              cookies 中。
             </p>
-            <a href="?action=demo">← Back to Tests</a>
+            <a href="?action=demo">← 返回测试</a>
           </div>
         </body>
       </html>
@@ -273,7 +273,7 @@ export default Page(async function (ctx, { cookies }) {
     return (
       <html>
         <head>
-          <title>Batch Operations Test</title>
+          <title>批量操作测试</title>
           <style>
             {`
             body { font-family: system-ui, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }
@@ -284,9 +284,9 @@ export default Page(async function (ctx, { cookies }) {
         </head>
         <body>
           <div class="success">
-            <h1>✅ Batch Operations Test Passed</h1>
+            <h1>✅ 批量操作测试通过</h1>
             <p>
-              Set multiple cookies using <code>setMultiple</code>:
+              使用 <code>setMultiple</code> 设置多个 Cookie：
             </p>
             <ul>
               <li>
@@ -301,10 +301,10 @@ export default Page(async function (ctx, { cookies }) {
             </ul>
             <p>
               <strong>
-                Check browser dev tools to verify all 3 cookies are set!
+                检查浏览器开发者工具验证所有 3 个 Cookie 都已设置！
               </strong>
             </p>
-            <a href="?action=demo">← Back to Tests</a>
+            <a href="?action=demo">← 返回测试</a>
           </div>
         </body>
       </html>
@@ -323,7 +323,7 @@ export default Page(async function (ctx, { cookies }) {
     return (
       <html>
         <head>
-          <title>Read Request Cookies Test</title>
+          <title>读取请求 Cookie 测试</title>
           <style>
             {`
             body { font-family: system-ui, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }
@@ -334,8 +334,8 @@ export default Page(async function (ctx, { cookies }) {
         </head>
         <body>
           <div class="success">
-            <h1>✅ Read Request Cookies Test</h1>
-            <p>Current request cookies:</p>
+            <h1>✅ 读取请求 Cookie 测试</h1>
+            <p>当前请求的 Cookie：</p>
             <ul>
               <li>
                 <code>username</code>: {username}
@@ -348,14 +348,14 @@ export default Page(async function (ctx, { cookies }) {
               </li>
             </ul>
             <p>
-              Set <code>lastVisit</code> cookie:{" "}
+              设置 <code>lastVisit</code> Cookie：{" "}
               <code>{new Date().toISOString()}</code>
             </p>
             <p>
-              <strong>All cookies from this page:</strong>
+              <strong>此页面的所有 Cookie：</strong>
             </p>
             <pre>{JSON.stringify(ctx.cookies, null, 2)}</pre>
-            <a href="?action=demo">← Back to Tests</a>
+            <a href="?action=demo">← 返回测试</a>
           </div>
         </body>
       </html>
@@ -384,7 +384,7 @@ export default Page(async function (ctx, { cookies }) {
     return (
       <html>
         <head>
-          <title>Special Characters Test</title>
+          <title>特殊字符测试</title>
           <style>
             {`
             body { font-family: system-ui, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }
@@ -395,8 +395,8 @@ export default Page(async function (ctx, { cookies }) {
         </head>
         <body>
           <div class="success">
-            <h1>✅ Special Characters Test Passed</h1>
-            <p>Set cookies with special characters and Unicode:</p>
+            <h1>✅ 特殊字符测试通过</h1>
+            <p>设置带有特殊字符和 Unicode 的 Cookie：</p>
             <ul>
               <li>
                 <code>user name</code> = <code>John Doe</code>
@@ -412,13 +412,13 @@ export default Page(async function (ctx, { cookies }) {
               </li>
             </ul>
             <p>
-              <strong>All values are URL-encoded automatically!</strong>
+              <strong>所有值都会自动进行 URL 编码！</strong>
             </p>
             <p>
-              Check browser dev tools to verify cookies are properly encoded and
-              stored.
+              检查浏览器开发者工具验证 Cookie 是否正确编码和
+              存储。
             </p>
-            <a href="?action=demo">← Back to Tests</a>
+            <a href="?action=demo">← 返回测试</a>
           </div>
         </body>
       </html>
@@ -426,5 +426,5 @@ export default Page(async function (ctx, { cookies }) {
   }
 
   // Fallback
-  return <div>Unknown action</div>;
+  return <div>未知操作</div>;
 });

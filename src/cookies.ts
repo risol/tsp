@@ -1,12 +1,12 @@
 /**
- * Cookie Management Module for TSP
+ * Cookie 管理模块（用于 TSP）
  *
- * Provides cookie management capabilities through dependency injection.
- * Uses WeakMap to store cookie operations per request context.
+ * 通过依赖注入提供 cookie 管理功能。
+ * 使用 WeakMap 存储每个请求上下文的 cookie 操作。
  */
 
 /**
- * Standard cookie options compatible with browser Set-Cookie header
+ * 标准 cookie 选项，与浏览器 Set-Cookie 头兼容
  */
 export interface CookieOptions {
   /** Expiration date (GMT string or Date object) */
@@ -26,7 +26,7 @@ export interface CookieOptions {
 }
 
 /**
- * Cookie manager interface for setting and deleting cookies
+ * Cookie 管理器接口，用于设置和删除 cookies
  */
 export interface CookieManager {
   /** Set a single cookie */
@@ -48,25 +48,25 @@ export interface CookieManager {
 }
 
 /**
- * Internal request context for storing cookie operations
+ * 内部请求上下文，用于存储 cookie 操作
  */
 interface RequestContext {
   setCookieHeaders: string[];
 }
 
 /**
- * WeakMap to store cookie operations per request
- * WeakMap is used so that when PageContext is garbage collected,
- * the associated cookie context is automatically cleaned up
+ * WeakMap 用于存储每个请求的 cookie 操作
+ * 使用 WeakMap 是为了让当 PageContext 被垃圾回收时，
+ * 关联的 cookie 上下文也会自动清理
  */
 const cookieContextMap = new WeakMap<PageContext, RequestContext>();
 
 /**
- * Serialize a cookie to Set-Cookie header format
- * @param name Cookie name
- * @param value Cookie value
- * @param options Cookie options
- * @returns Set-Cookie header value
+ * 将 cookie 序列化为 Set-Cookie 头格式
+ * @param name Cookie 名称
+ * @param value Cookie 值
+ * @param options Cookie 选项
+ * @returns Set-Cookie 头值
  */
 export function serializeCookie(
   name: string,
@@ -75,10 +75,10 @@ export function serializeCookie(
 ): string {
   const parts: string[] = [];
 
-  // Encode name and value (required for special characters)
+  // 编码名称和值（特殊字符需要）
   parts.push(`${encodeURIComponent(name)}=${encodeURIComponent(value)}`);
 
-  // Max-Age takes precedence over Expires
+  // Max-Age 优先于 Expires
   if (options.maxAge !== undefined) {
     parts.push(`Max-Age=${options.maxAge}`);
   } else if (options.expires) {
@@ -117,12 +117,12 @@ export function serializeCookie(
 }
 
 /**
- * Create a cookie manager for the given request context
- * @param ctx Page context
- * @returns Cookie manager instance
+ * 为给定的请求上下文创建 cookie 管理器
+ * @param ctx Page 上下文
+ * @returns Cookie 管理器实例
  */
 export function createCookieManager(ctx: PageContext): CookieManager {
-  // Get or create request context
+  // 获取或创建请求上下文
   let requestContext = cookieContextMap.get(ctx);
   if (!requestContext) {
     requestContext = { setCookieHeaders: [] };
@@ -145,8 +145,8 @@ export function createCookieManager(ctx: PageContext): CookieManager {
       name: string,
       options?: Pick<CookieOptions, "domain" | "path">,
     ): void {
-      // To delete a cookie, set it with maxAge=0 and expires in the past
-      // Must match domain and path from when it was set
+      // 要删除 cookie，设置 maxAge=0 并过期时间为过去
+      // 必须匹配设置时的 domain 和 path
       const header = serializeCookie(name, "", {
         ...options,
         maxAge: 0,
@@ -181,10 +181,10 @@ export function createCookieManager(ctx: PageContext): CookieManager {
 }
 
 /**
- * Extract Set-Cookie headers for the given request context
- * Called by main.ts to add cookies to the HTTP response
- * @param ctx Page context
- * @returns Array of Set-Cookie header values, or undefined if none
+ * 为给定的请求上下文提取 Set-Cookie 头
+ * 被 main.ts 调用以添加 cookies 到 HTTP 响应
+ * @param ctx Page 上下文
+ * @returns Set-Cookie 头值数组，如果没有则返回 undefined
  */
 export function extractSetCookieHeaders(
   ctx: PageContext,

@@ -1,16 +1,16 @@
-# Cookie Management - Quick Reference
+# Cookie 管理 - 快速参考
 
-## Basic Usage
+## 基本用法
 
-### Set a Cookie
+### 设置 Cookie
 ```tsx
-export default Page(['cookies'], async function(ctx, { cookies }) {
+export default Page(, async function(ctx, { cookies }) {
   cookies.set('name', 'value');
   return <div>Done!</div>;
 });
 ```
 
-### Read Cookies
+### 读取 Cookie
 ```tsx
 export default Page(async function(ctx) {
   const value = ctx.cookies.cookieName || 'default';
@@ -18,28 +18,28 @@ export default Page(async function(ctx) {
 });
 ```
 
-### Delete a Cookie
+### 删除 Cookie
 ```tsx
 cookies.delete('cookieName', { path: '/' });
 ```
 
-## Cookie Options
+## Cookie 选项
 
 ```tsx
 cookies.set('session', 'abc123', {
-  expires: new Date('2025-12-31'),  // or maxAge
-  maxAge: 3600,                      // seconds (takes precedence)
-  domain: '.example.com',            // optional
-  path: '/',                         // optional
-  secure: true,                      // HTTPS only
-  httpOnly: true,                    // no JS access
+  expires: new Date('2025-12-31'),  // 或 maxAge
+  maxAge: 3600,                      // 秒（优先级更高）
+  domain: '.example.com',            // 可选
+  path: '/',                         // 可选
+  secure: true,                      // 仅 HTTPS
+  httpOnly: true,                    // 禁止 JS 访问
   sameSite: 'Strict',                // 'Strict' | 'Lax' | 'None'
 });
 ```
 
-## Batch Operations
+## 批量操作
 
-### Set Multiple
+### 批量设置
 ```tsx
 cookies.setMultiple({
   'theme': { value: 'dark', options: { maxAge: 31536000 } },
@@ -47,23 +47,23 @@ cookies.setMultiple({
 });
 ```
 
-### Delete Multiple
+### 批量删除
 ```tsx
 cookies.deleteMultiple(['cookie1', 'cookie2'], { path: '/' });
 ```
 
-## Security Checklist
+## 安全清单
 
-- ✅ Use `httpOnly: true` for session cookies
-- ✅ Use `secure: true` on HTTPS sites
-- ✅ Use `sameSite: 'Strict'` or `'Lax'` for CSRF protection
-- ✅ Prefer `maxAge` over `expires`
-- ✅ Set explicit `path` (usually `'/'`)
-- ✅ Avoid `domain` unless needed
+- ✅ 对 session cookie 使用 `httpOnly: true`
+- ✅ 在 HTTPS 网站上使用 `secure: true`
+- ✅ 使用 `sameSite: 'Strict'` 或 `'Lax'` 进行 CSRF 防护
+- ✅ 优先使用 `maxAge` 而非 `expires`
+- ✅ 设置显式的 `path`（通常为 `'/'`）
+- ✅ 除非需要，否则避免使用 `domain`
 
-## Examples
+## 示例
 
-### Authentication Cookie
+### 认证 Cookie
 ```tsx
 cookies.set('sessionId', userId, {
   httpOnly: true,
@@ -74,60 +74,60 @@ cookies.set('sessionId', userId, {
 });
 ```
 
-### User Preferences
+### 用户偏好
 ```tsx
 cookies.set('theme', 'dark', { maxAge: 31536000, path: '/' });
 ```
 
-### Cookie Consent
+### Cookie 同意
 ```tsx
 cookies.set('consent', 'accepted', { maxAge: 31536000, path: '/' });
 ```
 
-## Testing
+## 测试
 
-Run tests:
+运行测试：
 ```bash
-# Unit tests
+# 单元测试
 deno test --allow-all tests/unit/cookie_test.ts
 
-# E2E tests (start server first)
+# E2E 测试（先启动服务器）
 deno task dev
-# Visit: http://localhost:9000/cookie_test.tsx
+# 访问: http://localhost:9000/cookie_test.tsx
 
-# Quick verification
+# 快速验证
 deno run --allow-all tests/verify_cookies.ts
 ```
 
-## Files
+## 文件
 
-- **Implementation**: `src/cookies.ts`
-- **Types**: `types.d.ts` (AppDeps interface)
-- **Integration**: `src/main.ts` (registration + response handling)
-- **Tests**: `tests/unit/cookie_test.ts`
-- **E2E**: `tests/test_www/cookie_test.tsx`
-- **Demo**: `www/cookie_demo.tsx`
-- **Docs**: `docs/features/cookies.md`
+- **实现**：`src/cookies.ts`
+- **类型**：`types.d.ts`（AppDeps 接口）
+- **集成**：`src/main.ts`（注册 + 响应处理）
+- **测试**：`tests/unit/cookie_test.ts`
+- **E2E**：`tests/test_www/cookie_test.tsx`
+- **演示**：`www/cookie_demo.tsx`
+- **文档**：`docs/features/cookies.md`
 
-## Common Issues
+## 常见问题
 
-**Cookie not being set?**
-- Check domain/path match your site
-- Check `secure` flag (requires HTTPS)
-- Check browser console for errors
-- Inspect response headers in dev tools
+**Cookie 未被设置？**
+- 检查 domain/path 是否与站点匹配
+- 检查 `secure` 标志（需要 HTTPS）
+- 检查浏览器控制台是否有错误
+- 在开发工具中检查响应头
 
-**Cookie not being read?**
-- Use `ctx.cookies.cookieName` (not the cookies manager)
-- Check exact name (case-sensitive)
-- Verify domain/path match
+**Cookie 未被读取？**
+- 使用 `ctx.cookies.cookieName`（而非 cookies 管理器）
+- 检查确切的名称（区分大小写）
+- 验证 domain/path 是否匹配
 
-**Delete not working?**
-- Must match domain/path from when it was set
-- Check for `Set-Cookie` with `Max-Age=0` in response
+**删除无效？**
+- 必须与设置时的 domain/path 匹配
+- 检查响应头中是否有带有 `Max-Age=0` 的 Set-Cookie
 
-## See Also
+## 参见
 
-- [Full Documentation](./cookies.md)
-- [Implementation Summary](./cookies-implementation-summary.md)
-- [Dependency Injection](../injection.md)
+- [完整文档](./cookies.md)
+- [实现总结](./cookies-implementation-summary.md)
+- [依赖注入](../injection.md)

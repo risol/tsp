@@ -1,6 +1,6 @@
 /**
- * Precompilation Tool
- * Compile TSX files in www directory to JS files in cache directory
+ * 预编译工具
+ * 将 www 目录中的 TSX 文件编译为缓存目录中的 JS 文件
  */
 
 import { cleanCache, compileAll } from "./precompiler_lib.ts";

@@ -14,7 +14,7 @@ export default Page(async function (ctx, { cookies }) {
     return (
       <html>
         <head>
-          <title>Cookie Demo - TSP</title>
+          <title>Cookie 演示 - TSP</title>
           <meta charset="UTF-8" />
           <style>
             {`
@@ -69,21 +69,21 @@ export default Page(async function (ctx, { cookies }) {
           </style>
         </head>
         <body>
-          <h1>🍪 Cookie Management Demo</h1>
+          <h1>🍪 Cookie 管理演示</h1>
 
           <div class="card">
-            <h2>Welcome!</h2>
+            <h2>欢迎！</h2>
             <p>
-              This is your visit number: <strong>{visitCount}</strong>
+              这是您的访问次数：<strong>{visitCount}</strong>
             </p>
             <p>
-              TSP's cookie system makes it easy to manage HTTP cookies with full
-              TypeScript support.
+              TSP 的 cookie 系统让您能够轻松管理 HTTP cookies，
+              并提供完整的 TypeScript 支持。
             </p>
           </div>
 
           <div class="card">
-            <h2>Current Cookies</h2>
+            <h2>当前 Cookies</h2>
             {Object.keys(ctx.cookies).length > 0
               ? (
                 <table>
@@ -109,40 +109,40 @@ export default Page(async function (ctx, { cookies }) {
               )
               : (
                 <p>
-                  <em>No cookies set yet. Try the buttons below!</em>
+                  <em>尚未设置任何 Cookie。试试下面的按钮！</em>
                 </p>
               )}
           </div>
 
           <div class="card">
-            <h2>Try It Out</h2>
+            <h2>试试看</h2>
             <div>
               <form method="POST" action="?action=set">
                 <button type="submit" class="btn">
-                  Set Visit Counter Cookie
+                  设置访问计数器 Cookie
                 </button>
               </form>
               <form method="POST" action="?action=set_preferences">
                 <button type="submit" class="btn">
-                  Set Preference Cookies
+                  设置偏好设置 Cookie
                 </button>
               </form>
               <form method="POST" action="?action=set_secure">
                 <button type="submit" class="btn">
-                  Set Secure Session Cookie
+                  设置安全会话 Cookie
                 </button>
               </form>
               <form method="POST" action="?action=clear">
                 <button type="submit" class="btn secondary">
-                  Clear All Cookies
+                  清除所有 Cookie
                 </button>
               </form>
             </div>
           </div>
 
           <div class="card">
-            <h2>How It Works</h2>
-            <p>Setting cookies in TSP is simple:</p>
+            <h2>工作原理</h2>
+            <p>在 TSP 中设置 Cookie 很简单：</p>
             <pre><code>{`
 export default Page(async function(ctx, { cookies }) {
   // Set a simple cookie
@@ -159,7 +159,7 @@ export default Page(async function(ctx, { cookies }) {
   return <div>Done!</div>;
 });
             `.trim()}</code></pre>
-            <p>Reading cookies is even easier - they're in your context:</p>
+            <p>读取 Cookie 更简单 - 它们就在您的上下文中：</p>
             <pre><code>{`
 const username = ctx.cookies.username || 'Guest';
             `.trim()}</code></pre>

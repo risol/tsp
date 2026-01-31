@@ -544,12 +544,12 @@ async function handleRequest(
 async function main(): Promise<void> {
   const config = await parseArgs();
 
-  // Resolve root directory to absolute path
+  // 将根目录解析为绝对路径
   config.root = resolve(config.root);
 
-  // Set cache base directory to current working directory
-  // This ensures cache is created relative to where the binary is run from
-  // Whether running from project root or dist/, the cache will be in ./cache/tsp/
+  // 设置缓存基础目录为当前工作目录
+  // 这确保了缓存相对于运行二进制文件的目录创建
+  // 无论是从项目根目录还是 dist/ 运行，缓存都会在 ./cache/tsp/ 中
   setCacheBaseDir(Deno.cwd());
 
   // 注册依赖注入函数（类型安全版本）
@@ -560,18 +560,18 @@ async function main(): Promise<void> {
     };
   });
 
-  // 注册cookie管理器
+  // 注册 cookie 管理器
   registerDep("cookies", async (ctx) => {
     const { createCookieManager } = await import("./cookies.ts");
     return createCookieManager(ctx);
   });
 
-  // 全局SessionStore单例
+  // 全局 SessionStore 单例
   let sessionStore: SessionStore | null = null;
 
-  // 注册session依赖 (now synchronous!)
+  // 注册 session 依赖（现在是同步的！）
   registerDep("session", (ctx) => {
-    // 初始化全局store（仅一次）
+    // 初始化全局 store（仅一次）
     if (!sessionStore) {
       // 从环境变量读取密钥
       const secret = Deno.env.get("TSP_SESSION_SECRET");
@@ -586,10 +586,10 @@ async function main(): Promise<void> {
       console.log("[Session] Session store initialized");
     }
 
-    // Get cookie manager for setting cookies
+    // 获取用于设置 cookies 的 cookie 管理器
     const cookieManager = createCookieManager(ctx);
 
-    // 创建session管理器
+    // 创建 session 管理器
     return createSessionManager(ctx, sessionStore, cookieManager);
   });
 
@@ -613,7 +613,7 @@ Starting server...
     console.log("\n🔨 Precompiling TSX files...");
     const { compileAll } = await import("./precompiler_lib.ts");
     try {
-      // 计算相对于CWD的根目录路径
+      // 计算相对于 CWD 的根目录路径
       const rootDir = relative(Deno.cwd(), config.root);
       const compiledFiles = await compileAll(rootDir);
 
@@ -648,7 +648,7 @@ Starting server...
     port: config.port,
     onListen: ({ port, hostname }) => {
       console.log(`✓ Server running at http://${hostname}:${port}/`);
-      console.log("Press Ctrl+C to stop.\n");
+      console.log("按 Ctrl+C 停止。\n");
     },
   }, async (req) => {
     const resp = await handleRequest(req, config);
