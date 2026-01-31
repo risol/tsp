@@ -10,35 +10,21 @@ TSP 提供了一个安全、类型安全的 session 管理系统，基于 cookie
 - **滑动过期**：可选的自动刷新 session 超时时间
 - **Session 固定防护**：登录时重新生成 session ID
 - **类型安全**：完整的 TypeScript 支持和依赖注入
-- **全局函数**：支持直接调用 `session()` 全局函数，更简洁
 
 ## 快速开始
 
-### 推荐方式：全局函数
+### 1. 启用 Session 依赖
 
-Session 已内置为全局函数，无需额外设置即可使用：
+Session 在 `src/main.ts` 中自动注册，无需额外设置。
 
-```tsx
-export default async function(ctx) {
-  const user = await session.getUser();
-
-  if (!user) {
-    return { redirect: '/login.tsx', status: 302 };
-  }
-
-  return <div>欢迎, {user.name}!</div>;
-}
-```
-
-### 可选方式：Page 包装器
-
-也可以使用 Page 包装器（适用于需要多种依赖的场景）：
+### 2. 在页面中使用 Session
 
 ```tsx
 export default Page(async function(ctx, { session }) {
   const user = await session.getUser();
 
   if (!user) {
+    // 如果未认证，重定向到登录页
     return { redirect: '/login.tsx', status: 302 };
   }
 

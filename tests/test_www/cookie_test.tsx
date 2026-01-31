@@ -9,7 +9,7 @@
  * - Reading request cookies and setting new ones
  */
 
-export default async function (ctx) {
+export default Page(async function (ctx, { cookies }) {
   const action = ctx.query.action || "demo";
 
   // Demo mode: show all test links
@@ -427,4 +427,4 @@ export default async function (ctx) {
 
   // Fallback
   return <div>Unknown action</div>;
-}
+});

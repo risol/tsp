@@ -2,10 +2,10 @@
  * Session简单测试页面
  */
 
-export default async function (ctx) {
+export default Page(async function (ctx, { session }) {
   // 简单测试：只检查session对象
-  const sessionType = typeof session();
-  const hasGetUser = typeof session()?.getUser === "function";
+  const sessionType = typeof session;
+  const hasGetUser = typeof session?.getUser === "function";
 
   return (
     <html>
@@ -19,4 +19,4 @@ export default async function (ctx) {
       </body>
     </html>
   );
-}
+});

@@ -9,7 +9,7 @@
  * - Session status
  */
 
-export default async function (context) {
+export default Page(async function (context, { session }) {
   const action = context.query.action || "view";
 
   // Handle actions
@@ -484,4 +484,4 @@ export default async function (context) {
       </body>
     </html>
   );
-}
+});

@@ -51,36 +51,8 @@ declare global {
   }
 
   /**
-   * 全局变量 - 获取当前请求的 Session 管理器
-   * 可以直接在任何 TSX 页面中使用，无需 Page 包装器
-   *
-   * @example
-   * ```tsx
-   * export default async function(ctx) {
-   *   const user = await session.getUser();
-   *   return <div>欢迎, {user?.name}</div>;
-   * }
-   * ```
-   */
-  const session: import("./src/session.ts").SessionManager;
-
-  /**
-   * 全局变量 - 获取当前请求的 Cookie 管理器
-   * 可以直接在任何 TSX 页面中使用，无需 Page 包装器
-   *
-   * @example
-   * ```tsx
-   * export default async function(ctx) {
-   *   cookies.set('theme', 'dark');
-   *   return <div>主题已设置</div>;
-   * }
-   * ```
-   */
-  const cookies: import("./src/cookies.ts").CookieManager;
-
-  /**
-   * 应用依赖类型（用于 Page 包装器）
-   * Page 包装器提供可选的依赖注入方式
+   * 应用依赖类型
+   * 在此声明所有可注入的依赖及其类型
    *
    * @example
    * ```typescript
@@ -108,8 +80,7 @@ declare global {
     };
 
     /**
-     * Session 管理（通过 Page 包装器注入）
-     * @deprecated 推荐使用全局函数 session()
+     * Session 管理
      */
     session: import("./src/session.ts").SessionManager;
 
@@ -119,29 +90,20 @@ declare global {
     logger: typeof console.log;
 
     /**
-     * Cookie管理器（通过 Page 包装器注入）
-     * @deprecated 推荐使用全局函数 cookies()
+     * Cookie管理器
      */
     cookies: import("./src/cookies.ts").CookieManager;
   }
 
   /**
-   * 全局 Page 函数（可选的依赖注入包装器）
-   * 推荐使用全局函数 session() 和 cookies()，Page 包装器作为备选方案
+   * 全局 Page 函数
+   * TSX 文件中可以直接使用，无需 import
    *
    * @example
    * ```tsx
-   * // 推荐方式：使用全局函数
-   * export default async function(ctx) {
-   *   const user = await session().getUser();
-   *   return <div>{user?.name}</div>;
-   * }
-   *
-   * // 可选方式：使用 Page 包装器
-   * export default Page(async function(ctx, { session, logger }) {
-   *   const user = await session.getUser();
-   *   logger('用户访问');
-   *   return <div>{user?.name}</div>;
+   * export default Page(async function(ctx, { testFunc, db }) {
+   *   const result = testFunc();  // ✅ 有完整类型提示
+   *   return <div>{result}</div>;
    * });
    * ```
    */

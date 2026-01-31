@@ -1,29 +1,28 @@
 # TSP 中的 Cookie 管理
 
-TSP 提供强大、类型安全的 cookie 管理系统。支持全局函数和依赖注入两种方式，推荐使用全局函数方式。
+TSP 通过依赖注入提供强大、类型安全的 cookie 管理系统。该功能允许你设置、删除和管理 HTTP cookie，并拥有完整的 TypeScript 支持。
 
 ## 概述
 
-Cookie 管理系统提供：
+Cookie 管理系统构建在 TSP 的依赖注入框架之上，提供：
 
 - **类型安全的 API**，完整的 TypeScript IntelliSense 支持
 - **标准 cookie 选项**支持（expires、maxAge、domain、path、secure、httpOnly、sameSite）
 - **自动 URL 编码**，用于 cookie 名称和值
 - **批量操作**，一次性设置/删除多个 cookie
 - **无缝集成**，与重定向和响应配合使用
-- **全局函数**，支持直接调用 `cookies()`，更简洁
 
 ## 基本用法
 
-### 推荐方式：全局函数
+### 设置 Cookie
 
 ```tsx
-export default async function(ctx) {
+export default Page(, async function(ctx, { cookies }) {
   // 设置简单的 cookie
   cookies.set('username', 'john_doe');
 
   return <div>Cookie set!</div>;
-}
+});
 ```
 
 ### 读取 Cookie
@@ -31,33 +30,22 @@ export default async function(ctx) {
 请求 cookie 会自动解析并在 `ctx.cookies` 中可用：
 
 ```tsx
-export default async function(ctx) {
+export default Page(, async function(ctx, { cookies }) {
   // 读取现有 cookie
   const username = ctx.cookies.username || 'Guest';
 
   return <div>Hello, {username}!</div>;
-}
+});
 ```
 
 ### 删除 Cookie
 
 ```tsx
-export default async function(ctx) {
+export default Page(, async function(ctx, { cookies }) {
   // 删除 cookie
   cookies.delete('username');
 
   return <div>Cookie deleted!</div>;
-}
-```
-
-### 可选方式：Page 包装器
-
-如果需要使用 Page 包装器（适用于复杂依赖场景）：
-
-```tsx
-export default Page(async function(ctx, { cookies }) {
-  cookies.set('username', 'john_doe');
-  return <div>Cookie set!</div>;
 });
 ```
 

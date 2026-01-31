@@ -44,8 +44,8 @@ export async function getUser() {
 ```
 
 ```tsx
-// ✅ 正确 - 中文注释和界面文本，使用全局函数
-export default async function(ctx) {
+// ✅ 正确 - 中文注释和界面文本
+export default Page(async function(ctx, { session }) {
   // 获取当前用户
   const user = await session.getUser();
 
@@ -54,12 +54,12 @@ export default async function(ctx) {
   }
 
   return <div>欢迎, {user.name}!</div>;
-}
+});
 ```
 
 ```tsx
 // ❌ 错误 - 英文注释和界面文本
-export default async function(ctx) {
+export default Page(async function(ctx, { session }) {
   // Get current user
   const user = await session.getUser();
 
@@ -68,7 +68,7 @@ export default async function(ctx) {
   }
 
   return <div>Welcome, {user.name}!</div>;
-}
+});
 ```
 
 ## Project Overview
@@ -142,18 +142,16 @@ cd dist
 **NEVER import from `src/` in TSX files under `www/` or `tests/test_www/`**
 
 ```tsx
-// ✅ CORRECT - Global functions are available everywhere
-export default async function(context) {
-  const user = await session.getUser();
-  cookies.set('theme', 'dark');
-  return <div>Hello {user?.name}</div>;
+// ✅ CORRECT - Global types are available everywhere
+export default async function(context: PageContext) {
+  return <div>Hello</div>;
 }
 
-// ✅ CORRECT - Page function is global (optional, for complex dependencies)
+// ✅ CORRECT - Page function is global
 export default Page(async function(context, { db, logger }) {
   const users = await db?.query('SELECT * FROM users');
   logger?.('Page loaded');
-  return <div>{users}</div>
+  return <div>{users}</div>;
 });
 
 // ❌ WRONG - Do NOT import from src/
@@ -161,7 +159,7 @@ import type { PageContext } from "../src/cache.ts";
 import { Page } from "../src/injection-typed.ts";
 ```
 
-**Why**: Types (`PageContext`, `RedirectResult`, `AppDeps`) and global functions (`session()`, `cookies()`) and the `Page` function are declared globally in `types.d.ts`. Compiled binaries cannot resolve relative paths to `src/` during runtime.
+**Why**: Types (`PageContext`, `RedirectResult`, `AppDeps`) and the `Page` function are declared globally in `types.d.ts`. Compiled binaries cannot resolve relative paths to `src/` during runtime.
 
 **Allowed imports**:
 - `www/` files can import from other `www/` files (components, etc.)
@@ -240,30 +238,7 @@ The cache directory is always relative to where the binary is run from.
 
 ### Dependency Injection System
 
-TSP 支持两种使用依赖的方式：
-
-#### 推荐方式：全局函数
-
-对于大多数场景（只需要 session 和 cookies），推荐使用全局函数：
-
-```typescript
-// 使用方式：直接调用全局函数
-export default async function(ctx) {
-  const user = await session.getUser();
-  cookies.set('theme', 'dark');
-  return <div>欢迎, {user?.name}</div>;
-}
-```
-
-**优点**：
-- ✅ 语法更简洁，不需要包装器
-- ✅ 完整的类型提示和 IDE 支持
-- ✅ 自动请求隔离，每个请求有独立的 session/cookies
-- ✅ 请求结束后自动清理，避免内存泄漏
-
-#### 可选方式：Page 包装器
-
-Page 包装器适用于需要自定义依赖（如 db、logger）的复杂场景：
+Type-safe dependency injection using the `Page` wrapper:
 
 1. **Declaration** (`types.d.ts`):
    ```typescript
@@ -299,11 +274,9 @@ All types are declared globally in `types.d.ts`:
 - `PageContext` - Request context with method, URL, headers, query, body, cookies
 - `RedirectResult` - HTTP redirect configuration
 - `AppDeps` - Application dependencies (extendable)
-- `Page` function - Dependency injection wrapper (optional)
-- `session()` function - Get current request's SessionManager
-- `cookies()` function - Get current request's CookieManager
+- `Page` function - Dependency injection wrapper
 
-This design means TSX files need NO imports for types or global functions.
+This design means TSX files need NO imports for types or the Page function.
 
 ## Key Source Files
 
