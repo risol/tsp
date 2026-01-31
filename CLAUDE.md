@@ -2,6 +2,75 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 语言和交流规则
+
+### 🌏 语言要求
+
+**所有交流和内容必须使用中文**，除非遇到以下情况：
+
+1. **代码和技术术语**：保留英文
+   - 变量名、函数名、类名、类型名
+   - 技术术语：TypeScript、Deno、JSX、API、HTTP、SQL 等
+   - 编程概念：async/await、Promise、Proxy、Map 等
+
+2. **代码注释**：必须使用中文
+   - 单行注释：`// 这是一个注释`
+   - 多行注释：`/* 这是多行注释 */`
+   - JSDoc 注释：`/** 函数说明 */`
+
+3. **文档和说明**：必须使用中文
+   - Markdown 文档（*.md）
+   - TSX 中的用户界面文本
+   - 错误提示信息（用户可见的）
+   - README、说明文档等
+
+4. **回复语言**：使用中文
+   - 与用户交流时使用中文
+   - 解释概念时使用中文
+   - 代码说明使用中文
+
+### 📝 示例
+
+```typescript
+/**
+ * 获取当前用户信息
+ * @returns 用户对象或 null
+ */
+export async function getUser() {
+  // 从数据库获取用户
+  const user = await db.query('SELECT * FROM users');
+  return user;
+}
+```
+
+```tsx
+// ✅ 正确 - 中文注释和界面文本
+export default Page(async function(ctx, { session }) {
+  // 获取当前用户
+  const user = await session.getUser();
+
+  if (!user) {
+    return <div>请先登录</div>;  // 中文界面文本
+  }
+
+  return <div>欢迎, {user.name}!</div>;
+});
+```
+
+```tsx
+// ❌ 错误 - 英文注释和界面文本
+export default Page(async function(ctx, { session }) {
+  // Get current user
+  const user = await session.getUser();
+
+  if (!user) {
+    return <div>Please login</div>;
+  }
+
+  return <div>Welcome, {user.name}!</div>;
+});
+```
+
 ## Project Overview
 
 TSP (TypeScript Server Page) is a template server built with Deno + TSX + Preact. It executes `.tsx` files directly (like PHP) and serves them as HTML, with intelligent module caching and hot reload support for nested dependencies.
