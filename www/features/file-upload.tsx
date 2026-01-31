@@ -1,387 +1,165 @@
-export default Page(async function(ctx, { response }) {
-  const action = ctx.query.action || "demo";
+import { Layout } from "../components/Layout.tsx";
 
-  // 处理单文件上传
-  if (action === "upload-single" && ctx.method === "POST") {
-    const file = ctx.files.file as UploadedFile;
+export default async function (context: PageContext) {
+  const { method, files } = context;
 
-    if (!file) {
-      return response.error("没有上传文件", 400);
-    }
+  // 处理文件上传
+  let uploadedFiles: Array<{ original: string; saved: string; size: number }> = [];
 
-    try {
-      // 创建 uploads 目录
-      const uploadDir = "./uploads";
-      try {
-        await Deno.mkdir(uploadDir, { recursive: true });
-      } catch {
-        // 目录可能已存在，忽略错误
-      }
+  if (method === "POST" && files && files.file) {
+    const { generateUniqueFilename } = await import("../../src/files.ts");
+
+    const uploadFile = async (file: any) => {
+      // 使用 nanoid 生成唯一文件名
+      const uniqueFilename = generateUniqueFilename(file.name);
+      const savePath = `./uploads/${uniqueFilename}`;
+
+      // 确保上传目录存在
+      await Deno.mkdir("./uploads", { recursive: true });
 
       // 保存文件
-      const filename = `${Date.now()}_${file.name}`;
-      const filepath = `${uploadDir}/${filename}`;
-      await file.save(filepath);
+      await file.save(savePath);
 
-      return response.json({
-        success: true,
-        message: "文件上传成功",
-        file: {
-          name: file.name,
-          type: file.type,
-          size: file.size,
-          savedAs: filename,
-        },
-      });
-    } catch (error) {
-      return response.error(
-        `文件保存失败: ${error instanceof Error ? error.message : String(error)}`,
-        500,
-      );
+      return {
+        original: file.name,
+        saved: uniqueFilename,
+        size: file.size,
+      };
+    };
+
+    // 处理单个文件或文件数组
+    if (Array.isArray(files.file)) {
+      for (const file of files.file) {
+        uploadedFiles.push(await uploadFile(file));
+      }
+    } else {
+      uploadedFiles.push(await uploadFile(files.file));
     }
   }
 
-  // 处理多文件上传
-  if (action === "upload-multiple" && ctx.method === "POST") {
-    const files = ctx.files.files as UploadedFile[] | UploadedFile;
-
-    if (!files) {
-      return response.error("没有上传文件", 400);
-    }
-
-    const fileList = Array.isArray(files) ? files : [files];
-
-    try {
-      // 创建 uploads 目录
-      const uploadDir = "./uploads";
-      try {
-        await Deno.mkdir(uploadDir, { recursive: true });
-      } catch {
-        // 目录可能已存在，忽略错误
-      }
-
-      const uploadedFiles = [];
-
-      for (const file of fileList) {
-        const filename = `${Date.now()}_${file.name}`;
-        const filepath = `${uploadDir}/${filename}`;
-        await file.save(filepath);
-
-        uploadedFiles.push({
-          name: file.name,
-          type: file.type,
-          size: file.size,
-          savedAs: filename,
-        });
-      }
-
-      return response.json({
-        success: true,
-        message: `成功上传 ${uploadedFiles.length} 个文件`,
-        files: uploadedFiles,
-      });
-    } catch (error) {
-      return response.error(
-        `文件保存失败: ${error instanceof Error ? error.message : String(error)}`,
-        500,
-      );
-    }
-  }
-
-  // 列出已上传的文件
-  if (action === "list") {
-    try {
-      const uploadDir = "./uploads";
-      const entries = Deno.readDir(uploadDir);
-      const files = [];
-
-      for await (const entry of entries) {
-        if (entry.isFile) {
-          const info = await Deno.stat(`${uploadDir}/${entry.name}`);
-          files.push({
-            name: entry.name,
-            size: info.size,
-            mtime: info.mtime?.toISOString(),
-          });
-        }
-      }
-
-      return response.json({
-        files: files.sort((a, b) =>
-          new Date(b.mtime || 0).getTime() - new Date(a.mtime || 0).getTime()
-        ),
-      });
-    } catch (error) {
-      return response.json({ files: [] });
-    }
-  }
-
-  // 默认：展示上传表单
   return (
-    <html>
-      <head>
-        <title>文件上传功能演示 - TSP</title>
-        <meta charset="UTF-8" />
-        <style>
-          {`
-          body {
-            font-family: system-ui, -apple-system, sans-serif;
-            max-width: 900px;
-            margin: 0 auto;
-            padding: 40px 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-          }
-          .container {
-            background: white;
-            border-radius: 16px;
-            padding: 40px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-          }
-          h1 {
-            color: #333;
-            margin-bottom: 10px;
-            font-size: 2em;
-          }
-          .subtitle {
-            color: #666;
-            margin-bottom: 40px;
-            font-size: 1.1em;
-          }
-          .upload-section {
-            margin-bottom: 40px;
-            padding: 30px;
-            background: #f8f9fa;
-            border-radius: 12px;
-            border: 2px dashed #dee2e6;
-          }
-          .upload-section h2 {
-            margin-top: 0;
-            color: #495057;
-            font-size: 1.5em;
-            margin-bottom: 20px;
-          }
-          .form-group {
-            margin-bottom: 20px;
-          }
-          label {
-            display: block;
-            margin-bottom: 8px;
-            color: #495057;
-            font-weight: 500;
-          }
-          input[type="file"] {
-            width: 100%;
-            padding: 12px;
-            border: 2px solid #dee2e6;
-            border-radius: 8px;
-            font-size: 14px;
-            background: white;
-            cursor: pointer;
-          }
-          input[type="file"]:hover {
-            border-color: #667eea;
-          }
-          button {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            padding: 12px 32px;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-          }
-          button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 16px rgba(102, 126, 234, 0.4);
-          }
-          .file-list {
-            margin-top: 30px;
-          }
-          .file-item {
-            padding: 15px;
-            background: white;
-            border-radius: 8px;
-            margin-bottom: 10px;
-            border-left: 4px solid #667eea;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-          }
-          .file-info {
-            flex: 1;
-          }
-          .file-name {
-            font-weight: 600;
-            color: #333;
-            margin-bottom: 4px;
-          }
-          .file-meta {
-            font-size: 14px;
-            color: #666;
-          }
-          .btn-small {
-            padding: 8px 16px;
-            font-size: 14px;
-            background: #6c757d;
-          }
-          .btn-small:hover {
-            background: #5a6268;
-          }
-          .back-link {
-            display: inline-block;
-            margin-bottom: 20px;
-            color: #667eea;
-            text-decoration: none;
-            font-weight: 500;
-          }
-          .back-link:hover {
-            text-decoration: underline;
-          }
-          .info-box {
-            background: #e7f3ff;
-            border-left: 4px solid #2196f3;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-          }
-          .info-box strong {
-            color: #1976d2;
-          }
-        `}
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <a href="/features" class="back-link">← 返回功能列表</a>
+    <Layout title="文件上传 - TSP" description="使用 nanoid 的文件上传演示">
+      <h1 style={{ fontSize: "32px", marginBottom: "24px" }}>
+        📁 文件上传（使用 nanoid）
+      </h1>
+      <p style={{ color: "#64748b", marginBottom: "32px" }}>
+        文件上传后使用 <code>nanoid</code> 生成唯一的文件名，避免冲突
+      </p>
 
-          <h1>📁 文件上传演示</h1>
-          <p class="subtitle">支持单文件和多文件上传，自动保存到 uploads 目录</p>
-
-          <div class="info-box">
-            <strong>💡 提示：</strong>上传的文件会保存在服务器的 <code>./uploads/</code> 目录下，文件名会加上时间戳前缀以避免冲突。
-          </div>
-
-          {/* 单文件上传 */}
-          <div class="upload-section">
-            <h2>单文件上传</h2>
-            <form method="POST" action="/features/file-upload?action=upload-single" enctype="multipart/form-data">
-              <div class="form-group">
-                <label for="single-file">选择文件：</label>
-                <input
-                  type="file"
-                  id="single-file"
-                  name="file"
-                  required
-                />
+      {/* Upload Result */}
+      {uploadedFiles.length > 0 && (
+        <div
+          className="card"
+          style={{
+            background: "#d1fae5",
+            border: "2px solid #10b981",
+            marginBottom: "32px",
+          }}
+        >
+          <h3 style={{ color: "#065f46", marginBottom: "12px" }}>
+            ✅ 上传成功！
+          </h3>
+          <div
+            style={{
+              background: "#064e3b",
+              padding: "16px",
+              borderRadius: "4px",
+              marginTop: "16px",
+            }}
+          >
+            {uploadedFiles.map((f, i) => (
+              <div key={i} style={{ marginBottom: i < uploadedFiles.length - 1 ? "12px" : "0" }}>
+                <div style={{ color: "#34d399", fontSize: "13px", marginBottom: "4px" }}>
+                  文件 #{i + 1}
+                </div>
+                <div style={{ color: "#fff", fontSize: "14px" }}>
+                  原始名称: <span style={{ color: "#fbbf24" }}>{f.original}</span>
+                </div>
+                <div style={{ color: "#fff", fontSize: "14px" }}>
+                  保存为: <span style={{ color: "#60a5fa" }}>{f.saved}</span>
+                </div>
+                <div style={{ color: "#fff", fontSize: "14px" }}>
+                  大小: <span style={{ color: "#f472b6" }}>
+                    {(f.size / 1024).toFixed(2)} KB
+                  </span>
+                </div>
               </div>
-              <button type="submit">上传文件</button>
-            </form>
-          </div>
-
-          {/* 多文件上传 */}
-          <div class="upload-section">
-            <h2>多文件上传</h2>
-            <form method="POST" action="/features/file-upload?action=upload-multiple" enctype="multipart/form-data">
-              <div class="form-group">
-                <label for="multiple-files">选择多个文件：</label>
-                <input
-                  type="file"
-                  id="multiple-files"
-                  name="files"
-                  multiple
-                  required
-                />
-              </div>
-              <button type="submit">上传文件</button>
-            </form>
-          </div>
-
-          {/* 文件列表 */}
-          <div class="upload-section">
-            <h2>已上传的文件</h2>
-            <button onclick="loadFiles()" class="btn-small">刷新列表</button>
-            <div id="file-list" class="file-list">
-              <p style="color: #666; text-align: center; padding: 20px;">
-                点击"刷新列表"查看已上传的文件
-              </p>
-            </div>
+            ))}
           </div>
         </div>
+      )}
 
-        <script dangerouslySetInnerHTML={{
-          __html: `
-          async function loadFiles() {
-            const fileList = document.getElementById('file-list');
-            fileList.innerHTML = '<p style="color: #666; text-align: center;">加载中...</p>';
+      {/* Upload Form */}
+      <div className="section">
+        <h2 className="section-title">文件上传表单</h2>
+        <div className="card">
+          <form method="POST" enctype="multipart/form-data" style={{ maxWidth: "500px" }}>
+            <div style={{ marginBottom: "16px" }}>
+              <label
+                style={{
+                  display: "block",
+                  fontWeight: "600",
+                  marginBottom: "8px",
+                }}
+              >
+                选择文件：
+              </label>
+              <input
+                type="file"
+                name="file"
+                required
+                style={{
+                  width: "100%",
+                  padding: "10px",
+                  border: "1px solid #ddd",
+                  borderRadius: "4px",
+                  fontSize: "14px",
+                }}
+              />
+            </div>
+            <div style={{ marginBottom: "16px" }}>
+              <label style={{ display: "flex", alignItems: "center", fontSize: "14px" }}>
+                <input type="checkbox" name="multiple" value="1" style={{ marginRight: "8px" }} />
+                允许多文件上传（使用同名字段）
+              </label>
+            </div>
+            <button type="submit" className="btn btn-primary">
+              上传文件
+            </button>
+          </form>
+        </div>
+      </div>
 
-            try {
-              const res = await fetch('?action=list');
-              const data = await res.json();
+      {/* Usage Example */}
+      <div className="section">
+        <h2 className="section-title">使用示例</h2>
+        <div className="code-block">
+          {`// 导入 nanoid 文件名生成函数
+import { generateUniqueFilename } from "./src/files.ts";
 
-              if (data.files.length === 0) {
-                fileList.innerHTML = '<p style="color: #666; text-align: center;">暂无上传文件</p>';
-                return;
-              }
+// 处理文件上传
+export default async function (context: PageContext) {
+  const { files } = context;
 
-              fileList.innerHTML = data.files.map(file => \`
-                <div class="file-item">
-                  <div class="file-info">
-                    <div class="file-name">\${file.name}</div>
-                    <div class="file-meta">
-                      \${(file.size / 1024).toFixed(2)} KB •
-                      \${new Date(file.mtime).toLocaleString('zh-CN')}
-                    </div>
-                  </div>
-                </div>
-              \`).join('');
-            } catch (error) {
-              fileList.innerHTML = '<p style="color: #dc3545; text-align: center;">加载失败: ' + error.message + '</p>';
-            }
-          }
+  if (files && files.file) {
+    const file = files.file;
 
-          // 页面加载时自动加载文件列表
-          loadFiles();
+    // 使用 nanoid 生成唯一文件名
+    // 例如：photo.jpg → photo_V1StGXR8_Z5jdHi6B-myT.jpg
+    const uniqueFilename = generateUniqueFilename(file.name);
 
-          // 拦截表单提交，使用 AJAX 处理
-          document.querySelectorAll('form').forEach(form => {
-            form.addEventListener('submit', async (e) => {
-              e.preventDefault();
+    // 保存文件
+    await file.save(\`./uploads/\${uniqueFilename}\`);
+  }
 
-              const formData = new FormData(form);
-              const submitBtn = form.querySelector('button[type="submit"]');
-              const originalText = submitBtn.textContent;
-              submitBtn.textContent = '上传中...';
-              submitBtn.disabled = true;
+  return <div>...</div>;
+}`}
+        </div>
+      </div>
 
-              try {
-                const res = await fetch(form.action, {
-                  method: 'POST',
-                  body: formData
-                });
-
-                const data = await res.json();
-
-                if (data.success) {
-                  alert(data.message);
-                  form.reset();
-                  loadFiles(); // 刷新文件列表
-                } else {
-                  alert('上传失败: ' + data.message);
-                }
-              } catch (error) {
-                alert('上传失败: ' + error.message);
-              } finally {
-                submitBtn.textContent = originalText;
-                submitBtn.disabled = false;
-              }
-            });
-          });
-          `
-        }} />
-      </body>
-    </html>
+      <div style={{ marginTop: "40px" }}>
+        <a href="/features" className="btn btn-secondary">← 返回功能列表</a>
+      </div>
+    </Layout>
   );
-});
+}

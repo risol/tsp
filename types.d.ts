@@ -226,6 +226,21 @@ declare global {
      * 提供结构化的日志记录功能
      */
     logger: import("./src/logger.ts").Logger;
+
+    /**
+     * nanoid 唯一 ID 生成器
+     * 生成 URL-safe 的唯一标识符
+     *
+     * @example
+     * ```tsx
+     * export default Page(async function(ctx, { nanoid }) {
+     *   const id = nanoid(); // "V1StGXR8_Z5jdHi6B-myT"
+     *   const customId = nanoid(10); // "V1StGXR8_Z5"
+     *   return <div>ID: {id}</div>;
+     * });
+     * ```
+     */
+    nanoid: (size?: number) => string;
   }
 
   /**

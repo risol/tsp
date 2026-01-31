@@ -65,6 +65,56 @@ export default async function (context: PageContext) {
           </a>
         </div>
 
+        {/* File Upload */}
+        <div className="card">
+          <h3
+            style={{ fontSize: "20px", marginBottom: "12px", color: "#667eea" }}
+          >
+            📁 文件上传（nanoid）
+          </h3>
+          <p style={{ marginBottom: "16px", color: "#64748b" }}>
+            使用 nanoid 生成唯一文件名的文件上传
+          </p>
+          <ul style={{ marginLeft: "20px", color: "#64748b" }}>
+            <li>multipart/form-data 解析</li>
+            <li>使用 nanoid 生成唯一文件名</li>
+            <li>文件大小和类型限制</li>
+            <li>多文件上传支持</li>
+          </ul>
+          <a
+            href="/features/file-upload"
+            className="btn btn-primary"
+            style={{ marginTop: "16px" }}
+          >
+            查看演示 →
+          </a>
+        </div>
+
+        {/* nanoid Demo */}
+        <div className="card">
+          <h3
+            style={{ fontSize: "20px", marginBottom: "12px", color: "#667eea" }}
+          >
+            🔐 nanoid 唯一 ID
+          </h3>
+          <p style={{ marginBottom: "16px", color: "#64748b" }}>
+            轻量级、URL-safe 的唯一 ID 生成器
+          </p>
+          <ul style={{ marginLeft: "20px", color: "#64748b" }}>
+            <li>可直接在 TSX 中使用（无需导入）</li>
+            <li>默认 21 字符，比 UUID 短 40%</li>
+            <li>URL-safe 字符集</li>
+            <li>可自定义长度</li>
+          </ul>
+          <a
+            href="/features/nanoid-demo"
+            className="btn btn-primary"
+            style={{ marginTop: "16px" }}
+          >
+            查看演示 →
+          </a>
+        </div>
+
         {/* API Demo */}
         <div className="card">
           <h3

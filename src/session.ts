@@ -5,6 +5,8 @@
  * 基于 cookie 的存储，以及自动清理过期的 session。
  */
 
+import { nanoid } from "nanoid";
+
 // ============== Type Definitions ==============
 
 /**
@@ -50,7 +52,7 @@ export interface SessionOptions {
 interface SessionData {
   /** Signed session ID (rawId.signature) */
   id: string;
-  /** Raw session ID (UUID) */
+  /** Raw session ID (nanoid, 21 characters) */
   rawId: string;
   /** Session data store */
   data: Map<string, unknown>;
@@ -132,7 +134,8 @@ class SessionStore {
     userId: string,
     userData?: Partial<SessionUser>,
   ): Promise<SessionData> {
-    const rawId = crypto.randomUUID();
+    // 使用 nanoid 生成唯一的 session ID（21 字符）
+    const rawId = nanoid();
     const signedId = await this.signId(rawId);
     const now = Date.now();
 
@@ -249,8 +252,8 @@ class SessionStore {
     // Remove old session
     this.sessions.delete(signedId);
 
-    // Generate new ID
-    const newRawId = crypto.randomUUID();
+    // 使用 nanoid 生成新的 session ID
+    const newRawId = nanoid();
     const newSignedId = await this.signId(newRawId);
 
     // Update session
@@ -449,7 +452,7 @@ export function createSessionManager(
 
   // Get session ID from cookies (handle both Record and CookieManager)
   const cookiesRecord = ctx.cookies as Record<string, string>;
-  const signedId = cookiesRecord[cookieName] || "";
+  let signedId = cookiesRecord[cookieName] || "";
 
   // 🔧 Mutable session variable that gets updated after login/logout
   // Initially null, loaded on first access
@@ -499,6 +502,8 @@ export function createSessionManager(
         session = await store.create(userId, userData);
         // Update the mutable variable
         currentSession = session;
+        // Update signedId so getId() returns the correct value
+        signedId = session.id;
       }
 
       // Set cookie using CookieManager
@@ -567,6 +572,8 @@ export function createSessionManager(
           maxAge: options.maxAge,
         });
       }
+      // Update the signedId variable so getId() returns the new value
+      signedId = newId;
     },
 
     async touch(): Promise<void> {

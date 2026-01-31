@@ -4,6 +4,7 @@
  */
 
 import { join } from "std/path";
+import { nanoid } from "nanoid";
 
 /**
  * 上传的文件信息
@@ -278,18 +279,33 @@ export function sanitizeFilename(filename: string): string {
 }
 
 /**
- * 生成唯一文件名
+ * 生成唯一文件名（使用 nanoid）
  * @param originalFilename - 原始文件名
- * @returns 唯一文件名（包含时间戳）
+ * @returns 唯一文件名（格式：原始名称_nanoid.扩展名）
+ *
+ * @example
+ * generateUniqueFilename("photo.jpg") // "photo_aB1cD2eF3gH4jK5lM6nO7P.jpg"
+ * generateUniqueFilename("document.pdf") // "document_xY9z8w7v6u5t4s3r2q1p.pdf"
  */
 export function generateUniqueFilename(originalFilename: string): string {
-  const timestamp = Date.now();
-  const random = Math.random().toString(36).substring(2, 8);
+  // 生成唯一的 nanoid（21 个字符）
+  const uniqueId = nanoid();
+
+  // 提取文件扩展名
   const ext = originalFilename.includes(".")
     ? originalFilename.slice(originalFilename.lastIndexOf("."))
     : "";
+
+  // 提取文件名（不含扩展名）
   const name = originalFilename.slice(0, originalFilename.lastIndexOf(".")) ||
     originalFilename;
 
-  return `${name}_${timestamp}_${random}${ext}`;
+  // 返回格式：原始名称_nanoid.扩展名
+  // 如果原始名称太长，可以截断
+  const maxNameLength = 50; // 限制原始名称长度
+  const truncatedName = name.length > maxNameLength
+    ? name.slice(0, maxNameLength)
+    : name;
+
+  return `${truncatedName}_${uniqueId}${ext}`;
 }

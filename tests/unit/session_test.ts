@@ -74,7 +74,7 @@ Deno.test("SessionStore: create and get session", async () => {
     // Create session
     const session = await store.create("user-123", { name: "Test User" });
     assertExists(session);
-    assertEquals(session.rawId.length, 36); // UUID length
+    assertEquals(session.rawId.length, 21); // nanoid length
     assertEquals(session.data.get("user"), {
       id: "user-123",
       name: "Test User",

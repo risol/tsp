@@ -4,7 +4,7 @@
  * A simple demonstration of TSP's cookie management capabilities.
  */
 
-export default Page(async function (ctx, { cookies }) {
+export default Page(async function (ctx, { cookies, nanoid }) {
   const action = ctx.query.action || "view";
 
   // View mode: show current cookies
@@ -188,7 +188,8 @@ const username = ctx.cookies.username || 'Guest';
 
   // Set secure session cookie
   if (action === "set_secure") {
-    cookies.set("sessionId", crypto.randomUUID(), {
+    // 使用 nanoid 生成唯一的 session ID
+    cookies.set("sessionId", nanoid(), {
       httpOnly: true,
       secure: true,
       sameSite: "Strict",

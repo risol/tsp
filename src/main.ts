@@ -25,6 +25,7 @@ import {
   createProductionLogger,
   type Logger,
 } from "./logger.ts";
+import { nanoid } from "nanoid";
 
 // 日志配置接口
 export interface LoggerConfig {
@@ -632,8 +633,7 @@ async function main(): Promise<void> {
   });
 
   // 注册 cookie 管理器
-  registerDep("cookies", async (ctx) => {
-    const { createCookieManager } = await import("./cookies.ts");
+  registerDep("cookies", (ctx) => {
     return createCookieManager(ctx);
   });
 
@@ -696,6 +696,9 @@ async function main(): Promise<void> {
   const { setPrecompilerLogger } = await import("./precompiler_lib.ts");
   setCacheLogger(serverLogger);
   setPrecompilerLogger(serverLogger);
+
+  // 注册 nanoid
+  registerDep("nanoid", () => nanoid);
 
   // 记录服务器启动信息
   serverLogger.info("TSP Server 启动中", {
