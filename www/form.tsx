@@ -81,28 +81,34 @@ export default async function (context: PageContext) {
 
           {resultHtml}
 
-          <form method="POST">
-            <div class="form-group">
-              <label>用户名：</label>
-              <input type="text" name="username" required />
+          <form method="POST" class="needs-validation" novalidate>
+            <div class="mb-3">
+              <label for="username" class="form-label">用户名：</label>
+              <input type="text" class="form-control" name="username" id="username" required />
+              <div class="invalid-feedback">
+                请输入用户名
+              </div>
             </div>
 
-            <div class="form-group">
-              <label>邮箱：</label>
-              <input type="email" name="email" required />
+            <div class="mb-3">
+              <label for="email" class="form-label">邮箱：</label>
+              <input type="email" class="form-control" name="email" id="email" required />
+              <div class="invalid-feedback">
+                请输入有效的邮箱地址
+              </div>
             </div>
 
-            <div class="form-group">
-              <label>年龄：</label>
-              <input type="number" name="age" min="1" max="150" />
+            <div class="mb-3">
+              <label for="age" class="form-label">年龄：</label>
+              <input type="number" class="form-control" name="age" id="age" min="1" max="150" />
             </div>
 
-            <div class="form-group">
-              <label>个人简介：</label>
-              <textarea name="bio" rows={4}></textarea>
+            <div class="mb-3">
+              <label for="bio" class="form-label">个人简介：</label>
+              <textarea class="form-control" name="bio" id="bio" rows={4}></textarea>
             </div>
 
-            <button type="submit">提交</button>
+            <button type="submit" class="btn btn-primary">提交</button>
           </form>
         </div>
       </body>

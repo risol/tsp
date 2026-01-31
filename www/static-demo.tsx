@@ -12,47 +12,47 @@ export default async function (context: PageContext) {
         <link rel="stylesheet" href="/static/example.css" />
       </head>
       <body>
-        <h1>静态文件服务演示</h1>
+        <h1 class="display-5 mb-4">静态文件服务演示</h1>
 
-        <div class="container">
+        <div class="container mb-4">
           <h2>功能特性</h2>
-          <ul>
-            <li>✅ 自动 MIME 类型识别</li>
-            <li>✅ HTTP 缓存支持（ETag、Last-Modified）</li>
-            <li>✅ 开发模式禁用缓存</li>
-            <li>✅ 可配置的文件扩展名白名单</li>
-            <li>✅ 高性能文件读取</li>
+          <ul class="list-group">
+            <li class="list-group-item">✅ 自动 MIME 类型识别</li>
+            <li class="list-group-item">✅ HTTP 缓存支持（ETag、Last-Modified）</li>
+            <li class="list-group-item">✅ 开发模式禁用缓存</li>
+            <li class="list-group-item">✅ 可配置的文件扩展名白名单</li>
+            <li class="list-group-item">✅ 高性能文件读取</li>
           </ul>
         </div>
 
-        <div class="container">
+        <div class="container mb-4">
           <h2>支持的文件类型</h2>
-          <p>
+          <p class="text-muted">
             默认支持：CSS, JavaScript, JSON, PNG, JPG, GIF, SVG, ICO, WebP,
             WOFF, WOFF2, TTF, EOT, MP3, MP4, WebM, TXT, MD, XML
           </p>
-          <p>
+          <p class="text-muted">
             可通过 <code>config.json</code> 中的 <code>staticExtensions</code>
             {" "}
             字段自定义。
           </p>
         </div>
 
-        <div class="container">
+        <div class="container mb-4">
           <h2>HTTP 缓存</h2>
-          <p>
+          <p class="text-muted">
             生产模式下，静态文件会自动添加 ETag 和 Last-Modified 头，支持 304
             Not Modified 响应。
           </p>
-          <p>
+          <p class="text-muted">
             开发模式下（<code>--dev</code>
             ），缓存被禁用，确保始终加载最新文件。
           </p>
         </div>
 
-        <div class="container">
+        <div class="container mb-4">
           <h2>配置示例</h2>
-          <pre>
+          <pre class="bg-light p-3 rounded">
             {`{
   "staticExtensions": [
     ".css",
@@ -65,17 +65,17 @@ export default async function (context: PageContext) {
           </pre>
         </div>
 
-        <div class="container">
+        <div class="container mb-4">
           <h2>测试</h2>
-          <p>
+          <p class="text-muted">
             打开浏览器开发者工具，查看网络请求，可以看到样式表被正确加载。
           </p>
-          <a href="/" class="button">
+          <a href="/" class="btn btn-primary">
             返回首页
           </a>
         </div>
 
-        <div class="container">
+        <div class="container mb-4">
           <h2>当前请求信息</h2>
           <p>
             <strong>Method:</strong> {context.method}

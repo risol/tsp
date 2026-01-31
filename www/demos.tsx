@@ -6,10 +6,8 @@ export default async function (context: PageContext) {
       title="功能演示 - TSP"
       description="TSP 所有功能演示的完整列表"
     >
-      <h1 style={{ fontSize: "36px", marginBottom: "24px", color: "#1e293b" }}>
-        🎯 功能演示
-      </h1>
-      <p style={{ fontSize: "18px", color: "#64748b", marginBottom: "40px" }}>
+      <h1 className="display-5 mb-4 text-dark">🎯 功能演示</h1>
+      <p className="fs-5 text-muted mb-5">
         探索 TSP 提供的所有功能演示，每个演示都包含完整的使用示例和代码
       </p>
 
@@ -19,38 +17,19 @@ export default async function (context: PageContext) {
         <div className="info-grid">
           {/* Session Demo */}
           <div className="card">
-            <h3
-              style={{
-                fontSize: "18px",
-                marginBottom: "12px",
-                color: "#667eea",
-              }}
-            >
+            <h3 className="h5 mb-3 text-primary">
               👤 Session 管理
             </h3>
-            <p
-              style={{
-                marginBottom: "16px",
-                color: "#64748b",
-                fontSize: "14px",
-              }}
-            >
+            <p className="mb-3 text-muted small">
               完整的用户会话管理系统演示
             </p>
-            <ul
-              style={{
-                marginLeft: "18px",
-                marginBottom: "16px",
-                color: "#64748b",
-                fontSize: "13px",
-              }}
-            >
+            <ul className="mb-3 text-muted small ps-3">
               <li>用户登录/登出</li>
               <li>Session 数据存储</li>
               <li>HMAC-SHA256 签名保护</li>
               <li>自动过期和清理</li>
             </ul>
-            <div style={{ marginTop: "auto" }}>
+            <div className="mt-auto">
               <a href="/session_demo" className="btn btn-primary">查看演示 →</a>
             </div>
           </div>

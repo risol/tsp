@@ -1,128 +1,61 @@
 /**
- * 导航栏组件
+ * 导航栏组件 - Bootstrap 5响应式导航栏
  */
 
 export function Navigation() {
   return (
-    <nav
-      style={{
-        background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-        padding: "16px 0",
-        boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
-      }}
-    >
-      <div
-        className="container"
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-        }}
-      >
-        <div style={{ color: "white", fontSize: "20px", fontWeight: "bold" }}>
+    <nav className="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm">
+      <div className="container">
+        <a className="navbar-brand fw-bold" href="/">
           TSP
-        </div>
+        </a>
 
-        <ul
-          style={{
-            listStyle: "none",
-            display: "flex",
-            gap: "24px",
-            margin: 0,
-            padding: 0,
-          }}
+        <button
+          className="navbar-toggler"
+          type="button"
+          data-bs-toggle="collapse"
+          data-bs-target="#navbarNav"
+          aria-controls="navbarNav"
+          aria-expanded="false"
+          aria-label="Toggle navigation"
         >
-          <li>
-            <a
-              href="/"
-              style={{
-                color: "white",
-                textDecoration: "none",
-                fontWeight: "500",
-                transition: "opacity 0.3s",
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.opacity = "0.8"}
-              onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
-            >
-              首页
-            </a>
-          </li>
-          <li>
-            <a
-              href="/features"
-              style={{
-                color: "white",
-                textDecoration: "none",
-                fontWeight: "500",
-                transition: "opacity 0.3s",
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.opacity = "0.8"}
-              onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
-            >
-              功能特性
-            </a>
-          </li>
-          <li>
-            <a
-              href="/demos"
-              style={{
-                color: "white",
-                textDecoration: "none",
-                fontWeight: "500",
-                transition: "opacity 0.3s",
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.opacity = "0.8"}
-              onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
-            >
-              演示
-            </a>
-          </li>
-          <li>
-            <a
-              href="/session_demo"
-              style={{
-                color: "white",
-                textDecoration: "none",
-                fontWeight: "500",
-                transition: "opacity 0.3s",
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.opacity = "0.8"}
-              onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
-            >
-              Session
-            </a>
-          </li>
-          <li>
-            <a
-              href="/cookie_demo"
-              style={{
-                color: "white",
-                textDecoration: "none",
-                fontWeight: "500",
-                transition: "opacity 0.3s",
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.opacity = "0.8"}
-              onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
-            >
-              Cookies
-            </a>
-          </li>
-          <li>
-            <a
-              href="/features/request-info"
-              style={{
-                color: "white",
-                textDecoration: "none",
-                fontWeight: "500",
-                transition: "opacity 0.3s",
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.opacity = "0.8"}
-              onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
-            >
-              请求信息
-            </a>
-          </li>
-        </ul>
+          <span className="navbar-toggler-icon"></span>
+        </button>
+
+        <div className="collapse navbar-collapse" id="navbarNav">
+          <ul className="navbar-nav ms-auto">
+            <li className="nav-item">
+              <a className="nav-link" href="/">
+                首页
+              </a>
+            </li>
+            <li className="nav-item">
+              <a className="nav-link" href="/features">
+                功能特性
+              </a>
+            </li>
+            <li className="nav-item">
+              <a className="nav-link" href="/demos">
+                演示
+              </a>
+            </li>
+            <li className="nav-item">
+              <a className="nav-link" href="/session_demo">
+                Session
+              </a>
+            </li>
+            <li className="nav-item">
+              <a className="nav-link" href="/cookie_demo">
+                Cookies
+              </a>
+            </li>
+            <li className="nav-item">
+              <a className="nav-link" href="/features/request-info">
+                请求信息
+              </a>
+            </li>
+          </ul>
+        </div>
       </div>
     </nav>
   );

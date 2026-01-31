@@ -1,3 +1,5 @@
+import { Layout } from "./components/Layout.tsx";
+
 /**
  * Cookie Demo Page
  *
@@ -12,139 +14,102 @@ export default Page(async function (ctx, { cookies, nanoid }) {
     const visitCount = parseInt(ctx.cookies.visits || "0") + 1;
 
     return (
-      <html>
-        <head>
-          <title>Cookie 演示 - TSP</title>
-          <meta charset="UTF-8" />
-          <style>
-            {`
-            body {
-              font-family: system-ui, -apple-system, sans-serif;
-              max-width: 800px;
-              margin: 40px auto;
-              padding: 20px;
-              line-height: 1.6;
-            }
-            h1 { color: #333; border-bottom: 2px solid #0070f3; padding-bottom: 10px; }
-            .card {
-              background: #f8f9fa;
-              border: 1px solid #dee2e6;
-              border-radius: 8px;
-              padding: 20px;
-              margin: 20px 0;
-            }
-            .btn {
-              display: inline-block;
-              padding: 10px 20px;
-              margin: 5px;
-              background: #0070f3;
-              color: white;
-              text-decoration: none;
-              border-radius: 5px;
-              border: none;
-              cursor: pointer;
-              font-size: 14px;
-            }
-            .btn:hover { background: #0051cc; }
-            .btn.secondary { background: #6c757d; }
-            .btn.secondary:hover { background: #545b62; }
-            table {
-              width: 100%;
-              border-collapse: collapse;
-              margin: 20px 0;
-            }
-            th, td {
-              text-align: left;
-              padding: 12px;
-              border-bottom: 1px solid #dee2e6;
-            }
-            th { background: #0070f3; color: white; }
-            code {
-              background: #e9ecef;
-              padding: 2px 6px;
-              border-radius: 3px;
-              font-family: 'Courier New', monospace;
-            }
-          `}
-          </style>
-        </head>
-        <body>
-          <h1>🍪 Cookie 管理演示</h1>
+      <Layout title="Cookie 演示 - TSP" description="TSP Cookie 管理功能演示">
+        {/* Page Header */}
+        <div className="text-center mb-5">
+          <h1 className="display-5 fw-bold text-white mb-3">🍪 Cookie 管理演示</h1>
+          <p className="text-white-50 fs-5">
+            完整的 Cookie 操作功能展示
+          </p>
+        </div>
 
-          <div class="card">
-            <h2>欢迎！</h2>
-            <p>
+        {/* Welcome Card */}
+        <div className="card shadow-sm mb-4">
+          <div className="card-body">
+            <h2 className="h4 card-title text-primary mb-3">欢迎！</h2>
+            <p className="card-text">
               这是您的访问次数：<strong>{visitCount}</strong>
             </p>
-            <p>
+            <p className="card-text text-muted">
               TSP 的 cookie 系统让您能够轻松管理 HTTP cookies，
               并提供完整的 TypeScript 支持。
             </p>
           </div>
+        </div>
 
-          <div class="card">
-            <h2>当前 Cookies</h2>
+        {/* Current Cookies Card */}
+        <div className="card shadow-sm mb-4">
+          <div className="card-body">
+            <h2 className="h4 card-title text-primary mb-3">当前 Cookies</h2>
             {Object.keys(ctx.cookies).length > 0
               ? (
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Value</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Object.entries(ctx.cookies).map(([name, value]) => (
+                <div className="table-responsive">
+                  <table className="table table-striped table-hover">
+                    <thead className="table-primary">
                       <tr>
-                        <td>
-                          <code>{name}</code>
-                        </td>
-                        <td>
-                          <code>{value}</code>
-                        </td>
+                        <th>Name</th>
+                        <th>Value</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {Object.entries(ctx.cookies).map(([name, value]) => (
+                        <tr key={name}>
+                          <td>
+                            <code className="bg-light p-1 rounded">{name}</code>
+                          </td>
+                          <td>
+                            <code className="bg-light p-1 rounded small">{value}</code>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )
               : (
-                <p>
-                  <em>尚未设置任何 Cookie。试试下面的按钮！</em>
+                <p className="text-muted fst-italic">
+                  尚未设置任何 Cookie。试试下面的按钮！
                 </p>
               )}
           </div>
+        </div>
 
-          <div class="card">
-            <h2>试试看</h2>
-            <div>
-              <form method="POST" action="?action=set">
-                <button type="submit" class="btn">
+        {/* Actions Card */}
+        <div className="card shadow-sm mb-4">
+          <div className="card-body">
+            <h2 className="h4 card-title text-primary mb-3">试试看</h2>
+            <div className="d-flex flex-wrap gap-2">
+              <form method="POST" action="?action=set" className="d-inline">
+                <button type="submit" className="btn btn-primary">
                   设置访问计数器 Cookie
                 </button>
               </form>
-              <form method="POST" action="?action=set_preferences">
-                <button type="submit" class="btn">
+              <form method="POST" action="?action=set_preferences" className="d-inline">
+                <button type="submit" className="btn btn-success">
                   设置偏好设置 Cookie
                 </button>
               </form>
-              <form method="POST" action="?action=set_secure">
-                <button type="submit" class="btn">
+              <form method="POST" action="?action=set_secure" className="d-inline">
+                <button type="submit" className="btn btn-info">
                   设置安全会话 Cookie
                 </button>
               </form>
-              <form method="POST" action="?action=clear">
-                <button type="submit" class="btn secondary">
+              <form method="POST" action="?action=clear" className="d-inline">
+                <button type="submit" className="btn btn-secondary">
                   清除所有 Cookie
                 </button>
               </form>
             </div>
           </div>
+        </div>
 
-          <div class="card">
-            <h2>工作原理</h2>
-            <p>在 TSP 中设置 Cookie 很简单：</p>
-            <pre><code>{`
-export default Page(async function(ctx, { cookies }) {
+        {/* Code Examples Card */}
+        <div className="card shadow-sm mb-4">
+          <div className="card-body">
+            <h2 className="h4 card-title text-primary mb-3">工作原理</h2>
+            <p className="mb-3">在 TSP 中设置 Cookie 很简单：</p>
+            <div className="bg-light p-3 rounded-3 mb-3">
+              <pre className="mb-0 small"><code>{`export default Page(async function(ctx, { cookies }) {
   // Set a simple cookie
   cookies.set('username', 'john_doe');
 
@@ -157,15 +122,15 @@ export default Page(async function(ctx, { cookies }) {
   });
 
   return <div>Done!</div>;
-});
-            `.trim()}</code></pre>
-            <p>读取 Cookie 更简单 - 它们就在您的上下文中：</p>
-            <pre><code>{`
-const username = ctx.cookies.username || 'Guest';
-            `.trim()}</code></pre>
+});`}</code></pre>
+            </div>
+            <p className="mb-3">读取 Cookie 更简单 - 它们就在您的上下文中：</p>
+            <div className="bg-light p-3 rounded-3">
+              <pre className="mb-0 small"><code>{`const username = ctx.cookies.username || 'Guest';`}</code></pre>
+            </div>
           </div>
-        </body>
-      </html>
+        </div>
+      </Layout>
     );
   }
 

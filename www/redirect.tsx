@@ -27,27 +27,27 @@ export default async function (context: PageContext) {
       <body>
         <h1>重定向示例</h1>
 
-        <section>
+        <section className="mb-4">
           <h2>简单重定向 (302)</h2>
           <p>点击链接跳转到首页：</p>
-          <a href="/redirect?to=home">跳转到首页</a>
+          <a href="/redirect?to=home" className="btn btn-primary">跳转到首页</a>
         </section>
 
-        <section>
+        <section className="mb-4">
           <h2>永久重定向 (301)</h2>
           <p>点击链接永久跳转到首页：</p>
-          <a href="/redirect?to=new-home">永久跳转到首页</a>
+          <a href="/redirect?to=new-home" className="btn btn-primary">永久跳转到首页</a>
         </section>
 
-        <section>
+        <section className="mb-4">
           <h2>条件重定向</h2>
           <p>如果没有 session cookie，将跳转到登录页：</p>
-          <a href="/redirect?to=protected">访问受保护页面</a>
+          <a href="/redirect?to=protected" className="btn btn-primary">访问受保护页面</a>
         </section>
 
-        <section>
+        <section className="mb-4">
           <h2>带参数的重定向</h2>
-          <a href="/redirect?to=protected">访问受保护页面（未登录会重定向）</a>
+          <a href="/redirect?to=protected" className="btn btn-primary">访问受保护页面（未登录会重定向）</a>
         </section>
       </body>
     </html>

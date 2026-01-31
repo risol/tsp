@@ -11,10 +11,10 @@ export default Page(async function (ctx, { nanoid }) {
 
   return (
     <Layout title="nanoid 演示 - TSP" description="使用 nanoid 生成唯一 ID">
-      <h1 style={{ fontSize: "32px", marginBottom: "24px" }}>
+      <h1 className="display-6 mb-4">
         🔐 nanoid 唯一 ID 生成
       </h1>
-      <p style={{ color: "#64748b", marginBottom: "32px" }}>
+      <p className="text-muted mb-5">
         nanoid 是一个轻量级、URL-safe 的唯一 ID 生成器，可直接在 TSX 中使用
       </p>
 
@@ -22,19 +22,9 @@ export default Page(async function (ctx, { nanoid }) {
       <div className="section">
         <h2 className="section-title">生成的 ID 示例</h2>
         <div className="card">
-          <div style={{ marginBottom: "16px" }}>
+          <div className="mb-3">
             <strong>默认长度（21 字符）:</strong>
-            <div
-              style={{
-                background: "#064e3b",
-                color: "#34d399",
-                padding: "8px 12px",
-                borderRadius: "4px",
-                marginTop: "8px",
-                fontFamily: "monospace",
-                fontSize: "14px",
-              }}
-            >
+            <div className="bg-success bg-opacity-25 text-success p-2 rounded mt-2 font-monospace fs-6">
               {defaultId}
             </div>
           </div>

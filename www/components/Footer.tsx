@@ -1,73 +1,57 @@
+/**
+ * 页脚组件 - Bootstrap工具类
+ */
 export function Footer() {
   const currentYear = new Date().getFullYear();
   return (
-    <footer
-      style={{
-        marginTop: "60px",
-        padding: "40px 20px",
-        background: "rgba(255, 255, 255, 0.1)",
-        borderRadius: "12px",
-        textAlign: "center",
-        color: "rgba(255, 255, 255, 0.9)",
-      }}
-    >
-      <div style={{ marginBottom: "20px" }}>
-        <h3 style={{ fontSize: "24px", marginBottom: "12px", color: "white" }}>
-          TSP
-        </h3>
-        <p style={{ fontSize: "14px", opacity: 0.9 }}>
+    <footer className="mt-5 py-5 text-center bg-white bg-opacity-10 rounded-3">
+      <div className="mb-4">
+        <h3 className="fs-4 mb-3 text-white">TSP</h3>
+        <p className="fs-6 opacity-90">
           TypeScript Server Page - 高性能模板服务器
         </p>
       </div>
 
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "center",
-          gap: "24px",
-          marginBottom: "24px",
-          flexWrap: "wrap",
-        }}
-      >
+      <div className="d-flex justify-content-center gap-4 mb-4 flex-wrap">
         <a
           href="/"
-          style={{ color: "white", textDecoration: "none", opacity: 0.8 }}
+          className="text-white text-decoration-none opacity-75"
         >
           首页
         </a>
         <a
           href="/demos"
-          style={{ color: "white", textDecoration: "none", opacity: 0.8 }}
+          className="text-white text-decoration-none opacity-75"
         >
           演示
         </a>
         <a
           href="/features"
-          style={{ color: "white", textDecoration: "none", opacity: 0.8 }}
+          className="text-white text-decoration-none opacity-75"
         >
           功能
         </a>
         <a
           href="/session_demo"
-          style={{ color: "white", textDecoration: "none", opacity: 0.8 }}
+          className="text-white text-decoration-none opacity-75"
         >
           Session
         </a>
         <a
           href="/cookie_demo"
-          style={{ color: "white", textDecoration: "none", opacity: 0.8 }}
+          className="text-white text-decoration-none opacity-75"
         >
           Cookies
         </a>
       </div>
 
-      <div style={{ fontSize: "13px", opacity: 0.7 }}>
-        <p style={{ marginBottom: "8px" }}>
+      <div className="fs-6 opacity-75">
+        <p className="mb-2">
           © {currentYear} TSP. Powered by{" "}
           <a
             href="https://deno.com"
             target="_blank"
-            style={{ color: "white", textDecoration: "underline" }}
+            className="text-white text-decoration-underline"
           >
             Deno
           </a>
@@ -75,12 +59,12 @@ export function Footer() {
           <a
             href="https://preactjs.com"
             target="_blank"
-            style={{ color: "white", textDecoration: "underline" }}
+            className="text-white text-decoration-underline"
           >
             Preact
           </a>
         </p>
-        <p>
+        <p className="mb-0">
           基于 TypeScript + JSX 构建的现代化 Web 框架
         </p>
       </div>

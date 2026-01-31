@@ -1,6 +1,6 @@
 import { Navigation } from "./Navigation.tsx";
 import { Footer } from "./Footer.tsx";
-import { getGlobalStyles } from "./Styles.tsx";
+import { getCustomStyles } from "./Styles.tsx";
 import type { ComponentChildren } from "preact";
 
 interface LayoutProps {
@@ -17,20 +17,17 @@ export function Layout({ title, description, children }: LayoutProps) {
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>{title}</title>
         {description && <meta name="description" content={description} />}
-        <style>{getGlobalStyles()}</style>
+        <link href="/static/css/bootstrap.min.css" rel="stylesheet" />
+        <style>{getCustomStyles()}</style>
+        <script src="/static/js/htmx.min.js" defer></script>
       </head>
-      <body
-        style={{
-          background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-          minHeight: "100vh",
-          paddingBottom: "40px",
-        }}
-      >
+      <body className="bg-gradient-brand">
         <Navigation />
-        <div className="container" style={{ marginTop: "40px" }}>
+        <div className="container py-4 mt-4">
           {children}
         </div>
         <Footer />
+        <script src="/static/js/bootstrap.bundle.min.js"></script>
       </body>
     </html>
   );

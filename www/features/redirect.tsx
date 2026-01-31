@@ -22,8 +22,8 @@ export default async function (context: PageContext) {
 
   return (
     <Layout title="重定向 - TSP" description="HTTP 重定向功能">
-      <h1 style={{ fontSize: "32px", marginBottom: "24px" }}>➡️ HTTP 重定向</h1>
-      <p style={{ color: "#64748b", marginBottom: "32px" }}>
+      <h1 className="display-6 mb-4">➡️ HTTP 重定向</h1>
+      <p className="text-muted mb-5">
         返回包含 redirect 属性的对象即可触发 HTTP 重定向
       </p>
 
@@ -31,7 +31,7 @@ export default async function (context: PageContext) {
       <div className="section">
         <h2 className="section-title">🎮 交互式演示</h2>
         <div className="card">
-          <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
+          <div className="d-flex gap-3 flex-wrap">
             <a
               href="/features/redirect?action=redirect&status=301"
               className="btn btn-secondary"

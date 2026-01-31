@@ -39,10 +39,10 @@ export default async function (context: PageContext) {
 
   return (
     <Layout title="文件上传 - TSP" description="使用 nanoid 的文件上传演示">
-      <h1 style={{ fontSize: "32px", marginBottom: "24px" }}>
+      <h1 className="display-6 mb-4">
         📁 文件上传（使用 nanoid）
       </h1>
-      <p style={{ color: "#64748b", marginBottom: "32px" }}>
+      <p className="text-muted mb-5">
         文件上传后使用 <code>nanoid</code> 生成唯一的文件名，避免冲突
       </p>
 

@@ -19,293 +19,242 @@ export default Page(async function(ctx, { createMySQL, response }) {
           <head>
             <title>MySQL 高级功能测试</title>
             <meta charset="utf-8" />
-            <style>{`
-              * { box-sizing: border-box; }
-              body {
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-                line-height: 1.6;
-                color: #333;
-                max-width: 1400px;
-                margin: 0 auto;
-                padding: 20px;
-                background: #f5f5f5;
-              }
-              .header {
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white;
-                padding: 40px;
-                border-radius: 10px;
-                margin-bottom: 30px;
-                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-              }
-              .header h1 { margin: 0 0 10px 0; font-size: 2.5em; }
-              .header p { margin: 0; opacity: 0.9; font-size: 1.1em; }
-              .stats-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-                gap: 20px;
-                margin-bottom: 30px;
-              }
-              .stat-card {
-                background: white;
-                padding: 25px;
-                border-radius: 10px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                text-align: center;
-                transition: transform 0.2s;
-              }
-              .stat-card:hover { transform: translateY(-5px); }
-              .stat-card h3 {
-                margin: 0 0 10px 0;
-                color: #666;
-                font-size: 0.9em;
-                text-transform: uppercase;
-                letter-spacing: 1px;
-              }
-              .stat-card .value {
-                font-size: 3em;
-                font-weight: bold;
-                color: #667eea;
-                margin: 10px 0;
-              }
-              .test-section {
-                background: white;
-                border-radius: 10px;
-                padding: 30px;
-                margin-bottom: 30px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-              }
-              .test-section h2 {
-                margin-top: 0;
-                color: #333;
-                border-bottom: 3px solid #667eea;
-                padding-bottom: 10px;
-              }
-              .test-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-                gap: 20px;
-                margin-top: 20px;
-              }
-              .test-card {
-                border: 2px solid #e0e0e0;
-                border-radius: 8px;
-                padding: 20px;
-                transition: all 0.3s;
-                cursor: pointer;
-                text-decoration: none;
-                color: inherit;
-                display: block;
-              }
-              .test-card:hover {
-                border-color: #667eea;
-                box-shadow: 0 4px 8px rgba(102, 126, 234, 0.2);
-                transform: translateY(-2px);
-              }
-              .test-card h3 {
-                margin: 0 0 10px 0;
-                color: #667eea;
-                font-size: 1.2em;
-              }
-              .test-card p {
-                margin: 0;
-                color: #666;
-                font-size: 0.9em;
-                line-height: 1.5;
-              }
-              .badge {
-                display: inline-block;
-                padding: 4px 12px;
-                border-radius: 20px;
-                font-size: 0.8em;
-                font-weight: bold;
-                margin-top: 10px;
-              }
-              .badge.basic { background: #e3f2fd; color: #1976d2; }
-              .badge.intermediate { background: #fff3e0; color: #f57c00; }
-              .badge.advanced { background: #f3e5f5; color: #7b1fa2; }
-              .code-example {
-                background: #1e1e1e;
-                color: #d4d4d4;
-                padding: 20px;
-                border-radius: 8px;
-                overflow-x: auto;
-                font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-                font-size: 14px;
-                line-height: 1.5;
-                margin: 15px 0;
-              }
-              .code-example .keyword { color: #569cd6; }
-              .code-example .string { color: #ce9178; }
-              .code-example .comment { color: #6a9955; }
-              .footer {
-                text-align: center;
-                padding: 30px;
-                color: #666;
-              }
-              .footer a {
-                color: #667eea;
-                text-decoration: none;
-                margin: 0 10px;
-              }
-              .footer a:hover { text-decoration: underline; }
-            `}</style>
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <link href="/assets/bootstrap.min.css" rel="stylesheet" />
           </head>
-          <body>
-            <div className="header">
-              <h1>🚀 MySQL 高级功能测试</h1>
-              <p>全面测试 MySQL 客户端的各种功能和特性</p>
+          <body className="container py-4">
+            <div className="bg-primary text-white rounded p-5 mb-5 shadow">
+              <h1 className="display-5 mb-2">🚀 MySQL 高级功能测试</h1>
+              <p className="mb-0 opacity-75">全面测试 MySQL 客户端的各种功能和特性</p>
             </div>
 
-            <div className="stats-grid">
-              <div className="stat-card">
-                <h3>总记录数</h3>
-                <div className="value">{stats[0].total}</div>
+            <div className="row g-4 mb-5">
+              <div className="col-md-4">
+                <div className="card shadow-sm h-100">
+                  <div className="card-body text-center">
+                    <h3 className="h6 text-muted text-uppercase mb-2">总记录数</h3>
+                    <div className="display-4 fw-bold text-primary">{stats[0].total}</div>
+                  </div>
+                </div>
               </div>
-              <div className="stat-card">
-                <h3>测试用例</h3>
-                <div className="value">12</div>
+              <div className="col-md-4">
+                <div className="card shadow-sm h-100">
+                  <div className="card-body text-center">
+                    <h3 className="h6 text-muted text-uppercase mb-2">测试用例</h3>
+                    <div className="display-4 fw-bold text-primary">12</div>
+                  </div>
+                </div>
               </div>
-              <div className="stat-card">
-                <h3>功能覆盖</h3>
-                <div className="value">100%</div>
-              </div>
-            </div>
-
-            <div className="test-section">
-              <h2>📋 基础操作测试</h2>
-              <div className="test-grid">
-                <a href="/mysql-advanced.tsx?action=query-all" className="test-card">
-                  <h3>📊 查询所有数据</h3>
-                  <p>查询 users 表中的所有记录，返回完整的数据集</p>
-                  <span className="badge basic">基础</span>
-                </a>
-                <a href="/mysql-advanced.tsx?action=query-limit" className="test-card">
-                  <h3>📋 限制查询结果</h3>
-                  <p>使用 LIMIT 子句限制返回的记录数量</p>
-                  <span className="badge basic">基础</span>
-                </a>
-                <a href="/mysql-advanced.tsx?action=param-query" className="test-card">
-                  <h3>🔒 参数化查询</h3>
-                  <p>使用参数化查询防止 SQL 注入攻击</p>
-                  <span className="badge intermediate">中级</span>
-                </a>
-                <a href="/mysql-advanced.tsx?action=search" className="test-card">
-                  <h3>🔍 模糊搜索</h3>
-                  <p>使用 LIKE 进行模糊匹配查询</p>
-                  <span className="badge intermediate">中级</span>
-                </a>
+              <div className="col-md-4">
+                <div className="card shadow-sm h-100">
+                  <div className="card-body text-center">
+                    <h3 className="h6 text-muted text-uppercase mb-2">功能覆盖</h3>
+                    <div className="display-4 fw-bold text-primary">100%</div>
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div className="test-section">
-              <h2>✏️ 数据操作测试</h2>
-              <div className="test-grid">
-                <a href="/mysql-advanced.tsx?action=insert-single" className="test-card">
-                  <h3>➕ 插入单条记录</h3>
-                  <p>使用 insert 方法插入一条新的用户记录</p>
-                  <span className="badge basic">基础</span>
-                </a>
-                <a href="/mysql-advanced.tsx?action=insert-batch" className="test-card">
-                  <h3>➕➕ 批量插入</h3>
-                  <p>使用事务批量插入多条记录</p>
-                  <span className="badge advanced">高级</span>
-                </a>
-                <a href="/mysql-advanced.tsx?action=update-data" className="test-card">
-                  <h3>✏️ 更新数据</h3>
-                  <p>更新指定 ID 的用户信息</p>
-                  <span className="badge basic">基础</span>
-                </a>
-                <a href="/mysql-advanced.tsx?action=delete-data" className="test-card">
-                  <h3>🗑️ 删除数据</h3>
-                  <p>创建并删除一条测试记录</p>
-                  <span className="badge intermediate">中级</span>
-                </a>
+            <div className="card shadow-sm mb-4">
+              <div className="card-body">
+                <h2 className="h4 border-bottom pb-2 mb-4">📋 基础操作测试</h2>
+                <div className="row g-4">
+                  <div className="col-md-6 col-lg-3">
+                    <a href="/mysql-advanced.tsx?action=query-all" className="card text-decoration-none text-dark h-100 border-2">
+                      <div className="card-body">
+                        <h3 className="h5 card-title text-primary">📊 查询所有数据</h3>
+                        <p className="card-text text-muted small">查询 users 表中的所有记录，返回完整的数据集</p>
+                        <span className="badge bg-primary rounded-pill">基础</span>
+                      </div>
+                    </a>
+                  </div>
+                  <div className="col-md-6 col-lg-3">
+                    <a href="/mysql-advanced.tsx?action=query-limit" className="card text-decoration-none text-dark h-100 border-2">
+                      <div className="card-body">
+                        <h3 className="h5 card-title text-primary">📋 限制查询结果</h3>
+                        <p className="card-text text-muted small">使用 LIMIT 子句限制返回的记录数量</p>
+                        <span className="badge bg-primary rounded-pill">基础</span>
+                      </div>
+                    </a>
+                  </div>
+                  <div className="col-md-6 col-lg-3">
+                    <a href="/mysql-advanced.tsx?action=param-query" className="card text-decoration-none text-dark h-100 border-2">
+                      <div className="card-body">
+                        <h3 className="h5 card-title text-primary">🔒 参数化查询</h3>
+                        <p className="card-text text-muted small">使用参数化查询防止 SQL 注入攻击</p>
+                        <span className="badge bg-warning text-dark rounded-pill">中级</span>
+                      </div>
+                    </a>
+                  </div>
+                  <div className="col-md-6 col-lg-3">
+                    <a href="/mysql-advanced.tsx?action=search" className="card text-decoration-none text-dark h-100 border-2">
+                      <div className="card-body">
+                        <h3 className="h5 card-title text-primary">🔍 模糊搜索</h3>
+                        <p className="card-text text-muted small">使用 LIKE 进行模糊匹配查询</p>
+                        <span className="badge bg-warning text-dark rounded-pill">中级</span>
+                      </div>
+                    </a>
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div className="test-section">
-              <h2>🔄 事务操作测试</h2>
-              <div className="test-grid">
-                <a href="/mysql-advanced.tsx?action=transaction-commit" className="test-card">
-                  <h3>✅ 事务提交</h3>
-                  <p>测试事务的正常提交流程，插入多条记录</p>
-                  <span className="badge advanced">高级</span>
-                </a>
-                <a href="/mysql-advanced.tsx?action=transaction-rollback" className="test-card">
-                  <h3>❌ 事务回滚</h3>
-                  <p>测试事务失败时的回滚机制</p>
-                  <span className="badge advanced">高级</span>
-                </a>
-                <a href="/mysql-advanced.tsx?action=nested-operations" className="test-card">
-                  <h3>🔗 复合操作</h3>
-                  <p>在一个事务中执行多种操作</p>
-                  <span className="badge advanced">高级</span>
-                </a>
+            <div className="card shadow-sm mb-4">
+              <div className="card-body">
+                <h2 className="h4 border-bottom pb-2 mb-4">✏️ 数据操作测试</h2>
+                <div className="row g-4">
+                  <div className="col-md-6 col-lg-3">
+                    <a href="/mysql-advanced.tsx?action=insert-single" className="card text-decoration-none text-dark h-100 border-2">
+                      <div className="card-body">
+                        <h3 className="h5 card-title text-primary">➕ 插入单条记录</h3>
+                        <p className="card-text text-muted small">使用 insert 方法插入一条新的用户记录</p>
+                        <span className="badge bg-primary rounded-pill">基础</span>
+                      </div>
+                    </a>
+                  </div>
+                  <div className="col-md-6 col-lg-3">
+                    <a href="/mysql-advanced.tsx?action=insert-batch" className="card text-decoration-none text-dark h-100 border-2">
+                      <div className="card-body">
+                        <h3 className="h5 card-title text-primary">➕➕ 批量插入</h3>
+                        <p className="card-text text-muted small">使用事务批量插入多条记录</p>
+                        <span className="badge bg-danger rounded-pill">高级</span>
+                      </div>
+                    </a>
+                  </div>
+                  <div className="col-md-6 col-lg-3">
+                    <a href="/mysql-advanced.tsx?action=update-data" className="card text-decoration-none text-dark h-100 border-2">
+                      <div className="card-body">
+                        <h3 className="h5 card-title text-primary">✏️ 更新数据</h3>
+                        <p className="card-text text-muted small">更新指定 ID 的用户信息</p>
+                        <span className="badge bg-primary rounded-pill">基础</span>
+                      </div>
+                    </a>
+                  </div>
+                  <div className="col-md-6 col-lg-3">
+                    <a href="/mysql-advanced.tsx?action=delete-data" className="card text-decoration-none text-dark h-100 border-2">
+                      <div className="card-body">
+                        <h3 className="h5 card-title text-primary">🗑️ 删除数据</h3>
+                        <p className="card-text text-muted small">创建并删除一条测试记录</p>
+                        <span className="badge bg-warning text-dark rounded-pill">中级</span>
+                      </div>
+                    </a>
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div className="test-section">
-              <h2>📈 统计和分析</h2>
-              <div className="test-grid">
-                <a href="/mysql-advanced.tsx?action=count" className="test-card">
-                  <h3>🔢 记录统计</h3>
-                  <p>统计不同条件下的记录数量</p>
-                  <span className="badge intermediate">中级</span>
-                </a>
-                <a href="/mysql-advanced.tsx?action=aggregate" className="test-card">
-                  <h3>📊 聚合查询</h3>
-                  <p>使用聚合函数进行数据分析</p>
-                  <span className="badge intermediate">中级</span>
-                </a>
-                <a href="/mysql-advanced.tsx?action=join" className="test-card">
-                  <h3>🔗 连接查询</h3>
-                  <p>测试多表连接查询（模拟）</p>
-                  <span className="badge advanced">高级</span>
-                </a>
+            <div className="card shadow-sm mb-4">
+              <div className="card-body">
+                <h2 className="h4 border-bottom pb-2 mb-4">🔄 事务操作测试</h2>
+                <div className="row g-4">
+                  <div className="col-md-4">
+                    <a href="/mysql-advanced.tsx?action=transaction-commit" className="card text-decoration-none text-dark h-100 border-2">
+                      <div className="card-body">
+                        <h3 className="h5 card-title text-primary">✅ 事务提交</h3>
+                        <p className="card-text text-muted small">测试事务的正常提交流程，插入多条记录</p>
+                        <span className="badge bg-danger rounded-pill">高级</span>
+                      </div>
+                    </a>
+                  </div>
+                  <div className="col-md-4">
+                    <a href="/mysql-advanced.tsx?action=transaction-rollback" className="card text-decoration-none text-dark h-100 border-2">
+                      <div className="card-body">
+                        <h3 className="h5 card-title text-primary">❌ 事务回滚</h3>
+                        <p className="card-text text-muted small">测试事务失败时的回滚机制</p>
+                        <span className="badge bg-danger rounded-pill">高级</span>
+                      </div>
+                    </a>
+                  </div>
+                  <div className="col-md-4">
+                    <a href="/mysql-advanced.tsx?action=nested-operations" className="card text-decoration-none text-dark h-100 border-2">
+                      <div className="card-body">
+                        <h3 className="h5 card-title text-primary">🔗 复合操作</h3>
+                        <p className="card-text text-muted small">在一个事务中执行多种操作</p>
+                        <span className="badge bg-danger rounded-pill">高级</span>
+                      </div>
+                    </a>
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div className="test-section">
-              <h2>💻 代码示例</h2>
-              <h3>创建连接</h3>
-              <div className="code-example">
-                <pre>{`const db = await createMySQL({
+            <div className="card shadow-sm mb-4">
+              <div className="card-body">
+                <h2 className="h4 border-bottom pb-2 mb-4">📈 统计和分析</h2>
+                <div className="row g-4">
+                  <div className="col-md-4">
+                    <a href="/mysql-advanced.tsx?action=count" className="card text-decoration-none text-dark h-100 border-2">
+                      <div className="card-body">
+                        <h3 className="h5 card-title text-primary">🔢 记录统计</h3>
+                        <p className="card-text text-muted small">统计不同条件下的记录数量</p>
+                        <span className="badge bg-warning text-dark rounded-pill">中级</span>
+                      </div>
+                    </a>
+                  </div>
+                  <div className="col-md-4">
+                    <a href="/mysql-advanced.tsx?action=aggregate" className="card text-decoration-none text-dark h-100 border-2">
+                      <div className="card-body">
+                        <h3 className="h5 card-title text-primary">📊 聚合查询</h3>
+                        <p className="card-text text-muted small">使用聚合函数进行数据分析</p>
+                        <span className="badge bg-warning text-dark rounded-pill">中级</span>
+                      </div>
+                    </a>
+                  </div>
+                  <div className="col-md-4">
+                    <a href="/mysql-advanced.tsx?action=join" className="card text-decoration-none text-dark h-100 border-2">
+                      <div className="card-body">
+                        <h3 className="h5 card-title text-primary">🔗 连接查询</h3>
+                        <p className="card-text text-muted small">测试多表连接查询（模拟）</p>
+                        <span className="badge bg-danger rounded-pill">高级</span>
+                      </div>
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="card shadow-sm mb-4">
+              <div className="card-body">
+                <h2 className="h4 border-bottom pb-2 mb-4">💻 代码示例</h2>
+                <h3 className="h5 mb-3">创建连接</h3>
+                <div className="bg-dark text-light p-3 rounded mb-4">
+                  <pre className="mb-0"><code>{`const db = await createMySQL({
   host: '127.0.0.1',
   user: 'test_user',
   password: 'test123456',
   database: 'test_db'
-});`}</pre>
-              </div>
+});`}</code></pre>
+                </div>
 
-              <h3>参数化查询</h3>
-              <div className="code-example">
-                <pre>{`const users = await db.query(
+                <h3 className="h5 mb-3">参数化查询</h3>
+                <div className="bg-dark text-light p-3 rounded mb-4">
+                  <pre className="mb-0"><code>{`const users = await db.query(
   'SELECT * FROM users WHERE id = ?',
   [userId]
-);`}</pre>
-              </div>
+);`}</code></pre>
+                </div>
 
-              <h3>事务操作</h3>
-              <div className="code-example">
-                <pre>{`await db.beginTransaction();
+                <h3 className="h5 mb-3">事务操作</h3>
+                <div className="bg-dark text-light p-3 rounded">
+                  <pre className="mb-0"><code>{`await db.beginTransaction();
 try {
   await db.insert('users', data);
   await db.commit();
 } catch (error) {
   await db.rollback();
   throw error;
-}`}</pre>
+}`}</code></pre>
+                </div>
               </div>
             </div>
 
-            <div className="footer">
-              <p>
-                <a href="/">← 返回首页</a>
-                <a href="/mysql-demo.tsx">MySQL 演示仪表板</a>
-                <a href="/MYSQL_INTEGRATION.md">查看文档</a>
+            <div className="text-center py-4 border-top">
+              <p className="mb-2">
+                <a href="/" className="text-decoration-none text-primary me-3">← 返回首页</a>
+                <a href="/mysql-demo.tsx" className="text-decoration-none text-primary me-3">MySQL 演示仪表板</a>
+                <a href="/MYSQL_INTEGRATION.md" className="text-decoration-none text-primary">查看文档</a>
               </p>
-              <p style={{ marginTop: '20px', fontSize: '0.9em' }}>
+              <p className="text-muted small mb-0">
                 TSP MySQL 客户端 - 类似 PHP 的数据库使用方式
               </p>
             </div>

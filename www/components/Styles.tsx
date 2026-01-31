@@ -1,156 +1,71 @@
 /**
- * 共享样式组件
- * 提供统一的 CSS 样式
+ * 自定义样式组件
+ * 只保留Bootstrap无法提供的自定义样式
  */
 
-export function getGlobalStyles(): string {
+/**
+ * 获取自定义样式
+ * Bootstrap已提供大部分基础样式，这里只保留特殊的自定义样式
+ */
+export function getCustomStyles(): string {
   return `
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
+    /* 品牌渐变背景 */
+    .bg-gradient-brand {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+      min-height: 100vh;
     }
 
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      line-height: 1.6;
-      color: #333;
-    }
-
-    .container {
-      max-width: 1200px;
-      margin: 0 auto;
-      padding: 0 20px;
-    }
-
-    .card {
-      background: white;
-      border-radius: 8px;
-      padding: 24px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-      margin-bottom: 20px;
-    }
-
-    .btn {
-      display: inline-block;
-      padding: 10px 20px;
-      border: none;
-      border-radius: 6px;
-      font-size: 14px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all 0.3s ease;
-      text-decoration: none;
-    }
-
-    .btn-primary {
-      background: #667eea;
-      color: white;
-    }
-
-    .btn-primary:hover {
-      background: #5568d3;
-      transform: translateY(-1px);
-      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-    }
-
-    .btn-secondary {
-      background: #e2e8f0;
-      color: #333;
-    }
-
-    .btn-secondary:hover {
-      background: #cbd5e0;
-    }
-
-    .badge {
-      display: inline-block;
-      padding: 4px 12px;
-      border-radius: 12px;
-      font-size: 12px;
-      font-weight: 600;
-    }
-
-    .badge-success {
-      background: #d1fae5;
-      color: #065f46;
-    }
-
-    .badge-info {
-      background: #dbeafe;
-      color: #1e40af;
-    }
-
+    /* 代码块样式（Bootstrap没有深色代码块） */
     .code-block {
       background: #1e293b;
       color: #e2e8f0;
-      padding: 16px;
-      border-radius: 6px;
-      overflow-x: auto;
+      padding: 1rem;
+      border-radius: 0.375rem;
       font-family: 'Courier New', monospace;
-      font-size: 13px;
+      font-size: 0.875rem;
       line-height: 1.5;
+      overflow-x: auto;
     }
 
-    .info-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-      gap: 16px;
-      margin: 20px 0;
-    }
-
+    /* 信息项样式 */
     .info-item {
-      padding: 12px;
+      padding: 0.75rem;
       background: #f8fafc;
       border-left: 3px solid #667eea;
-      border-radius: 4px;
+      border-radius: 0.25rem;
     }
 
     .info-label {
       font-weight: 600;
       color: #667eea;
-      font-size: 12px;
+      font-size: 0.75rem;
       text-transform: uppercase;
       letter-spacing: 0.5px;
     }
 
     .info-value {
-      margin-top: 4px;
+      margin-top: 0.25rem;
       word-break: break-all;
     }
 
-    .section {
-      margin: 40px 0;
+    /* htmx加载指示器 */
+    .htmx-indicator {
+      opacity: 0;
+      transition: opacity 200ms ease-in;
     }
-
-    .section-title {
-      font-size: 24px;
-      font-weight: 700;
-      margin-bottom: 16px;
-      color: #1e293b;
+    .htmx-indicator.htmx-request {
+      opacity: 1;
     }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin: 20px 0;
-    }
-
-    table th,
-    table td {
-      padding: 12px;
-      text-align: left;
-      border-bottom: 1px solid #e2e8f0;
-    }
-
-    table th {
-      background: #f8fafc;
-      font-weight: 600;
-      color: #475569;
-    }
-
-    table tr:hover {
-      background: #f8fafc;
+    .htmx-indicator.d-none {
+      display: none !important;
     }
   `;
+}
+
+/**
+ * @deprecated 使用 getCustomStyles() 替代
+ * 保留此函数以兼容旧代码
+ */
+export function getGlobalStyles(): string {
+  return getCustomStyles();
 }

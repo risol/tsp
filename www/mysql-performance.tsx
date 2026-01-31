@@ -9,192 +9,125 @@ export default Page(async function(ctx, { createMySQL, response }) {
           <head>
             <title>MySQL 性能测试</title>
             <meta charset="utf-8" />
-            <style>{`
-              body {
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                max-width: 1200px;
-                margin: 0 auto;
-                padding: 20px;
-                background: #f8f9fa;
-              }
-              .header {
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white;
-                padding: 40px;
-                border-radius: 10px;
-                margin-bottom: 30px;
-                text-align: center;
-              }
-              .header h1 { margin: 0 0 10px 0; }
-              .header p { margin: 0; opacity: 0.9; }
-              .card {
-                background: white;
-                border-radius: 10px;
-                padding: 30px;
-                margin-bottom: 20px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-              }
-              .card h2 {
-                margin-top: 0;
-                color: #333;
-                border-bottom: 2px solid #667eea;
-                padding-bottom: 10px;
-              }
-              .test-button {
-                display: inline-block;
-                padding: 12px 24px;
-                margin: 10px;
-                background: #667eea;
-                color: white;
-                text-decoration: none;
-                border-radius: 5px;
-                transition: background 0.3s;
-              }
-              .test-button:hover { background: #5568d3; }
-              .result {
-                background: #f8f9fa;
-                padding: 20px;
-                border-radius: 5px;
-                margin-top: 20px;
-                border-left: 4px solid #28a745;
-              }
-              .result h3 { margin-top: 0; color: #28a745; }
-              .metric {
-                display: inline-block;
-                margin: 20px;
-                text-align: center;
-              }
-              .metric-value {
-                font-size: 3em;
-                font-weight: bold;
-                color: #667eea;
-              }
-              .metric-label {
-                color: #666;
-                margin-top: 5px;
-              }
-              table {
-                width: 100%;
-                border-collapse: collapse;
-                margin: 20px 0;
-              }
-              th, td {
-                padding: 12px;
-                text-align: left;
-                border-bottom: 1px solid #ddd;
-              }
-              th { background: #667eea; color: white; }
-              .fast { color: #28a745; font-weight: bold; }
-              .medium { color: #ffc107; font-weight: bold; }
-              .slow { color: #dc3545; font-weight: bold; }
-            `}</style>
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <link href="/assets/bootstrap.min.css" rel="stylesheet" />
           </head>
-          <body>
-            <div className="header">
-              <h1>⚡ MySQL 性能测试</h1>
-              <p>测试 MySQL 客户端的各种性能指标</p>
+          <body className="container py-4 bg-light">
+            <div className="bg-primary text-white rounded p-5 mb-5 shadow text-center">
+              <h1 className="display-5 mb-2">⚡ MySQL 性能测试</h1>
+              <p className="mb-0 opacity-75">测试 MySQL 客户端的各种性能指标</p>
             </div>
 
-            <div className="card">
-              <h2>🧪 性能测试</h2>
-              <p>点击下面的按钮运行各种性能测试：</p>
+            <div className="card shadow-sm mb-4">
+              <div className="card-body">
+                <h2 className="h4 border-bottom pb-2 mb-4">🧪 性能测试</h2>
+                <p>点击下面的按钮运行各种性能测试：</p>
 
-              <div style={{ marginTop: '20px' }}>
-                <a href="/mysql-performance.tsx?action=connection" className="test-button">
-                  🔗 连接测试
-                </a>
-                <a href="/mysql-performance.tsx?action=query-simple" className="test-button">
-                  📊 简单查询
-                </a>
-                <a href="/mysql-performance.tsx?action=query-complex" className="test-button">
-                  🔍 复杂查询
-                </a>
-                <a href="/mysql-performance.tsx?action=insert-single" className="test-button">
-                  ➕ 单次插入
-                </a>
-                <a href="/mysql-performance.tsx?action=insert-batch" className="test-button">
-                  ➕➕ 批量插入
-                </a>
+                <div className="mb-3">
+                  <a href="/mysql-performance.tsx?action=connection" className="btn btn-primary me-2 mb-2">
+                    🔗 连接测试
+                  </a>
+                  <a href="/mysql-performance.tsx?action=query-simple" className="btn btn-primary me-2 mb-2">
+                    📊 简单查询
+                  </a>
+                  <a href="/mysql-performance.tsx?action=query-complex" className="btn btn-primary me-2 mb-2">
+                    🔍 复杂查询
+                  </a>
+                  <a href="/mysql-performance.tsx?action=insert-single" className="btn btn-primary me-2 mb-2">
+                    ➕ 单次插入
+                  </a>
+                  <a href="/mysql-performance.tsx?action=insert-batch" className="btn btn-primary me-2 mb-2">
+                    ➕➕ 批量插入
+                  </a>
+                </div>
+
+                <div>
+                  <a href="/mysql-performance.tsx?action=stress-test" className="btn btn-danger me-2 mb-2">
+                    🔥 压力测试
+                  </a>
+                  <a href="/mysql-performance.tsx?action=full-benchmark" className="btn btn-success me-2 mb-2">
+                    📈 完整基准测试
+                  </a>
+                </div>
               </div>
+            </div>
 
-              <div style={{ marginTop: '20px' }}>
-                <a href="/mysql-performance.tsx?action=stress-test" className="test-button" style={{ background: '#dc3545' }}>
-                  🔥 压力测试
-                </a>
-                <a href="/mysql-performance.tsx?action=full-benchmark" className="test-button" style={{ background: '#28a745' }}>
-                  📈 完整基准测试
-                </a>
+            <div className="card shadow-sm mb-4">
+              <div className="card-body">
+                <h2 className="h4 border-bottom pb-2 mb-4">📖 测试说明</h2>
+                <div className="table-responsive">
+                  <table className="table table-striped table-hover">
+                    <thead className="table-dark">
+                      <tr>
+                        <th>测试项</th>
+                        <th>描述</th>
+                        <th>预期结果</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>连接测试</td>
+                        <td>测试数据库连接的建立时间</td>
+                        <td>&lt; 100ms</td>
+                      </tr>
+                      <tr>
+                        <td>简单查询</td>
+                        <td>执行基本的 SELECT 查询</td>
+                        <td>&lt; 50ms</td>
+                      </tr>
+                      <tr>
+                        <td>复杂查询</td>
+                        <td>执行带参数和排序的查询</td>
+                        <td>&lt; 100ms</td>
+                      </tr>
+                      <tr>
+                        <td>单次插入</td>
+                        <td>插入一条记录</td>
+                        <td>&lt; 50ms</td>
+                      </tr>
+                      <tr>
+                        <td>批量插入</td>
+                        <td>使用事务批量插入 100 条记录</td>
+                        <td>&lt; 500ms</td>
+                      </tr>
+                      <tr>
+                        <td>压力测试</td>
+                        <td>连续执行 50 次查询操作</td>
+                        <td>&lt; 2000ms</td>
+                      </tr>
+                      <tr>
+                        <td>完整基准测试</td>
+                        <td>运行所有性能测试</td>
+                        <td>&lt; 5000ms</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
 
-            <div className="card">
-              <h2>📖 测试说明</h2>
-              <table>
-                <thead>
-                  <tr>
-                    <th>测试项</th>
-                    <th>描述</th>
-                    <th>预期结果</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>连接测试</td>
-                    <td>测试数据库连接的建立时间</td>
-                    <td>&lt; 100ms</td>
-                  </tr>
-                  <tr>
-                    <td>简单查询</td>
-                    <td>执行基本的 SELECT 查询</td>
-                    <td>&lt; 50ms</td>
-                  </tr>
-                  <tr>
-                    <td>复杂查询</td>
-                    <td>执行带参数和排序的查询</td>
-                    <td>&lt; 100ms</td>
-                  </tr>
-                  <tr>
-                    <td>单次插入</td>
-                    <td>插入一条记录</td>
-                    <td>&lt; 50ms</td>
-                  </tr>
-                  <tr>
-                    <td>批量插入</td>
-                    <td>使用事务批量插入 100 条记录</td>
-                    <td>&lt; 500ms</td>
-                  </tr>
-                  <tr>
-                    <td>压力测试</td>
-                    <td>连续执行 50 次查询操作</td>
-                    <td>&lt; 2000ms</td>
-                  </tr>
-                  <tr>
-                    <td>完整基准测试</td>
-                    <td>运行所有性能测试</td>
-                    <td>&lt; 5000ms</td>
-                  </tr>
-                </tbody>
-              </table>
+            <div className="card shadow-sm mb-4">
+              <div className="card-body">
+                <h2 className="h4 border-bottom pb-2 mb-4">💡 性能优化建议</h2>
+                <ul className="list-group list-group-flush">
+                  <li className="list-group-item"><strong>使用连接池：</strong> mysql2 内置连接池，自动管理连接复用</li>
+                  <li className="list-group-item"><strong>批量操作：</strong> 使用事务进行批量插入/更新，性能更好</li>
+                  <li className="list-group-item"><strong>参数化查询：</strong> 使用参数化查询不仅安全，还能提升性能</li>
+                  <li className="list-group-item"><strong>索引优化：</strong> 为经常查询的字段添加索引</li>
+                  <li className="list-group-item"><strong>避免 SELECT *：</strong> 只查询需要的字段</li>
+                </ul>
+              </div>
             </div>
 
-            <div className="card">
-              <h2>💡 性能优化建议</h2>
-              <ul>
-                <li><strong>使用连接池：</strong> mysql2 内置连接池，自动管理连接复用</li>
-                <li><strong>批量操作：</strong> 使用事务进行批量插入/更新，性能更好</li>
-                <li><strong>参数化查询：</strong> 使用参数化查询不仅安全，还能提升性能</li>
-                <li><strong>索引优化：</strong> 为经常查询的字段添加索引</li>
-                <li><strong>避免 SELECT *：</strong> 只查询需要的字段</li>
-              </ul>
-            </div>
-
-            <div className="card">
-              <h2>🔗 相关链接</h2>
-              <p>
-                <a href="/mysql-demo.tsx">MySQL 演示仪表板</a> |
-                <a href="/mysql-advanced.tsx">MySQL 高级功能</a> |
-                <a href="/">返回首页</a>
-              </p>
+            <div className="card shadow-sm mb-4">
+              <div className="card-body">
+                <h2 className="h4 border-bottom pb-2 mb-3">🔗 相关链接</h2>
+                <p>
+                  <a href="/mysql-demo.tsx" className="text-decoration-none me-3">MySQL 演示仪表板</a>
+                  <a href="/mysql-advanced.tsx" className="text-decoration-none me-3">MySQL 高级功能</a>
+                  <a href="/" className="text-decoration-none">返回首页</a>
+                </p>
+              </div>
             </div>
           </body>
         </html>
