@@ -4,7 +4,7 @@
  * A simple demonstration of TSP's cookie management capabilities.
  */
 
-export default Page(async function (ctx, { cookies }) {
+export default async function (ctx) {
   const action = ctx.query.action || "view";
 
   // View mode: show current cookies
@@ -144,7 +144,7 @@ export default Page(async function (ctx, { cookies }) {
             <h2>工作原理</h2>
             <p>在 TSP 中设置 Cookie 很简单：</p>
             <pre><code>{`
-export default Page(async function(ctx, { cookies }) {
+export default async function(ctx) {
   // Set a simple cookie
   cookies.set('username', 'john_doe');
 
@@ -157,7 +157,7 @@ export default Page(async function(ctx, { cookies }) {
   });
 
   return <div>Done!</div>;
-});
+};
             `.trim()}</code></pre>
             <p>读取 Cookie 更简单 - 它们就在您的上下文中：</p>
             <pre><code>{`
@@ -207,4 +207,4 @@ const username = ctx.cookies.username || 'Guest';
   }
 
   return <div>Unknown action</div>;
-});
+}

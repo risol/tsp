@@ -12,12 +12,12 @@ export function test2_direct_sync(context: PageContext) {
   return <div>Direct sync - no dependencies</div>;
 }
 
-// 测试3: 使用Page包装器，async，使用异步依赖（正确）
-export default Page(async function (ctx, { session }) {
+// 测试3: 使用全局函数，async，使用异步依赖（推荐）
+export default async function (ctx) {
   // 调用异步方法，所以需要async
   const user = await session.getUser();
-  return <div>Page async with async dependency: {user?.name || "guest"}</div>;
-});
+  return <div>Global function async with async dependency: {user?.name || "guest"}</div>;
+}
 
 // 测试4: 使用Page包装器，async，但不使用await（可以工作但不推荐）
 export const test4 = Page(async function (ctx, { session }) {

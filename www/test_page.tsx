@@ -1,3 +1,3 @@
-export default Page(async function (ctx, { session }) {
+export default async function (ctx) {
   return <div>Test: Session loaded successfully</div>;
-});
+}

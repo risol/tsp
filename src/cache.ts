@@ -13,6 +13,12 @@ import {
   getCachePath,
 } from "./precompiler_lib.ts";
 import type { PageContext } from "./context.ts";
+import {
+  setupRequestContext,
+  cleanupRequestContext,
+  getRequestContext,
+} from "./context.ts";
+import { SessionStore } from "./session.ts";
 
 // 重新导出 PageContext 类型，供页面使用
 export type { PageContext };
@@ -83,6 +89,8 @@ export async function getPage(
   filepath: string,
   forceReload: boolean = false,
 ): Promise<PageFunction> {
+  // 内部函数：实际加载模块的函数
+  const loadModule = async (): Promise<PageFunction> => {
   // filepath 可能已经是绝对路径（来自 resolvePath 解析后的 root）
   // 或者是相对路径（为了向后兼容）
   const absPath = filepath.startsWith("/") || filepath.match(/^[a-zA-Z]:/)
@@ -202,7 +210,69 @@ export async function getPage(
   compiledMtimes.set(filepath, currentMtime);
 
   return module.default as PageFunction;
+  };
+
+  // 调用内部函数加载模块
+  const actualPageFn = await loadModule();
+
+  // 返回包装函数，在执行时设置全局 getter
+  return async function wrappedPageFn(context: PageContext): Promise<PageResult> {
+    // 1. 初始化 SessionStore（如果还没有）
+    if (!globalSessionStore) {
+      const secret = Deno.env.get("TSP_SESSION_SECRET");
+      const secretBytes = secret ? new TextEncoder().encode(secret) : undefined;
+
+      const { getDefaultOptions } = await import("./session.ts");
+      const options = {
+        ...getDefaultOptions(),
+        secret: secretBytes,
+      };
+
+      globalSessionStore = new SessionStore(options);
+    }
+
+    // 2. 设置请求上下文
+    setupRequestContext(context, globalSessionStore);
+
+    // 3. 设置全局 getter
+    Object.defineProperty(globalThis, 'session', {
+      get() {
+        const requestContext = getRequestContext(context);
+        if (!requestContext) {
+          throw new Error('session() 在请求上下文外调用');
+        }
+        return requestContext.session;
+      },
+      configurable: true
+    });
+
+    Object.defineProperty(globalThis, 'cookies', {
+      get() {
+        const requestContext = getRequestContext(context);
+        if (!requestContext) {
+          throw new Error('cookies() 在请求上下文外调用');
+        }
+        return requestContext.cookies;
+      },
+      configurable: true
+    });
+
+    try {
+      // 4. 执行实际的页面函数
+      return await actualPageFn(context);
+    } finally {
+      // 5. 清理全局 getter
+      delete (globalThis as any).session;
+      delete (globalThis as any).cookies;
+
+      // 6. 清理请求上下文
+      cleanupRequestContext(context);
+    }
+  };
 }
+
+// 全局 SessionStore 单例
+let globalSessionStore: SessionStore | null = null;
 
 /**
  * 检查是否需要重新编译（递归检查所有传递依赖）

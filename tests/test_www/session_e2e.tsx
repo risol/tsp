@@ -4,16 +4,16 @@
  * 用于测试session功能在编译二进制中是否正常工作
  */
 
-export default Page(async function (ctx, { session }) {
+export default async function (ctx) {
   // 测试1: 验证session对象和方法存在
   const methodCheck = {
     hasSession: session !== null && session !== undefined,
-    hasGetUser: typeof session?.getUser === "function",
-    hasLogin: typeof session?.login === "function",
-    hasLogout: typeof session?.logout === "function",
-    hasSet: typeof session?.set === "function",
-    hasGet: typeof session?.get === "function",
-    hasDelete: typeof session?.delete === "function",
+    hasGetUser: typeof session.getUser === "function",
+    hasLogin: typeof session.login === "function",
+    hasLogout: typeof session.logout === "function",
+    hasSet: typeof session.set === "function",
+    hasGet: typeof session.get === "function",
+    hasDelete: typeof session.delete === "function",
   };
 
   // 测试2: 尝试调用getUser
@@ -81,4 +81,4 @@ export default Page(async function (ctx, { session }) {
       )}
     </div>
   );
-});
+}

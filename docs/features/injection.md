@@ -2,11 +2,36 @@
 
 ## 概述
 
-TSP 支持类型安全的依赖注入功能，通过 `Page` 包装器自动将依赖注入到页面函数中。
+TSP 支持两种使用依赖的方式：
 
-**重要**：Page 函数使用 **Proxy 懒加载机制**，只有在访问依赖时才构建它们。
+1. **全局函数（推荐）**：直接调用 `session()` 和 `cookies()` 全局函数，更简洁直观
+2. **Page 包装器（可选）**：使用 `Page` 包装器进行类型安全的依赖注入
 
-## 核心概念
+**重要**：
+- **推荐使用全局函数** `session()` 和 `cookies()`，语法更简洁
+- Page 包装器适用于需要自定义依赖（如 db、logger）的复杂场景
+- Page 函数使用 **Proxy 懒加载机制**，只有在访问依赖时才构建它们
+
+## 推荐方式：全局函数
+
+对于大多数场景，推荐使用全局函数：
+
+```tsx
+// ✅ 推荐 - 使用全局函数
+export default async function(ctx) {
+  const user = await session.getUser();
+  cookies.set('theme', 'dark');
+  return <div>欢迎, {user?.name}</div>;
+}
+```
+
+**优点**：
+- ✅ 语法更简洁，不需要包装器
+- ✅ 完整的类型提示和 IDE 支持
+- ✅ 自动请求隔离，每个请求有独立的 session/cookies
+- ✅ 请求结束后自动清理，避免内存泄漏
+
+## 可选方式：Page 包装器
 
 ### 正确的 Page 用法
 
@@ -609,6 +634,87 @@ deno test --allow-all tests/unit/injection_test.ts
 - ✓ 类型安全和类型推断
 - ✓ 全局 Page 函数
 - ✓ 懒加载机制
+
+## 两种方式对比
+
+### 全局函数 vs Page 包装器
+
+| 特性 | 全局函数 | Page 包装器 |
+|------|---------|------------|
+| **语法简洁性** | ✅ 更简洁 | 需要包装器 |
+| **类型提示** | ✅ 完整 | ✅ 完整 |
+| **Session/Cookies** | ✅ 支持 | ✅ 支持 |
+| **自定义依赖** | ❌ 不支持 | ✅ 支持（如 db、logger） |
+| **推荐场景** | ✅ 大多数页面 | 复杂依赖场景 |
+
+### 何时使用全局函数？
+
+**推荐使用全局函数**的场景：
+- 只需要 session 和 cookies
+- 简单的页面逻辑
+- 快速开发
+
+```tsx
+// ✅ 推荐：全局函数方式
+export default async function(ctx) {
+  const user = await session.getUser();
+  cookies.set('lastVisit', new Date().toISOString());
+  return <div>欢迎, {user?.name}</div>;
+}
+```
+
+### 何时使用 Page 包装器？
+
+**使用 Page 包装器**的场景：
+- 需要自定义依赖（db、logger、cache 等）
+- 复杂的依赖注入需求
+- 需要显式声明所有依赖
+
+```tsx
+// ✅ 复杂场景：使用 Page 包装器
+export default Page(async function(ctx, { session, db, logger, cache }) {
+  const user = await session.getUser();
+  logger('用户访问');
+
+  let data = await cache.get('posts');
+  if (!data) {
+    data = await db.query('SELECT * FROM posts');
+    await cache.set('posts', data, 600);
+  }
+
+  return <div>{JSON.stringify(data)}</div>;
+});
+```
+
+## 迁移指南
+
+### 从 Page 包装器迁移到全局函数
+
+如果你之前使用 Page 包装器，现在想迁移到全局函数：
+
+**修改前**：
+```tsx
+export default Page(async function(ctx, { session, cookies }) {
+  const user = await session.getUser();
+  cookies.set('theme', 'dark');
+  return <div>欢迎, {user?.name}</div>;
+});
+```
+
+**修改后**：
+```tsx
+export default async function(ctx) {
+  const user = await session.getUser();
+  cookies.set('theme', 'dark');
+  return <div>欢迎, {user?.name}</div>;
+}
+```
+
+**主要变化**：
+1. 移除 `Page` 包装器
+2. 移除第二个参数 `{ session, cookies }`
+3. 将 `session.xxx()` 改为 `session.xxx()`
+4. 将 `cookies.xxx()` 改为 `cookies.xxx()`
 
 ## 相关文档
 
