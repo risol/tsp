@@ -35,6 +35,44 @@ deno run --allow-net --allow-read src/main.ts --root ./www --port 9000 --dev
 
 打开浏览器访问 `http://localhost:9000`
 
+## 🐳 Docker 测试服务
+
+项目包含 Docker Compose 配置，用于快速启动测试所需的 MySQL 和 Redis 服务。
+
+详见 [DOCKER.md](./DOCKER.md)
+
+### Linux / macOS
+
+```bash
+# 启动服务
+./docker-start.sh
+
+# 测试连接
+./docker-test-connection.sh
+
+# 停止服务
+./docker-stop.sh
+
+# 删除所有测试数据
+./docker-cleanup.sh
+```
+
+### Windows (PowerShell)
+
+```powershell
+# 启动服务
+.\docker-start.ps1
+
+# 测试连接
+.\docker-test-connection.sh
+
+# 停止服务
+.\docker-stop.ps1
+
+# 删除所有测试数据
+.\docker-cleanup.ps1
+```
+
 ## 📦 编译为可执行文件
 
 ```bash

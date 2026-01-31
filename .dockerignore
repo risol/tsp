@@ -1,0 +1,9 @@
+# Docker 数据和配置文件
+docker/mysql/data/
+docker/redis/data/
+docker/mysql/init/
+docker/redis/
+
+# 环境变量文件
+.env
+.env.local
