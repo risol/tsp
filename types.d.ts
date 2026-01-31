@@ -51,6 +51,71 @@ declare global {
   }
 
   /**
+   * Response 辅助器接口
+   * 提供便捷的 HTTP 响应创建方法
+   */
+  interface ResponseHelper {
+    /**
+     * 返回 JSON 响应
+     * @param data - 要序列化的数据
+     * @param status - HTTP 状态码，默认 200
+     * @param headers - 额外的响应头
+     */
+    json<T = unknown>(data: T, status?: number, headers?: HeadersInit): Response;
+
+    /**
+     * 返回纯文本响应
+     * @param content - 文本内容
+     * @param status - HTTP 状态码，默认 200
+     * @param headers - 额外的响应头
+     */
+    text(content: string, status?: number, headers?: HeadersInit): Response;
+
+    /**
+     * 返回 HTML 响应
+     * @param content - HTML 内容
+     * @param status - HTTP 状态码，默认 200
+     * @param headers - 额外的响应头
+     */
+    html(content: string, status?: number, headers?: HeadersInit): Response;
+
+    /**
+     * 返回重定向
+     * @param url - 重定向目标 URL
+     * @param status - 重定向状态码，默认 302
+     */
+    redirect(url: string, status?: 301 | 302 | 303 | 307 | 308): RedirectResult;
+
+    /**
+     * 返回错误响应
+     * @param message - 错误消息
+     * @param status - HTTP 状态码，默认 500
+     * @param headers - 额外的响应头
+     */
+    error(message: string, status?: number, headers?: HeadersInit): Response;
+
+    /**
+     * 返回文件下载响应
+     * @param content - 文件内容（字符串或二进制）
+     * @param filename - 文件名
+     * @param headers - 额外的响应头
+     */
+    file(content: string | Uint8Array, filename: string, headers?: HeadersInit): Response;
+
+    /**
+     * 返回 204 No Content 响应
+     */
+    noContent(): Response;
+
+    /**
+     * 返回自定义 Response
+     * @param body - 响应体
+     * @param init - Response 初始化选项
+     */
+    custom(body?: BodyInit | null, init?: ResponseInit): Response;
+  }
+
+  /**
    * 应用依赖类型
    * 在此声明所有可注入的依赖及其类型
    *
@@ -93,6 +158,12 @@ declare global {
      * Cookie管理器
      */
     cookies: import("./src/cookies.ts").CookieManager;
+
+    /**
+     * Response 辅助器
+     * 提供便捷的 HTTP 响应创建方法
+     */
+    response: ResponseHelper;
   }
 
   /**

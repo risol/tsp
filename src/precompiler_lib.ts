@@ -3,7 +3,7 @@
  * 将 TSX 文件编译为缓存目录中的 JS 文件
  */
 
-import { dirname, join, relative, toFileUrl } from "std/path";
+import { dirname, join, relative, resolve, toFileUrl } from "std/path";
 import { ensureDir } from "https://deno.land/std@0.224.0/fs/ensure_dir.ts";
 
 const WWW_DIR = "./www";
@@ -36,7 +36,14 @@ function getCacheBaseDir(): string {
 /** 获取相对于当前工作目录或 www 目录的文件路径 */
 function getRelativePath(filepath: string): string {
   const cacheBase = getCacheBaseDir();
-  const absPath = filepath;
+
+  // 🔧 修复：将相对路径转换为绝对路径
+  // filepath 可能是相对路径（如 "./www/index.tsx"）或绝对路径
+  let absPath = filepath;
+  if (!filepath.startsWith("/") && !filepath.match(/^[a-zA-Z]:/)) {
+    // 不是绝对路径，转换为相对于 cache base 的绝对路径
+    absPath = resolve(cacheBase, filepath);
+  }
 
   // 尝试相对于 www 目录计算路径
   const wwwPath = join(cacheBase, WWW_DIR);

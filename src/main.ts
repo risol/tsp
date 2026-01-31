@@ -18,6 +18,7 @@ import {
   SessionStore,
 } from "./session.ts";
 import { createCookieManager } from "./cookies.ts";
+import { createResponseHelper } from "./response.ts";
 
 // 配置接口
 export interface Config {
@@ -591,6 +592,11 @@ async function main(): Promise<void> {
 
     // 创建 session 管理器
     return createSessionManager(ctx, sessionStore, cookieManager);
+  });
+
+  // 注册 Response 辅助器
+  registerDep("response", (ctx) => {
+    return createResponseHelper(ctx);
   });
 
   console.log(`
