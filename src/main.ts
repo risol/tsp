@@ -12,6 +12,7 @@ import { registerDep } from "./injection-typed.ts";
 import { compileAll, setCacheBaseDir } from "./precompiler_lib.ts";
 import { serveStaticFileWithCache } from "./static.ts";
 import { join, relative, resolve, dirname } from "std/path";
+import { createMySQL } from "./mysql/factory.ts";
 import {
   createSessionManager,
   getDefaultOptions,
@@ -699,6 +700,11 @@ async function main(): Promise<void> {
 
   // 注册 nanoid
   registerDep("nanoid", () => nanoid);
+
+  // 注册 createMySQL 工厂函数
+  registerDep("createMySQL", () => {
+    return createMySQL;
+  });
 
   // 记录服务器启动信息
   serverLogger.info("TSP Server 启动中", {

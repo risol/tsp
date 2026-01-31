@@ -109,7 +109,8 @@ export default async function (context: PageContext) {
       <div className="section">
         <h2 className="section-title">📚 功能演示</h2>
         <div className="card">
-          <table style={{ width: "100%" }}>
+          <h3 style={{ marginBottom: "16px", color: "#667eea" }}>🔧 核心功能</h3>
+          <table style={{ width: "100%", marginBottom: "30px" }}>
             <thead>
               <tr>
                 <th>功能</th>
@@ -154,6 +155,19 @@ export default async function (context: PageContext) {
                   <a href="/features/redirect">查看演示 →</a>
                 </td>
               </tr>
+            </tbody>
+          </table>
+
+          <h3 style={{ marginBottom: "16px", color: "#667eea" }}>🍪 状态管理</h3>
+          <table style={{ width: "100%", marginBottom: "30px" }}>
+            <thead>
+              <tr>
+                <th>功能</th>
+                <th>描述</th>
+                <th>链接</th>
+              </tr>
+            </thead>
+            <tbody>
               <tr>
                 <td>
                   <strong>Session 管理</strong>
@@ -172,11 +186,136 @@ export default async function (context: PageContext) {
                   <a href="/cookie_demo">查看演示 →</a>
                 </td>
               </tr>
+            </tbody>
+          </table>
+
+          <h3 style={{ marginBottom: "16px", color: "#667eea" }}>🗄️ MySQL 数据库</h3>
+          <table style={{ width: "100%", marginBottom: "30px" }}>
+            <thead>
+              <tr>
+                <th>功能</th>
+                <th>描述</th>
+                <th>链接</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <strong>MySQL 测试中心</strong>
+                </td>
+                <td>所有 MySQL 功能的导航中心</td>
+                <td>
+                  <a href="/mysql-tests">查看演示 →</a>
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <strong>MySQL 演示仪表板</strong>
+                </td>
+                <td>交互式 MySQL 功能演示和测试</td>
+                <td>
+                  <a href="/mysql-demo">查看演示 →</a>
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <strong>高级功能测试</strong>
+                </td>
+                <td>12 种 MySQL 高级功能测试</td>
+                <td>
+                  <a href="/mysql-advanced">查看演示 →</a>
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <strong>性能测试</strong>
+                </td>
+                <td>MySQL 客户端性能基准测试</td>
+                <td>
+                  <a href="/mysql-performance">查看演示 →</a>
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <strong>基本查询 API</strong>
+                </td>
+                <td>简单的 JSON API 查询示例</td>
+                <td>
+                  <a href="/test-mysql">查看演示 →</a>
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <strong>插入操作 API</strong>
+                </td>
+                <td>数据插入操作示例</td>
+                <td>
+                  <a href="/test-mysql-insert">查看演示 →</a>
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <strong>更新操作 API</strong>
+                </td>
+                <td>数据更新操作示例</td>
+                <td>
+                  <a href="/test-mysql-update">查看演示 →</a>
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <strong>事务操作 API</strong>
+                </td>
+                <td>数据库事务操作示例</td>
+                <td>
+                  <a href="/test-mysql-transaction">查看演示 →</a>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h3 style={{ marginBottom: "16px", color: "#667eea" }}>📦 其他功能</h3>
+          <table style={{ width: "100%" }}>
+            <thead>
+              <tr>
+                <th>功能</th>
+                <th>描述</th>
+                <th>链接</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <strong>文件上传</strong>
+                </td>
+                <td>多文件上传功能演示</td>
+                <td>
+                  <a href="/features/file-upload">查看演示 →</a>
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <strong>Nanoid ID 生成</strong>
+                </td>
+                <td>生成唯一 ID 的功能演示</td>
+                <td>
+                  <a href="/features/nanoid-demo">查看演示 →</a>
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <strong>静态文件服务</strong>
+                </td>
+                <td>静态文件的缓存和服务</td>
+                <td>
+                  <a href="/static-demo">查看演示 →</a>
+                </td>
+              </tr>
               <tr>
                 <td>
                   <strong>依赖注入</strong>
                 </td>
-                <td>类型安全的依赖注入功能（单元测试覆盖）</td>
+                <td>类型安全的依赖注入功能</td>
                 <td>
                   <span style={{ color: "#64748b", fontSize: "14px" }}>
                     ✓ 单元测试验证
@@ -257,6 +396,89 @@ export default async function(context: PageContext) {
         <a href="/features" className="btn btn-primary">
           探索功能 →
         </a>
+      </div>
+
+      {/* All Pages Navigation */}
+      <div className="section">
+        <h2 className="section-title">🔗 所有页面导航</h2>
+        <div className="card">
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))",
+              gap: "12px",
+            }}
+          >
+            {/* Core Pages */}
+            <div style={{ padding: "12px", background: "#f0f9ff", borderRadius: "8px" }}>
+              <strong style={{ color: "#0369a1" }}>📄 核心页面</strong>
+              <ul style={{ marginTop: "8px", marginBottom: "0", paddingLeft: "20px" }}>
+                <li><a href="/">首页</a></li>
+                <li><a href="/features">功能总览</a></li>
+                <li><a href="/demos">演示页面</a></li>
+                <li><a href="/api">API 演示</a></li>
+                <li><a href="/form">表单测试</a></li>
+                <li><a href="/redirect">重定向测试</a></li>
+              </ul>
+            </div>
+
+            {/* Features */}
+            <div style={{ padding: "12px", background: "#fef3c7", borderRadius: "8px" }}>
+              <strong style={{ color: "#b45309" }}>✨ 功能演示</strong>
+              <ul style={{ marginTop: "8px", marginBottom: "0", paddingLeft: "20px" }}>
+                <li><a href="/features/request-info">请求信息</a></li>
+                <li><a href="/features/form-handling">表单处理</a></li>
+                <li><a href="/features/redirect">重定向功能</a></li>
+                <li><a href="/features/file-upload">文件上传</a></li>
+                <li><a href="/features/nanoid-demo">Nanoid 演示</a></li>
+              </ul>
+            </div>
+
+            {/* Session & Cookie */}
+            <div style={{ padding: "12px", background: "#dcfce7", borderRadius: "8px" }}>
+              <strong style={{ color: "#15803d" }}>🍪 状态管理</strong>
+              <ul style={{ marginTop: "8px", marginBottom: "0", paddingLeft: "20px" }}>
+                <li><a href="/session_demo">Session 演示</a></li>
+                <li><a href="/cookie_demo">Cookie 演示</a></li>
+                <li><a href="/cookie_test">Cookie 测试</a></li>
+              </ul>
+            </div>
+
+            {/* MySQL Database */}
+            <div style={{ padding: "12px", background: "#fae8ff", borderRadius: "8px" }}>
+              <strong style={{ color: "#86198f" }}>🗄️ MySQL 数据库</strong>
+              <ul style={{ marginTop: "8px", marginBottom: "0", paddingLeft: "20px" }}>
+                <li><a href="/mysql-tests">📊 测试中心</a></li>
+                <li><a href="/mysql-demo">📈 演示仪表板</a></li>
+                <li><a href="/mysql-advanced">🔬 高级功能</a></li>
+                <li><a href="/mysql-performance">⚡ 性能测试</a></li>
+                <li><a href="/test-mysql">查询 API</a></li>
+                <li><a href="/test-mysql-insert">插入 API</a></li>
+                <li><a href="/test-mysql-update">更新 API</a></li>
+                <li><a href="/test-mysql-transaction">事务 API</a></li>
+              </ul>
+            </div>
+
+            {/* Test Pages */}
+            <div style={{ padding: "12px", background: "#fce7f3", borderRadius: "8px" }}>
+              <strong style={{ color: "#be185d" }}>🧪 测试页面</strong>
+              <ul style={{ marginTop: "8px", marginBottom: "0", paddingLeft: "20px" }}>
+                <li><a href="/test_page">异步测试页</a></li>
+                <li><a href="/test_page_sync">同步测试页</a></li>
+                <li><a href="/static-demo">静态文件测试</a></li>
+              </ul>
+            </div>
+          </div>
+
+          <div style={{ marginTop: "20px", padding: "16px", background: "#fffbeb", borderRadius: "8px", border: "2px solid #fbbf24" }}>
+            <h4 style={{ margin: "0 0 8px 0", color: "#b45309" }}>💡 提示</h4>
+            <p style={{ margin: "0", fontSize: "14px", color: "#78350f" }}>
+              • MySQL 功能需要先启动 Docker 容器：<code>.\docker-start.ps1</code><br />
+              • 所有页面都支持热重载，修改文件后自动刷新<br />
+              • 点击任意链接即可查看对应功能的详细演示
+            </p>
+          </div>
+        </div>
       </div>
     </Layout>
   );

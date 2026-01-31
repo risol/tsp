@@ -177,6 +177,100 @@ declare global {
   }
 
   /**
+   * MySQL 客户端接口
+   * 提供完整的数据库操作功能
+   */
+  interface MySQLClient {
+    /**
+     * 执行查询（支持参数化查询，防止 SQL 注入）
+     * @param sql - SQL 语句
+     * @param params - 查询参数
+     * @returns 查询结果数组
+     */
+    query<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
+
+    /**
+     * 插入数据
+     * @param table - 表名
+     * @param data - 数据对象
+     * @returns 插入行的 ID
+     */
+    insert(table: string, data: Record<string, unknown>): Promise<number>;
+
+    /**
+     * 更新数据
+     * @param table - 表名
+     * @param data - 更新的数据
+     * @param where - WHERE 条件
+     * @returns 影响的行数
+     */
+    update(
+      table: string,
+      data: Record<string, unknown>,
+      where: Record<string, unknown>
+    ): Promise<number>;
+
+    /**
+     * 删除数据
+     * @param table - 表名
+     * @param where - WHERE 条件
+     * @returns 影响的行数
+     */
+    delete(table: string, where: Record<string, unknown>): Promise<number>;
+
+    /**
+     * 开启事务
+     */
+    beginTransaction(): Promise<void>;
+
+    /**
+     * 提交事务
+     */
+    commit(): Promise<void>;
+
+    /**
+     * 回滚事务
+     */
+    rollback(): Promise<void>;
+
+    /**
+     * 关闭连接
+     */
+    close(): Promise<void>;
+  }
+
+  /**
+   * MySQL 连接配置
+   */
+  interface MySQLConfig {
+    /** MySQL 主机地址 */
+    host: string;
+    /** MySQL 端口 */
+    port?: number;
+    /** 数据库名称 */
+    user: string;
+    /** 密码 */
+    password: string;
+    /** 数据库名称 */
+    database: string;
+    /** 字符集 */
+    charset?: string;
+    /** 连接池配置 */
+    pool?: {
+      /** 最大连接数 */
+      max?: number;
+      /** 最小连接数 */
+      min?: number;
+    };
+  }
+
+  /**
+   * MySQL 工厂函数类型
+   * 用于创建 MySQL 客户端实例
+   */
+  type MySQLFactory = (config: MySQLConfig) => Promise<MySQLClient>;
+
+  /**
    * 应用依赖类型
    * 在此声明所有可注入的依赖及其类型
    *
@@ -185,9 +279,7 @@ declare global {
    * // 添加新的依赖类型
    * interface AppDeps {
    *   testFunc: () => string;
-   *   db: {
-   *     query: (sql: string) => Promise<unknown[]>;
-   *   };
+   *   createMySQL: MySQLFactory;
    * }
    * ```
    */
@@ -198,12 +290,26 @@ declare global {
     testFunc: () => string;
 
     /**
-     * 数据库接口（示例）
+     * MySQL 客户端工厂函数
+     * 在 TSX 中调用以创建数据库连接
+     *
+     * @example
+     * ```tsx
+     * export default Page(async function(ctx, { createMySQL, response }) {
+     *   const db = await createMySQL({
+     *     host: '127.0.0.1',
+     *     port: 3306,
+     *     user: 'test_user',
+     *     password: 'test123456',
+     *     database: 'test_db'
+     *   });
+     *
+     *   const users = await db.query('SELECT * FROM users');
+     *   return response.json(users);
+     * });
+     * ```
      */
-    db: {
-      query: (sql: string) => Promise<unknown[]>;
-      insert: (table: string, data: Record<string, unknown>) => Promise<void>;
-    };
+    createMySQL: MySQLFactory;
 
     /**
      * Session 管理

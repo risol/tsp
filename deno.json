@@ -28,7 +28,8 @@
     "std/path": "jsr:@std/path@1.0.0",
     "preact": "npm:preact@10.25.4",
     "preact-render-to-string": "npm:preact-render-to-string@6.6.3",
-    "nanoid": "npm:nanoid@5.0.9"
+    "nanoid": "npm:nanoid@5.0.9",
+    "mysql2": "npm:mysql2@^2.3.3"
   },
   "compilerOptions": {
     "jsx": "react-jsx",

@@ -15,6 +15,7 @@
     "jsr:@std/path@1.0.0": "1.0.0",
     "jsr:@std/path@^1.1.4": "1.1.4",
     "jsr:@std/streams@^1.0.16": "1.0.17",
+    "npm:mysql2@^2.3.3": "2.3.3",
     "npm:nanoid@5.0.9": "5.0.9",
     "npm:preact-render-to-string@6.6.3": "6.6.3_preact@10.25.4",
     "npm:preact@10.25.4": "10.25.4"
@@ -81,6 +82,55 @@
     }
   },
   "npm": {
+    "denque@2.1.0": {
+      "integrity": "sha512-HVQE3AAb/pxF8fQAoiqpvg9i3evqug3hoiwakOyZAwJm+6vZehbkYXZ0l4JxS+I3QxM97v5aaRNhj8v5oBhekw=="
+    },
+    "generate-function@2.3.1": {
+      "integrity": "sha512-eeB5GfMNeevm/GRYq20ShmsaGcmI81kIX2K9XQx5miC8KdHaC6Jm0qQ8ZNeGOi7wYB8OsdxKs+Y2oVuTFuVwKQ==",
+      "dependencies": [
+        "is-property"
+      ]
+    },
+    "iconv-lite@0.6.3": {
+      "integrity": "sha512-4fCk79wshMdzMp2rH06qWrJE4iolqLhCUH+OiuIgU++RB0+94NlDL81atO7GX55uUKueo0txHNtvEyI6D7WdMw==",
+      "dependencies": [
+        "safer-buffer"
+      ]
+    },
+    "is-property@1.0.2": {
+      "integrity": "sha512-Ks/IoX00TtClbGQr4TWXemAnktAQvYB7HzcCxDGqEZU6oCmb2INHuOoKxbtR+HFkmYWBKv/dOZtGRiAjDhj92g=="
+    },
+    "long@4.0.0": {
+      "integrity": "sha512-XsP+KhQif4bjX1kbuSiySJFNAehNxgLb6hPRGJ9QsUr8ajHkuXGdrHmFUTUUXhDwVX2R5bY4JNZEwbUiMhV+MA=="
+    },
+    "lru-cache@6.0.0": {
+      "integrity": "sha512-Jo6dJ04CmSjuznwJSS3pUeWmd/H0ffTlkXXgwZi+eq1UCmqQwCh+eLsYOYCwY991i2Fah4h1BEMCx4qThGbsiA==",
+      "dependencies": [
+        "yallist"
+      ]
+    },
+    "lru.min@1.1.3": {
+      "integrity": "sha512-Lkk/vx6ak3rYkRR0Nhu4lFUT2VDnQSxBe8Hbl7f36358p6ow8Bnvr8lrLt98H8J1aGxfhbX4Fs5tYg2+FTwr5Q=="
+    },
+    "mysql2@2.3.3": {
+      "integrity": "sha512-wxJUev6LgMSgACDkb/InIFxDprRa6T95+VEoR+xPvtngtccNH2dGjEB/fVZ8yg1gWv1510c9CvXuJHi5zUm0ZA==",
+      "dependencies": [
+        "denque",
+        "generate-function",
+        "iconv-lite",
+        "long",
+        "lru-cache",
+        "named-placeholders",
+        "seq-queue",
+        "sqlstring"
+      ]
+    },
+    "named-placeholders@1.1.6": {
+      "integrity": "sha512-Tz09sEL2EEuv5fFowm419c1+a/jSMiBjI9gHxVLrVdbUkkNUUfjsVYs9pVZu5oCon/kmRh9TfLEObFtkVxmY0w==",
+      "dependencies": [
+        "lru.min"
+      ]
+    },
     "nanoid@5.0.9": {
       "integrity": "sha512-Aooyr6MXU6HpvvWXKoVoXwKMs/KyVakWwg7xQfv5/S/RIgJMy0Ifa45H9qqYy7pTCszrHzP21Uk4PZq2HpEM8Q==",
       "bin": true
@@ -93,6 +143,18 @@
     },
     "preact@10.25.4": {
       "integrity": "sha512-jLdZDb+Q+odkHJ+MpW/9U5cODzqnB+fy2EiHSZES7ldV5LK7yjlVzTp7R8Xy6W6y75kfK8iWYtFVH7lvjwrCMA=="
+    },
+    "safer-buffer@2.1.2": {
+      "integrity": "sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg=="
+    },
+    "seq-queue@0.0.5": {
+      "integrity": "sha512-hr3Wtp/GZIc/6DAGPDcV4/9WoZhjrkXsi5B/07QgX8tsdc6ilr7BFM6PM6rbdAX1kFSDYeZGLipIZZKyQP0O5Q=="
+    },
+    "sqlstring@2.3.3": {
+      "integrity": "sha512-qC9iz2FlN7DQl3+wjwn3802RTyjCx7sDvfQEXchwa6CWOx07/WVfh91gBmQ9fahw8snwGEWU3xGzOt4tFyHLxg=="
+    },
+    "yallist@4.0.0": {
+      "integrity": "sha512-3wdGidZyq5PB084XLES5TpOSRA3wjXAlIWMhum2kRcv/41Sn2emQ0dycQW4uZXLejwKvg6EsvbdlVL+FYEct7A=="
     }
   },
   "remote": {
@@ -179,6 +241,7 @@
       "jsr:@deno/loader@~0.3.11",
       "jsr:@std/assert@1",
       "jsr:@std/path@1.0.0",
+      "npm:mysql2@^2.3.3",
       "npm:nanoid@5.0.9",
       "npm:preact-render-to-string@6.6.3",
       "npm:preact@10.25.4"

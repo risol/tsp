@@ -56,9 +56,7 @@ export function registerDep<K extends keyof AppDeps>(
  *     console.log('testFunc called');
  *     return 'testFunc called';
  *   },
- *   db: (ctx) => ({
- *     query: async (sql: string) => database.execute(sql),
- *   }),
+ *   createMySQL: (ctx) => createMySQL,
  * });
  * ```
  */
@@ -96,15 +94,21 @@ export function getRegisteredDeps(): string[] {
  * @example
  * ```tsx
  * // 简化用法（推荐）- 自动懒加载依赖
- * export default Page(async function(ctx, { session, db }) {
+ * export default Page(async function(ctx, { session, createMySQL }) {
  *   const user = await session.getUser();
+ *   const db = await createMySQL({
+ *     host: '127.0.0.1',
+ *     user: 'test_user',
+ *     password: 'test123456',
+ *     database: 'test_db'
+ *   });
  *   const data = await db.query('SELECT * FROM users');
  *   return <div>{data}</div>;
  * });
  *
  * // 只有在访问依赖时才构建，未访问的依赖不会构建
  * export default Page(async function(ctx, { logger }) {
- *   // 只有 logger 被构建，其他依赖（如 db）不会被构建
+ *   // 只有 logger 被构建，其他依赖不会被构建
  *   logger('Page loaded');
  *   return <div>Hello</div>;
  * });

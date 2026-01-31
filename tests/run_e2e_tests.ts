@@ -831,7 +831,178 @@ export function HotReloadWrapper() {
     },
   });
 
-  // 测试 8: 清理资源
+  // 测试 8: MySQL 功能测试
+  tests.push({
+    name: "mysql - MySQL 数据库功能",
+    fn: async () => {
+      const startTime = Date.now();
+
+      printSubsection("MySQL 功能测试");
+
+      // 检查 MySQL 容器是否运行
+      console.log(`  ${COLORS.dim}检查 MySQL 容器状态...${COLORS.reset}`);
+
+      let mysqlRunning = false;
+      try {
+        const checkCommand = new Deno.Command("docker", {
+          args: ["ps", "--filter", "name=tsp-mysql", "--format", "{{.Status}}"],
+          stdout: "piped",
+          stderr: "piped",
+        });
+
+        const { stdout } = await checkCommand.output();
+        const status = new TextDecoder().decode(stdout).trim();
+
+        if (status.includes("Up")) {
+          mysqlRunning = true;
+          console.log(`  ${COLORS.green}✓ MySQL 容器正在运行${COLORS.reset}`);
+        } else {
+          console.log(`  ${COLORS.yellow}⚠ MySQL 容器未运行，跳过测试${COLORS.reset}`);
+          console.log(`  ${COLORS.dim}提示: 运行 .\\docker-start.ps1 启动 MySQL${COLORS.reset}`);
+          return;
+        }
+      } catch (error) {
+        console.log(`  ${COLORS.yellow}⚠ 无法检查 MySQL 状态，跳过测试${COLORS.reset}`);
+        console.log(`  ${COLORS.dim}错误: ${(error as Error).message}${COLORS.reset}`);
+        return;
+      }
+
+      if (!mysqlRunning) {
+        return;
+      }
+
+      // 测试1: 基本查询
+      console.log(`  ${COLORS.dim}测试1: 基本查询${COLORS.reset}`);
+      const queryResponse = await fetch(
+        `http://localhost:${TEST_PORT}/mysql_e2e.tsx?action=query`,
+      );
+
+      assertEquals(queryResponse.status, 200);
+      const queryResult = await queryResponse.json();
+
+      if (!queryResult.success) {
+        throw new Error(`查询失败: ${queryResult.error}`);
+      }
+
+      console.log(
+        `  ${COLORS.dim}查询结果: ${queryResult.count} 个用户${COLORS.reset}`,
+      );
+      printTestResult("基本查询", true);
+
+      // 测试2: 参数化查询
+      console.log(`  ${COLORS.dim}测试2: 参数化查询${COLORS.reset}`);
+      const paramQueryResponse = await fetch(
+        `http://localhost:${TEST_PORT}/mysql_e2e.tsx?action=param-query`,
+      );
+
+      assertEquals(paramQueryResponse.status, 200);
+      const paramQueryResult = await paramQueryResponse.json();
+
+      if (!paramQueryResult.success) {
+        throw new Error(`参数化查询失败: ${paramQueryResult.error}`);
+      }
+
+      console.log(
+        `  ${COLORS.dim}参数化查询结果: ${paramQueryResult.user.length} 个用户${COLORS.reset}`,
+      );
+      printTestResult("参数化查询", true);
+
+      // 测试3: 插入数据
+      console.log(`  ${COLORS.dim}测试3: 插入数据${COLORS.reset}`);
+      const insertResponse = await fetch(
+        `http://localhost:${TEST_PORT}/mysql_e2e.tsx?action=insert`,
+      );
+
+      assertEquals(insertResponse.status, 200);
+      const insertResult = await insertResponse.json();
+
+      if (!insertResult.success) {
+        throw new Error(`插入失败: ${insertResult.error}`);
+      }
+
+      console.log(
+        `  ${COLORS.dim}插入的记录 ID: ${insertResult.insertId}${COLORS.reset}`,
+      );
+      printTestResult("插入数据", true);
+
+      // 测试4: 更新数据
+      console.log(`  ${COLORS.dim}测试4: 更新数据${COLORS.reset}`);
+      const updateResponse = await fetch(
+        `http://localhost:${TEST_PORT}/mysql_e2e.tsx?action=update`,
+      );
+
+      assertEquals(updateResponse.status, 200);
+      const updateResult = await updateResponse.json();
+
+      if (!updateResult.success) {
+        throw new Error(`更新失败: ${updateResult.error}`);
+      }
+
+      console.log(
+        `  ${COLORS.dim}影响的行数: ${updateResult.affectedRows}${COLORS.reset}`,
+      );
+      printTestResult("更新数据", true);
+
+      // 测试5: 删除数据
+      console.log(`  ${COLORS.dim}测试5: 删除数据${COLORS.reset}`);
+      const deleteResponse = await fetch(
+        `http://localhost:${TEST_PORT}/mysql_e2e.tsx?action=delete`,
+      );
+
+      assertEquals(deleteResponse.status, 200);
+      const deleteResult = await deleteResponse.json();
+
+      if (!deleteResult.success) {
+        throw new Error(`删除失败: ${deleteResult.error}`);
+      }
+
+      console.log(
+        `  ${COLORS.dim}删除的行数: ${deleteResult.deletedRows}${COLORS.reset}`,
+      );
+      printTestResult("删除数据", true);
+
+      // 测试6: 事务操作
+      console.log(`  ${COLORS.dim}测试6: 事务操作${COLORS.reset}`);
+      const transactionResponse = await fetch(
+        `http://localhost:${TEST_PORT}/mysql_e2e.tsx?action=transaction`,
+      );
+
+      assertEquals(transactionResponse.status, 200);
+      const transactionResult = await transactionResponse.json();
+
+      if (!transactionResult.success) {
+        throw new Error(`事务失败: ${transactionResult.error}`);
+      }
+
+      console.log(
+        `  ${COLORS.dim}事务结果: ${transactionResult.message}${COLORS.reset}`,
+      );
+      printTestResult("事务提交", true);
+
+      // 测试7: 事务回滚
+      console.log(`  ${COLORS.dim}测试7: 事务回滚${COLORS.reset}`);
+      const rollbackResponse = await fetch(
+        `http://localhost:${TEST_PORT}/mysql_e2e.tsx?action=transaction-rollback`,
+      );
+
+      assertEquals(rollbackResponse.status, 200);
+      const rollbackResult = await rollbackResponse.json();
+
+      if (!rollbackResult.success) {
+        throw new Error(`事务回滚测试失败: ${rollbackResult.error}`);
+      }
+
+      console.log(
+        `  ${COLORS.dim}事务回滚结果: ${rollbackResult.message}${COLORS.reset}`,
+      );
+      printTestResult("事务回滚", true);
+
+      const duration = Date.now() - startTime;
+      console.log(`  ${COLORS.dim}${duration}ms${COLORS.reset}`);
+    },
+  });
+
+  // 测试 9: 清理资源
   tests.push({
     name: "binary build - 停止服务器",
     fn: async () => {
