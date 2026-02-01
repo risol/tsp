@@ -15,6 +15,7 @@ import {
   handleMkdirAPI,
   handleExtractAPI,
   handleCompressAPI,
+  handleBatchMoveAPI,
   isAuthenticated,
 } from "./handlers.ts";
 import { generateLoginPage, generateFileManagerPage, generateErrorPage } from "./template.ts";
@@ -117,6 +118,12 @@ export async function handleFileManagerRequest(
         return createUnauthorizedResponse();
       }
       return await handleCompressAPI(req, config, rootPath);
+    } else if (relativePath === "/api/batch-move") {
+      // 批量移动 API
+      if (!(await isAuthenticated(req))) {
+        return createUnauthorizedResponse();
+      }
+      return await handleBatchMoveAPI(req, config, rootPath);
     } else {
       // 404
       return new Response("Not Found", {

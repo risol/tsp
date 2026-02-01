@@ -617,6 +617,7 @@ export function generateFileManagerPage(rootPath: string): string {
     <div class="header">
       <div class="breadcrumb" id="breadcrumb"></div>
       <div class="actions">
+        <button class="btn btn-secondary" id="batchMoveBtn" disabled>📁 移动选中项</button>
         <button class="btn btn-secondary" id="compressBtn">📦 压缩选中项</button>
         <button class="btn btn-danger" id="batchDeleteBtn" disabled>🗑️ 删除选中项</button>
         <div class="selected-count" id="selectedCount">已选择 <span id="selectedNumber">0</span> 项</div>
@@ -704,7 +705,10 @@ export function generateFileManagerPage(rootPath: string): string {
       <div class="modal-body">
         <p>文件：<strong id="extractFileName"></strong></p>
         <label>目标目录：</label>
-        <input type="text" class="modal-input" id="extractTargetDir" placeholder="留空解压到当前目录">
+        <input type="text" class="modal-input" id="extractTargetDir" placeholder="默认为压缩文件所在目录">
+        <p style="font-size: 12px; color: #666; margin-top: 10px;">
+          留空则解压到压缩文件所在目录
+        </p>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" id="extractCancelBtn">取消</button>
@@ -728,6 +732,25 @@ export function generateFileManagerPage(rootPath: string): string {
       <div class="modal-footer">
         <button class="btn btn-secondary" id="compressCancelBtn">取消</button>
         <button class="btn btn-primary" id="compressConfirmBtn">压缩</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 批量移动模态框 -->
+  <div class="modal-overlay" id="moveModal">
+    <div class="modal">
+      <div class="modal-header">移动文件</div>
+      <div class="modal-body">
+        <p>已选择 <strong id="moveFileCount">0</strong> 个文件/目录</p>
+        <label>目标目录：</label>
+        <input type="text" class="modal-input" id="moveTargetDir" placeholder="输入目标目录路径">
+        <p style="font-size: 12px; color: #666; margin-top: 10px;">
+          提示：目标目录必须存在。可以使用相对路径（如 ../subdir）或绝对路径。
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="moveCancelBtn">取消</button>
+        <button class="btn btn-primary" id="moveConfirmBtn">移动</button>
       </div>
     </div>
   </div>
@@ -1029,6 +1052,86 @@ export function generateFileManagerPage(rootPath: string): string {
       loadDirectory(currentPath);
     }
 
+    // 显示批量移动模态框
+    function showMoveModal() {
+      var count = selectedFiles.size;
+      if (count === 0) {
+        return;
+      }
+
+      document.getElementById('moveFileCount').textContent = count;
+      document.getElementById('moveTargetDir').value = currentPath;
+      document.getElementById('moveModal').classList.add('show');
+    }
+
+    // 隐藏批量移动模态框
+    function hideMoveModal() {
+      document.getElementById('moveModal').classList.remove('show');
+    }
+
+    // 执行批量移动
+    async function doBatchMove() {
+      var targetDir = document.getElementById('moveTargetDir').value.trim();
+      if (!targetDir) {
+        showToast('请输入目标目录', 'error');
+        return;
+      }
+
+      // 解析相对路径
+      if (targetDir.startsWith('.')) {
+        var currentParts = currentPath.split('/');
+        var targetParts = targetDir.split('/');
+
+        for (var i = 0; i < targetParts.length; i++) {
+          var part = targetParts[i];
+          if (part === '..') {
+            currentParts.pop();
+          } else if (part !== '.') {
+            currentParts.push(part);
+          }
+        }
+
+        targetDir = currentParts.join('/');
+      }
+
+      try {
+        const response = await fetch('/__filemanager/api/batch-move', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            sourcePaths: Array.from(selectedFiles),
+            targetDir: targetDir,
+          }),
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          hideMoveModal();
+
+          // 清空选中项
+          selectedFiles.clear();
+          updateSelectedCount();
+
+          // 显示结果
+          if (data.data.failedCount === 0) {
+            showToast('成功移动 ' + data.data.successCount + ' 项');
+          } else {
+            showToast('移动完成：成功 ' + data.data.successCount + ' 项，失败 ' + data.data.failedCount + ' 项', 'error');
+          }
+
+          // 刷新目录
+          loadDirectory(currentPath);
+        } else {
+          showToast(data.error || '移动失败', 'error');
+        }
+      } catch (error) {
+        showToast('网络错误', 'error');
+      }
+    }
+
     // 显示重命名模态框
     function showRenameModal(path, name) {
       currentRenamePath = path;
@@ -1150,6 +1253,7 @@ export function generateFileManagerPage(rootPath: string): string {
       const count = selectedFiles.size;
       document.getElementById('selectedNumber').textContent = count;
       document.getElementById('selectedCount').classList.toggle('show', count > 0);
+      document.getElementById('batchMoveBtn').disabled = count === 0;
       document.getElementById('compressBtn').disabled = count === 0;
       document.getElementById('batchDeleteBtn').disabled = count === 0;
     }
@@ -1158,7 +1262,14 @@ export function generateFileManagerPage(rootPath: string): string {
     function showExtractModal(path, name) {
       currentExtractPath = path;
       document.getElementById('extractFileName').textContent = name;
-      document.getElementById('extractTargetDir').value = currentPath;
+
+      // 默认解压到压缩文件所在的目录（而不是当前浏览目录）
+      var archiveDir = path.substring(0, path.lastIndexOf('/'));
+      if (!archiveDir) {
+        archiveDir = '/';
+      }
+      document.getElementById('extractTargetDir').value = archiveDir;
+
       document.getElementById('extractModal').classList.add('show');
     }
 
@@ -1170,7 +1281,17 @@ export function generateFileManagerPage(rootPath: string): string {
 
     // 执行解压
     async function doExtract() {
-      const targetDir = document.getElementById('extractTargetDir').value.trim() || currentPath;
+      var targetDir = document.getElementById('extractTargetDir').value.trim();
+
+      // 如果用户未指定目标目录（空字符串），不传递 targetDir 参数
+      // 后端会默认使用压缩文件所在目录
+      var requestBody = {
+        archivePath: currentExtractPath
+      };
+
+      if (targetDir) {
+        requestBody.targetDir = targetDir;
+      }
 
       try {
         const response = await fetch('/__filemanager/api/extract', {
@@ -1178,10 +1299,7 @@ export function generateFileManagerPage(rootPath: string): string {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-            archivePath: currentExtractPath,
-            targetDir: targetDir,
-          }),
+          body: JSON.stringify(requestBody),
         });
 
         const data = await response.json();
@@ -1189,6 +1307,8 @@ export function generateFileManagerPage(rootPath: string): string {
         if (data.success) {
           showToast('解压成功');
           hideExtractModal();
+
+          // 刷新目录显示
           loadDirectory(currentPath);
         } else {
           showToast(data.error || '解压失败', 'error');
@@ -1329,6 +1449,11 @@ export function generateFileManagerPage(rootPath: string): string {
 
     // 批量删除按钮事件
     document.getElementById('batchDeleteBtn').addEventListener('click', batchDeleteFiles);
+
+    // 批量移动模态框事件
+    document.getElementById('batchMoveBtn').addEventListener('click', showMoveModal);
+    document.getElementById('moveCancelBtn').addEventListener('click', hideMoveModal);
+    document.getElementById('moveConfirmBtn').addEventListener('click', doBatchMove);
 
     // 初始化：加载网站根目录
     loadDirectory(WEB_ROOT);

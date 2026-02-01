@@ -180,3 +180,13 @@ export interface CompressRequest {
   /** 是否包含源目录本身（默认 false） */
   includeSrc?: boolean;
 }
+
+/**
+ * 批量移动请求
+ */
+export interface BatchMoveRequest {
+  /** 源文件路径列表 */
+  sourcePaths: string[];
+  /** 目标目录路径 */
+  targetDir: string;
+}

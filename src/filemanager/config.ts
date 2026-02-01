@@ -30,7 +30,7 @@ export const DEFAULT_FILE_MANAGER_CONFIG: Required<Omit<
   allowDelete: true,
   allowRename: true,
   allowMkdir: true,
-  allowMove: false, // 移动功能默认关闭，更安全
+  allowMove: true, // 移动功能已启用，支持批量移动
   // 解压缩相关配置
   allowExtract: true,
   allowCompress: true,

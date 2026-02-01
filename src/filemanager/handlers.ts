@@ -17,6 +17,7 @@ import type {
   DeleteRequest,
   ExtractRequest,
   CompressRequest,
+  BatchMoveRequest,
 } from "./types.ts";
 import {
   validatePath,
@@ -593,8 +594,10 @@ export async function handleExtractAPI(
       return createErrorResponse(`不允许解压 ${archiveType.toUpperCase()} 格式的文件`, 403);
     }
 
-    // 确定目标目录
-    const targetDir = body.targetDir || dirname(archivePath);
+    // 确定目标目录（如果用户未指定或为空，使用压缩文件所在目录）
+    const targetDir = (body.targetDir && body.targetDir.trim() !== "")
+      ? body.targetDir
+      : dirname(archivePath);
 
     // 验证目标目录路径
     const targetValidation = validatePath(targetDir, rootPath, config);
@@ -705,6 +708,107 @@ export async function handleCompressAPI(
   } catch (error) {
     return createErrorResponse(
       `压缩失败: ${error instanceof Error ? error.message : String(error)}`,
+      500,
+    );
+  }
+}
+
+/**
+ * 处理批量移动请求
+ */
+export async function handleBatchMoveAPI(
+  req: Request,
+  config: Required<FileManagerConfig>,
+  rootPath: string,
+): Promise<Response> {
+  try {
+    // 检查权限
+    if (!checkOperationPermission("move", config)) {
+      return createErrorResponse("移动操作已被禁用", 403);
+    }
+
+    const body = await req.json() as BatchMoveRequest;
+
+    // 验证源路径
+    if (!body.sourcePaths || body.sourcePaths.length === 0) {
+      return createErrorResponse("至少需要选择一个文件或目录", 400);
+    }
+
+    const validatedSourcePaths: string[] = [];
+    for (const sourcePath of body.sourcePaths) {
+      const validation = validatePath(sourcePath, rootPath, config);
+      if (!validation.success) {
+        return createErrorResponse(validation.error!, 403);
+      }
+      validatedSourcePaths.push(validation.normalizedPath!);
+    }
+
+    // 验证目标目录
+    const targetValidation = validatePath(body.targetDir, rootPath, config);
+    if (!targetValidation.success) {
+      return createErrorResponse(targetValidation.error!, 403);
+    }
+
+    const normalizedTargetDir = targetValidation.normalizedPath!;
+
+    // 检查目标目录是否存在且是目录
+    try {
+      const targetStat = await Deno.stat(normalizedTargetDir);
+      if (!targetStat.isDirectory) {
+        return createErrorResponse("目标路径不是目录", 400);
+      }
+    } catch {
+      return createErrorResponse("目标目录不存在", 404);
+    }
+
+    // 执行批量移动
+    const results = {
+      success: [] as string[],
+      failed: [] as { path: string; error: string }[],
+    };
+
+    for (const sourcePath of validatedSourcePaths) {
+      try {
+        const fileName = basename(sourcePath);
+        const targetPath = join(normalizedTargetDir, fileName);
+
+        // 检查目标是否已存在
+        try {
+          await Deno.stat(targetPath);
+          results.failed.push({
+            path: sourcePath,
+            error: "目标已存在",
+          });
+          continue;
+        } catch {
+          // 目标不存在，可以移动
+        }
+
+        // 移动文件或目录
+        await Deno.rename(sourcePath, targetPath);
+        results.success.push(sourcePath);
+      } catch (error) {
+        results.failed.push({
+          path: sourcePath,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    // 返回结果
+    const message = `移动完成：成功 ${results.success.length} 项，失败 ${results.failed.length} 项`;
+    return createJSONResponse({
+      success: true,
+      data: {
+        message,
+        successCount: results.success.length,
+        failedCount: results.failed.length,
+        details: results,
+      },
+    });
+  } catch (error) {
+    return createErrorResponse(
+      `批量移动失败: ${error instanceof Error ? error.message : String(error)}`,
       500,
     );
   }
