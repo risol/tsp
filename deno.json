@@ -23,6 +23,7 @@
   },
   "imports": {
     "@deno/loader": "jsr:@deno/loader@^0.3.11",
+    "@deno-library/compress": "jsr:@deno-library/compress@^0.5.6",
     "@std/assert": "jsr:@std/assert@1",
     "@std/path": "jsr:@std/path@1.0.0",
     "std/path": "jsr:@std/path@1.0.0",

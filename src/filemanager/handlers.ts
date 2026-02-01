@@ -15,6 +15,8 @@ import type {
   MoveRequest,
   MkdirRequest,
   DeleteRequest,
+  ExtractRequest,
+  CompressRequest,
 } from "./types.ts";
 import {
   validatePath,
@@ -34,7 +36,8 @@ import {
   createSessionCookieHeader,
   createClearSessionCookieHeader,
 } from "./auth.ts";
-import { formatFileSize, formatDateTime } from "./config.ts";
+import { formatFileSize, formatDateTime, getArchiveType } from "./config.ts";
+import { extractArchive, compressToZip, getArchiveSize, getTotalSize } from "./archive.ts";
 
 // ============== 辅助函数 ==============
 
@@ -540,4 +543,169 @@ export async function isAuthenticated(
 
   const { validateSession } = await import("./auth.ts");
   return validateSession(sessionId);
+}
+
+/**
+ * 处理解压请求
+ */
+export async function handleExtractAPI(
+  req: Request,
+  config: Required<FileManagerConfig>,
+  rootPath: string,
+): Promise<Response> {
+  try {
+    // 检查权限
+    if (!checkOperationPermission("extract", config)) {
+      return createErrorResponse("解压操作已被禁用", 403);
+    }
+
+    const body = await req.json() as ExtractRequest;
+
+    // 验证压缩文件路径
+    const archiveValidation = validatePath(body.archivePath, rootPath, config);
+    if (!archiveValidation.success) {
+      return createErrorResponse(archiveValidation.error!, 403);
+    }
+
+    const archivePath = archiveValidation.normalizedPath!;
+
+    // 检查文件是否存在
+    const archiveStat = await Deno.stat(archivePath);
+    if (archiveStat.isDirectory) {
+      return createErrorResponse("不能解压目录", 400);
+    }
+
+    // 检查文件大小
+    if (archiveStat.size > config.maxExtractSize) {
+      return createErrorResponse(
+        `文件大小超过限制 (${formatFileSize(config.maxExtractSize)})`,
+        403,
+      );
+    }
+
+    // 检查是否为支持的压缩格式
+    const archiveType = getArchiveType(archivePath);
+    if (!archiveType) {
+      return createErrorResponse("不支持的压缩格式", 400);
+    }
+
+    if (!config.allowedArchiveExtensions?.includes(archiveType)) {
+      return createErrorResponse(`不允许解压 ${archiveType.toUpperCase()} 格式的文件`, 403);
+    }
+
+    // 确定目标目录
+    const targetDir = body.targetDir || dirname(archivePath);
+
+    // 验证目标目录路径
+    const targetValidation = validatePath(targetDir, rootPath, config);
+    if (!targetValidation.success) {
+      return createErrorResponse(targetValidation.error!, 403);
+    }
+
+    const normalizedTargetDir = targetValidation.normalizedPath!;
+
+    // 确保目标目录存在
+    try {
+      await Deno.mkdir(normalizedTargetDir, { recursive: true });
+    } catch {
+      // 忽略已存在的错误
+    }
+
+    // 执行解压
+    await extractArchive(archivePath, normalizedTargetDir, archiveType);
+
+    return createJSONResponse({
+      success: true,
+      data: { message: "解压成功" },
+    });
+  } catch (error) {
+    return createErrorResponse(
+      `解压失败: ${error instanceof Error ? error.message : String(error)}`,
+      500,
+    );
+  }
+}
+
+/**
+ * 处理压缩请求
+ */
+export async function handleCompressAPI(
+  req: Request,
+  config: Required<FileManagerConfig>,
+  rootPath: string,
+): Promise<Response> {
+  try {
+    // 检查权限
+    if (!checkOperationPermission("compress", config)) {
+      return createErrorResponse("压缩操作已被禁用", 403);
+    }
+
+    const body = await req.json() as CompressRequest;
+
+    // 验证源路径
+    if (!body.sourcePaths || body.sourcePaths.length === 0) {
+      return createErrorResponse("至少需要选择一个文件或目录", 400);
+    }
+
+    const validatedSourcePaths: string[] = [];
+    for (const sourcePath of body.sourcePaths) {
+      const validation = validatePath(sourcePath, rootPath, config);
+      if (!validation.success) {
+        return createErrorResponse(validation.error!, 403);
+      }
+      validatedSourcePaths.push(validation.normalizedPath!);
+    }
+
+    // 验证目标文件名
+    const targetFileName = basename(body.targetPath);
+    if (!isSafeFilename(targetFileName)) {
+      return createErrorResponse("文件名包含非法字符", 400);
+    }
+
+    // 检查目标文件扩展名
+    if (!targetFileName.toLowerCase().endsWith(".zip")) {
+      return createErrorResponse("只能创建 ZIP 格式的压缩文件", 400);
+    }
+
+    // 确定目标路径
+    const targetDir = dirname(body.targetPath);
+    const targetDirValidation = validatePath(targetDir, rootPath, config);
+    if (!targetDirValidation.success) {
+      return createErrorResponse(targetDirValidation.error!, 403);
+    }
+
+    const targetPath = join(targetDirValidation.normalizedPath!, targetFileName);
+
+    // 检查目标文件是否已存在
+    try {
+      await Deno.stat(targetPath);
+      return createErrorResponse("目标文件已存在", 409);
+    } catch {
+      // 文件不存在，可以继续
+    }
+
+    // 计算源文件总大小
+    const totalSize = await getTotalSize(validatedSourcePaths);
+    if (totalSize > config.maxCompressSize) {
+      return createErrorResponse(
+        `源文件总大小超过限制 (${formatFileSize(config.maxCompressSize)})`,
+        403,
+      );
+    }
+
+    // 执行压缩
+    await compressToZip(validatedSourcePaths, targetPath, {
+      includeSrc: body.includeSrc ?? false,
+    });
+
+    return createJSONResponse({
+      success: true,
+      data: { message: "压缩成功" },
+    });
+  } catch (error) {
+    return createErrorResponse(
+      `压缩失败: ${error instanceof Error ? error.message : String(error)}`,
+      500,
+    );
+  }
 }

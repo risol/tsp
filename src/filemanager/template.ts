@@ -346,7 +346,7 @@ export function generateFileManagerPage(rootPath: string): string {
 
     .file-item {
       display: grid;
-      grid-template-columns: 40px 2fr 150px 180px 150px;
+      grid-template-columns: 30px 40px 2fr 150px 180px 150px;
       align-items: center;
       padding: 12px 20px;
       border-bottom: 1px solid #f0f0f0;
@@ -557,9 +557,37 @@ export function generateFileManagerPage(rootPath: string): string {
       display: none !important;
     }
 
+    /* 文件复选框 */
+    .file-checkbox {
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+    }
+
+    /* 选中计数显示 */
+    .selected-count {
+      padding: 10px 20px;
+      background: #667eea;
+      color: white;
+      border-radius: 6px;
+      font-size: 14px;
+      display: none;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .selected-count.show {
+      display: inline-flex;
+    }
+
+    /* 解压按钮 */
+    .extract-btn {
+      font-size: 18px;
+    }
+
     @media (max-width: 768px) {
       .file-item {
-        grid-template-columns: 40px 1fr 80px;
+        grid-template-columns: 30px 40px 1fr 80px;
         gap: 8px;
       }
 
@@ -589,6 +617,9 @@ export function generateFileManagerPage(rootPath: string): string {
     <div class="header">
       <div class="breadcrumb" id="breadcrumb"></div>
       <div class="actions">
+        <button class="btn btn-secondary" id="compressBtn">📦 压缩选中项</button>
+        <button class="btn btn-danger" id="batchDeleteBtn" disabled>🗑️ 删除选中项</button>
+        <div class="selected-count" id="selectedCount">已选择 <span id="selectedNumber">0</span> 项</div>
         <button class="btn btn-primary" id="uploadBtn">📤 上传</button>
         <button class="btn btn-secondary" id="mkdirBtn">📁 新建目录</button>
         <button class="btn btn-danger" id="logoutBtn">🚪 退出</button>
@@ -598,6 +629,7 @@ export function generateFileManagerPage(rootPath: string): string {
     <!-- 文件列表 -->
     <div class="file-list">
       <div class="file-item header">
+        <div></div>
         <div></div>
         <div>名称</div>
         <div>大小</div>
@@ -665,6 +697,41 @@ export function generateFileManagerPage(rootPath: string): string {
     </div>
   </div>
 
+  <!-- 解压模态框 -->
+  <div class="modal-overlay" id="extractModal">
+    <div class="modal">
+      <div class="modal-header">解压文件</div>
+      <div class="modal-body">
+        <p>文件：<strong id="extractFileName"></strong></p>
+        <label>目标目录：</label>
+        <input type="text" class="modal-input" id="extractTargetDir" placeholder="留空解压到当前目录">
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="extractCancelBtn">取消</button>
+        <button class="btn btn-primary" id="extractConfirmBtn">解压</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 压缩模态框 -->
+  <div class="modal-overlay" id="compressModal">
+    <div class="modal">
+      <div class="modal-header">压缩文件</div>
+      <div class="modal-body">
+        <p>已选择 <strong id="compressFileCount">0</strong> 个文件/目录</p>
+        <label>ZIP 文件名：</label>
+        <input type="text" class="modal-input" id="compressFileName" placeholder="archive.zip">
+        <label style="display: block; margin-top: 10px;">
+          <input type="checkbox" id="compressIncludeSrc"> 包含父目录
+        </label>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="compressCancelBtn">取消</button>
+        <button class="btn btn-primary" id="compressConfirmBtn">压缩</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     // 网站根目录（从服务器注入）
     const WEB_ROOT = '${rootPath.replace(/\\/g, '/')}';
@@ -673,6 +740,8 @@ export function generateFileManagerPage(rootPath: string): string {
     let currentPath = WEB_ROOT;
     let csrfToken = null;
     let currentRenamePath = null;
+    let currentExtractPath = null;
+    let selectedFiles = new Set();
 
     // 获取当前路径（从服务器获取）
     async function getCurrentPath() {
@@ -731,6 +800,10 @@ export function generateFileManagerPage(rootPath: string): string {
       const fileList = document.getElementById('fileList');
       const emptyState = document.getElementById('emptyState');
 
+      // 清空选中项
+      selectedFiles.clear();
+      updateSelectedCount();
+
       if (files.length === 0) {
         fileList.innerHTML = '';
         emptyState.classList.remove('hidden');
@@ -744,19 +817,30 @@ export function generateFileManagerPage(rootPath: string): string {
         const icon = file.isDirectory ? '📁' : getFileIcon(file.name);
         const size = file.isDirectory ? '-' : formatFileSize(file.size);
         const date = formatDateTime(new Date(file.modifiedTime));
+        const filePath = currentPath + '/' + file.name;
+        const isArchive = isArchiveFile(file.name);
 
         html += '<div class="file-item">';
+        html += '<div><input type="checkbox" class="file-checkbox" data-path="' + filePath + '"></div>';
         html += '<div class="file-icon">' + icon + '</div>';
-        html += '<div class="file-name ' + (file.isDirectory ? 'directory' : '') + '" data-path="' + currentPath + '/' + file.name + '">' + file.name + '</div>';
+        html += '<div class="file-name ' + (file.isDirectory ? 'directory' : '') + '" data-path="' + filePath + '">' + file.name + '</div>';
         html += '<div class="file-size">' + size + '</div>';
         html += '<div class="file-date">' + date + '</div>';
         html += '<div class="file-actions">';
-        html += '<button class="icon-btn download-btn" title="下载" data-path="' + currentPath + '/' + file.name + '">📥</button>';
+        html += '<button class="icon-btn download-btn" title="下载" data-path="' + filePath + '">📥</button>';
 
-        if (!file.isDirectory) {
-          html += '<button class="icon-btn rename-btn" title="重命名" data-path="' + currentPath + '/' + file.name + '" data-name="' + file.name + '">✏️</button>';
-          html += '<button class="icon-btn delete-btn" title="删除" data-path="' + currentPath + '/' + file.name + '">🗑️</button>';
+        // 如果是压缩文件，添加解压按钮
+        if (isArchive) {
+          html += '<button class="icon-btn extract-btn" title="解压" data-path="' + filePath + '" data-name="' + file.name + '">📦</button>';
         }
+
+        // 重命名按钮（仅文件）
+        if (!file.isDirectory) {
+          html += '<button class="icon-btn rename-btn" title="重命名" data-path="' + filePath + '" data-name="' + file.name + '">✏️</button>';
+        }
+
+        // 删除按钮（文件和目录都可以删除）
+        html += '<button class="icon-btn delete-btn" title="删除" data-path="' + filePath + '" data-is-directory="' + file.isDirectory + '">🗑️</button>';
 
         html += '</div>';
         html += '</div>';
@@ -771,9 +855,26 @@ export function generateFileManagerPage(rootPath: string): string {
         });
       });
 
+      fileList.querySelectorAll('.file-checkbox').forEach(checkbox => {
+        checkbox.addEventListener('change', () => {
+          if (checkbox.checked) {
+            selectedFiles.add(checkbox.dataset.path);
+          } else {
+            selectedFiles.delete(checkbox.dataset.path);
+          }
+          updateSelectedCount();
+        });
+      });
+
       fileList.querySelectorAll('.download-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           downloadFile(btn.dataset.path);
+        });
+      });
+
+      fileList.querySelectorAll('.extract-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          showExtractModal(btn.dataset.path, btn.dataset.name);
         });
       });
 
@@ -785,7 +886,8 @@ export function generateFileManagerPage(rootPath: string): string {
 
       fileList.querySelectorAll('.delete-btn').forEach(btn => {
         btn.addEventListener('click', () => {
-          deleteFile(btn.dataset.path);
+          const isDirectory = btn.dataset.isDirectory === 'true';
+          deleteFile(btn.dataset.path, isDirectory);
         });
       });
     }
@@ -845,9 +947,10 @@ export function generateFileManagerPage(rootPath: string): string {
       window.open('/__filemanager/api/download?path=' + encodeURIComponent(path), '_blank');
     }
 
-    // 删除文件
-    async function deleteFile(path) {
-      if (!confirm('确定要删除吗？此操作不可恢复！')) {
+    // 删除文件或目录
+    async function deleteFile(path, isDirectory) {
+      var itemType = isDirectory ? '目录' : '文件';
+      if (!confirm('确定要删除' + itemType + '吗？此操作不可恢复！')) {
         return;
       }
 
@@ -871,6 +974,59 @@ export function generateFileManagerPage(rootPath: string): string {
       } catch (error) {
         showToast('网络错误', 'error');
       }
+    }
+
+    // 批量删除文件
+    async function batchDeleteFiles() {
+      var count = selectedFiles.size;
+      if (count === 0) {
+        return;
+      }
+
+      if (!confirm('确定要删除选中的 ' + count + ' 项吗？此操作不可恢复！')) {
+        return;
+      }
+
+      var successCount = 0;
+      var failCount = 0;
+
+      for (const path of selectedFiles) {
+        try {
+          const response = await fetch('/__filemanager/api/delete', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ path }),
+          });
+
+          const data = await response.json();
+
+          if (data.success) {
+            successCount++;
+          } else {
+            failCount++;
+            console.error('删除失败: ' + path + ' - ' + data.error);
+          }
+        } catch (error) {
+          failCount++;
+          console.error('删除错误: ' + path, error);
+        }
+      }
+
+      // 清空选中项
+      selectedFiles.clear();
+      updateSelectedCount();
+
+      // 显示结果
+      if (failCount === 0) {
+        showToast('成功删除 ' + successCount + ' 项');
+      } else {
+        showToast('删除完成：成功 ' + successCount + ' 项，失败 ' + failCount + ' 项', 'error');
+      }
+
+      // 刷新目录
+      loadDirectory(currentPath);
     }
 
     // 显示重命名模态框
@@ -980,6 +1136,126 @@ export function generateFileManagerPage(rootPath: string): string {
       }
     }
 
+    // 检查是否为压缩文件
+    function isArchiveFile(filename) {
+      const lowerName = filename.toLowerCase();
+      return lowerName.endsWith('.zip') ||
+             lowerName.endsWith('.tar') ||
+             lowerName.endsWith('.tar.gz') ||
+             lowerName.endsWith('.tgz');
+    }
+
+    // 更新选中计数
+    function updateSelectedCount() {
+      const count = selectedFiles.size;
+      document.getElementById('selectedNumber').textContent = count;
+      document.getElementById('selectedCount').classList.toggle('show', count > 0);
+      document.getElementById('compressBtn').disabled = count === 0;
+      document.getElementById('batchDeleteBtn').disabled = count === 0;
+    }
+
+    // 显示解压模态框
+    function showExtractModal(path, name) {
+      currentExtractPath = path;
+      document.getElementById('extractFileName').textContent = name;
+      document.getElementById('extractTargetDir').value = currentPath;
+      document.getElementById('extractModal').classList.add('show');
+    }
+
+    // 隐藏解压模态框
+    function hideExtractModal() {
+      document.getElementById('extractModal').classList.remove('show');
+      currentExtractPath = null;
+    }
+
+    // 执行解压
+    async function doExtract() {
+      const targetDir = document.getElementById('extractTargetDir').value.trim() || currentPath;
+
+      try {
+        const response = await fetch('/__filemanager/api/extract', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            archivePath: currentExtractPath,
+            targetDir: targetDir,
+          }),
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          showToast('解压成功');
+          hideExtractModal();
+          loadDirectory(currentPath);
+        } else {
+          showToast(data.error || '解压失败', 'error');
+        }
+      } catch (error) {
+        showToast('网络错误', 'error');
+      }
+    }
+
+    // 显示压缩模态框
+    function showCompressModal() {
+      const count = selectedFiles.size;
+      document.getElementById('compressFileCount').textContent = count;
+      document.getElementById('compressFileName').value = 'archive.zip';
+      document.getElementById('compressIncludeSrc').checked = false;
+      document.getElementById('compressModal').classList.add('show');
+    }
+
+    // 隐藏压缩模态框
+    function hideCompressModal() {
+      document.getElementById('compressModal').classList.remove('show');
+    }
+
+    // 执行压缩
+    async function doCompress() {
+      const fileName = document.getElementById('compressFileName').value.trim();
+      const includeSrc = document.getElementById('compressIncludeSrc').checked;
+
+      if (!fileName) {
+        showToast('请输入文件名', 'error');
+        return;
+      }
+
+      if (!fileName.toLowerCase().endsWith('.zip')) {
+        showToast('文件名必须以 .zip 结尾', 'error');
+        return;
+      }
+
+      const targetPath = currentPath + '/' + fileName;
+
+      try {
+        const response = await fetch('/__filemanager/api/compress', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            sourcePaths: Array.from(selectedFiles),
+            targetPath: targetPath,
+            includeSrc: includeSrc,
+          }),
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          showToast('压缩成功');
+          hideCompressModal();
+          loadDirectory(currentPath);
+        } else {
+          showToast(data.error || '压缩失败', 'error');
+        }
+      } catch (error) {
+        showToast('网络错误', 'error');
+      }
+    }
+
     // 事件监听
     document.getElementById('uploadBtn').addEventListener('click', () => {
       document.getElementById('uploadModal').classList.add('show');
@@ -1041,6 +1317,18 @@ export function generateFileManagerPage(rootPath: string): string {
     document.getElementById('renameCancelBtn').addEventListener('click', hideRenameModal);
     document.getElementById('renameConfirmBtn').addEventListener('click', doRename);
     document.getElementById('logoutBtn').addEventListener('click', logout);
+
+    // 解压模态框事件
+    document.getElementById('extractCancelBtn').addEventListener('click', hideExtractModal);
+    document.getElementById('extractConfirmBtn').addEventListener('click', doExtract);
+
+    // 压缩模态框事件
+    document.getElementById('compressBtn').addEventListener('click', showCompressModal);
+    document.getElementById('compressCancelBtn').addEventListener('click', hideCompressModal);
+    document.getElementById('compressConfirmBtn').addEventListener('click', doCompress);
+
+    // 批量删除按钮事件
+    document.getElementById('batchDeleteBtn').addEventListener('click', batchDeleteFiles);
 
     // 初始化：加载网站根目录
     loadDirectory(WEB_ROOT);

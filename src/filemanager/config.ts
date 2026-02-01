@@ -2,20 +2,21 @@
  * 文件管理器配置验证和默认值
  */
 
-import type { FileManagerConfig } from "./types.ts";
+import type { FileManagerConfig, ArchiveType } from "./types.ts";
 
 /**
  * 默认配置
  */
 export const DEFAULT_FILE_MANAGER_CONFIG: Required<Omit<
   FileManagerConfig,
-  "password" | "allowedPaths" | "deniedPaths" | "allowedExtensions" | "deniedExtensions"
+  "password" | "allowedPaths" | "deniedPaths" | "allowedExtensions" | "deniedExtensions" | "allowedArchiveExtensions"
 >> & {
   password: string;
   allowedPaths: string[];
   deniedPaths: string[];
   allowedExtensions: string[];
   deniedExtensions: string[];
+  allowedArchiveExtensions: NonNullable<FileManagerConfig["allowedArchiveExtensions"]>;
 } = {
   enabled: false,
   path: "/__filemanager",
@@ -30,6 +31,13 @@ export const DEFAULT_FILE_MANAGER_CONFIG: Required<Omit<
   allowRename: true,
   allowMkdir: true,
   allowMove: false, // 移动功能默认关闭，更安全
+  // 解压缩相关配置
+  allowExtract: true,
+  allowCompress: true,
+  allowedArchiveExtensions: ["zip", "tar", "tgz"],
+  maxExtractSize: 1024 * 1024 * 1024, // 1GB
+  maxCompressSize: 500 * 1024 * 1024, // 500MB
+  maxExtractFileCount: 10000,
 };
 
 /**
@@ -84,6 +92,13 @@ export function validateFileManagerConfig(
     allowRename: config.allowRename ?? DEFAULT_FILE_MANAGER_CONFIG.allowRename,
     allowMkdir: config.allowMkdir ?? DEFAULT_FILE_MANAGER_CONFIG.allowMkdir,
     allowMove: config.allowMove ?? DEFAULT_FILE_MANAGER_CONFIG.allowMove,
+    // 解压缩相关配置
+    allowExtract: config.allowExtract ?? DEFAULT_FILE_MANAGER_CONFIG.allowExtract,
+    allowCompress: config.allowCompress ?? DEFAULT_FILE_MANAGER_CONFIG.allowCompress,
+    allowedArchiveExtensions: config.allowedArchiveExtensions ?? DEFAULT_FILE_MANAGER_CONFIG.allowedArchiveExtensions,
+    maxExtractSize: config.maxExtractSize ?? DEFAULT_FILE_MANAGER_CONFIG.maxExtractSize,
+    maxCompressSize: config.maxCompressSize ?? DEFAULT_FILE_MANAGER_CONFIG.maxCompressSize,
+    maxExtractFileCount: config.maxExtractFileCount ?? DEFAULT_FILE_MANAGER_CONFIG.maxExtractFileCount,
   };
 
   // 检查路径是否与标准路由冲突
@@ -152,4 +167,41 @@ export function formatDateTime(date: Date): string {
   const seconds = String(date.getSeconds()).padStart(2, "0");
 
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+
+/**
+ * 根据文件名获取压缩文件类型
+ * @param filename 文件名
+ * @returns 压缩文件类型，如果不是支持的压缩文件则返回 null
+ */
+export function getArchiveType(filename: string): ArchiveType | null {
+  const lowerName = filename.toLowerCase();
+
+  if (lowerName.endsWith(".tar.gz") || lowerName.endsWith(".tgz")) {
+    return "tgz";
+  }
+
+  if (lowerName.endsWith(".tar")) {
+    return "tar";
+  }
+
+  if (lowerName.endsWith(".zip")) {
+    return "zip";
+  }
+
+  return null;
+}
+
+/**
+ * 检查是否为支持的压缩文件格式
+ * @param filename 文件名
+ * @param allowedExtensions 允许的压缩格式列表
+ * @returns 是否为支持的压缩文件
+ */
+export function isArchiveFile(
+  filename: string,
+  allowedExtensions: ArchiveType[] = ["zip", "tar", "tgz"],
+): boolean {
+  const archiveType = getArchiveType(filename);
+  return archiveType !== null && allowedExtensions.includes(archiveType);
 }

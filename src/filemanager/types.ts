@@ -32,6 +32,18 @@ export interface FileManagerConfig {
   allowMkdir?: boolean;
   /** 是否允许移动 */
   allowMove?: boolean;
+  /** 是否允许解压（默认 true） */
+  allowExtract?: boolean;
+  /** 是否允许压缩（默认 true） */
+  allowCompress?: boolean;
+  /** 允许的压缩文件格式（默认 ["zip", "tar", "tgz"]） */
+  allowedArchiveExtensions?: ArchiveType[] | null;
+  /** 最大解压文件大小（字节，默认 1GB） */
+  maxExtractSize?: number;
+  /** 最大压缩文件大小（字节，默认 500MB） */
+  maxCompressSize?: number;
+  /** ZIP 炸弹防护：最大文件数（默认 10000） */
+  maxExtractFileCount?: number;
 }
 
 /**
@@ -140,4 +152,31 @@ export interface MkdirRequest {
 export interface DeleteRequest {
   /** 要删除的路径 */
   path: string;
+}
+
+/**
+ * 压缩文件类型
+ */
+export type ArchiveType = "zip" | "tar" | "tgz";
+
+/**
+ * 解压请求
+ */
+export interface ExtractRequest {
+  /** 压缩文件路径 */
+  archivePath: string;
+  /** 目标目录（可选，默认为当前目录） */
+  targetDir?: string;
+}
+
+/**
+ * 压缩请求
+ */
+export interface CompressRequest {
+  /** 源文件路径列表 */
+  sourcePaths: string[];
+  /** 目标 ZIP 文件路径 */
+  targetPath: string;
+  /** 是否包含源目录本身（默认 false） */
+  includeSrc?: boolean;
 }

@@ -4,7 +4,7 @@
  */
 
 import { join, normalize, resolve, relative, dirname, basename } from "std/path";
-import type { FileManagerConfig } from "./types.ts";
+import type { FileManagerConfig, ArchiveType } from "./types.ts";
 
 /**
  * 路径验证结果
@@ -252,7 +252,7 @@ export function validateTargetPath(
  * @returns 是否允许
  */
 export function checkOperationPermission(
-  operation: "delete" | "rename" | "mkdir" | "move",
+  operation: "delete" | "rename" | "mkdir" | "move" | "extract" | "compress",
   config: Required<FileManagerConfig>,
 ): boolean {
   switch (operation) {
@@ -264,7 +264,93 @@ export function checkOperationPermission(
       return config.allowMkdir;
     case "move":
       return config.allowMove;
+    case "extract":
+      return config.allowExtract;
+    case "compress":
+      return config.allowCompress;
     default:
       return false;
   }
+}
+
+/**
+ * 检查是否为支持的压缩文件格式
+ * @param filename 文件名
+ * @param config 配置
+ * @returns 压缩文件类型，如果不支持则返回 null
+ */
+export function getSupportedArchiveType(
+  filename: string,
+  config: Required<FileManagerConfig>,
+): ArchiveType | null {
+  if (!config.allowedArchiveExtensions) {
+    return null;
+  }
+
+  const lowerName = filename.toLowerCase();
+
+  // 检查 TAR.GZ
+  if (lowerName.endsWith(".tar.gz") || lowerName.endsWith(".tgz")) {
+    return config.allowedArchiveExtensions.includes("tgz") ? "tgz" : null;
+  }
+
+  // 检查 TAR
+  if (lowerName.endsWith(".tar")) {
+    return config.allowedArchiveExtensions.includes("tar") ? "tar" : null;
+  }
+
+  // 检查 ZIP
+  if (lowerName.endsWith(".zip")) {
+    return config.allowedArchiveExtensions.includes("zip") ? "zip" : null;
+  }
+
+  return null;
+}
+
+/**
+ * 验证解压操作是否安全（ZIP 炸弹防护）
+ * @param archivePath 压缩文件路径
+ * @param targetDir 目标目录
+ * @param rootPath 根目录
+ * @param config 配置
+ * @returns 验证结果
+ */
+export async function validateExtractOperation(
+  archivePath: string,
+  targetDir: string,
+  rootPath: string,
+  config: Required<FileManagerConfig>,
+): Promise<PathValidationResult> {
+  // 验证压缩文件路径
+  const archiveValidation = validatePath(archivePath, rootPath, config);
+  if (!archiveValidation.success) {
+    return archiveValidation;
+  }
+
+  // 验证目标目录路径
+  const targetValidation = validatePath(targetDir, rootPath, config);
+  if (!targetValidation.success) {
+    return targetValidation;
+  }
+
+  // 检查文件大小
+  try {
+    const stat = await Deno.stat(archiveValidation.normalizedPath!);
+    if (stat.size > config.maxExtractSize) {
+      return {
+        success: false,
+        error: `压缩文件大小超过限制 (${config.maxExtractSize} 字节)`,
+      };
+    }
+  } catch {
+    return {
+      success: false,
+      error: "无法读取压缩文件信息",
+    };
+  }
+
+  return {
+    success: true,
+    normalizedPath: targetValidation.normalizedPath,
+  };
 }
