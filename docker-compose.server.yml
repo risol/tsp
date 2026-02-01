@@ -1,0 +1,62 @@
+# TSP Server Docker Compose 配置
+# 用于运行 TSP Server 容器（不包含数据库等服务）
+
+services:
+  tspserver:
+    image: tspserver:latest
+    container_name: tspserver
+    restart: unless-stopped
+
+    # 环境变量（可选，会覆盖配置文件）
+    environment:
+      # 服务器端口（会覆盖 config.json 和 CMD）
+      - TSP_PORT=9000
+      # 网站根目录（会覆盖 config.json）
+      - TSP_ROOT=/app/www
+      # 运行模式
+      - TSP_MODE=Production
+
+    # 端口映射
+    ports:
+      - "9000:9000"  # HTTP 端口
+
+    # 目录挂载
+    volumes:
+      # 挂载自定义配置文件（可选）
+      - ./config.jsonc:/app/config.jsonc:ro
+
+      # 挂载自定义网站目录（推荐用于开发）
+      # 这样可以在宿主机修改文件，容器内立即生效
+      - ./www:/app/www:ro
+
+      # 挂载日志目录（用于持久化日志）
+      - ./logs:/app/logs
+
+      # 挂载数据目录（如果应用需要）
+      - ./data:/app/data
+
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+    # 网络配置（如果需要连接其他容器）
+    networks:
+      - tsp-network
+
+    # 资源限制（可选）
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+networks:
+  tsp-network:
+    driver: bridge

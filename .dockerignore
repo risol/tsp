@@ -13,21 +13,27 @@ yarn-error.log
 tspserver
 tspserver-test
 
+# 编译输出
+dist
+output
+
 # 测试和缓存
 .cache
-tests
+tests/.cache
 *.test.ts
 
-# 文档和示例 (不需要在二进制中)
+# 文档和示例 (保留 README)
+README.md
 docs
 examples
-*.md
-!README.md
 
-# Docker 相关
+# 构建脚本
+docker-build.sh
+docker-build.bat
+
+# Docker 相关（除了当前 Dockerfile）
 docker-compose.yml
 docker-compose.override.yml
-Dockerfile
 .dockerignore
 
 # Docker 数据和配置文件
@@ -37,6 +43,11 @@ docker/ldap/data/
 docker/mysql/init/
 docker/redis/
 docker/ldap/
+
+# E2E 测试相关
+tests/Dockerfile.e2e
+tests/run_e2e_tests_linux_docker.ts
+tests/run-linux-e2e.*
 
 # 环境变量文件
 .env
@@ -59,3 +70,10 @@ tmp
 temp
 *.tmp
 *.log
+dev-server.log
+server.log
+
+# 清理和状态文档
+CLEANUP_REPORT.md
+DOCKER_RECONFIGURE_SUMMARY.md
+REDIS_INTEGRATION_SUMMARY.md

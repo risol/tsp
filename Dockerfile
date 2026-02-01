@@ -1,10 +1,7 @@
-# 使用官方 Deno 镜像作为构建环境（使用最新版本以支持 lockfile v5）
-FROM denoland/deno:latest
+# 多阶段构建 TSP Server Docker 镜像
+# 第一阶段：构建 Linux 二进制文件
 
-# 添加元数据
-LABEL maintainer="TSP Server"
-LABEL description="TSP Server - Linux x64 Binary Builder"
-LABEL version="1.0.0"
+FROM denoland/deno:latest AS builder
 
 # 设置工作目录
 WORKDIR /app
@@ -13,36 +10,50 @@ WORKDIR /app
 COPY . .
 
 # 编译 Linux x64 二进制文件
-RUN deno compile --allow-all --output tspserver --target x86_64-unknown-linux-gnu src/main.ts
+RUN deno compile --allow-all --output /tmp/tspserver --target x86_64-unknown-linux-gnu src/main.ts
 
-# 创建发布目录结构
-RUN mkdir -p dist/tspserver && \
-    cp tspserver dist/tspserver/ && \
-    cp -r www dist/tspserver/ && \
-    cp README.md dist/tspserver/ 2>/dev/null || true && \
-    cp deno.json dist/tspserver/ 2>/dev/null || true
+# 第二阶段：创建轻量级运行镜像
+FROM debian:bookworm-slim
 
-# 设置权限
-RUN chmod +x dist/tspserver/tspserver
+# 安装运行时依赖
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# 创建打包信息文件
-RUN echo "Build Date: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" > dist/tspserver/BUILD_INFO.txt && \
-    echo "Deno Version: $(deno --version | head -1)" >> dist/tspserver/BUILD_INFO.txt && \
-    echo "Target: x86_64-unknown-linux-gnu" >> dist/tspserver/BUILD_INFO.txt && \
-    echo "Commit: $(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')" >> dist/tspserver/BUILD_INFO.txt
+# 创建非特权用户
+RUN groupadd -r tspserver && \
+    useradd -r -g tspserver tspserver
 
-# 打包为 tar.gz
-RUN cd dist && tar -czf ../tspserver-linux-x64.tar.gz tspserver
+# 创建应用目录
+WORKDIR /app
 
-# 创建输出目录
-RUN mkdir -p /output
+# 从构建阶段复制二进制文件
+COPY --from=builder /tmp/tspserver /usr/local/bin/tspserver
 
-# 复制构建产物到输出目录
-RUN cp tspserver-linux-x64.tar.gz /output/
+# 复制网站文件
+COPY www/ ./www/
 
-# 显示构建信息
-RUN echo "Build completed successfully!" && \
-    ls -lh /output/tspserver-linux-x64.tar.gz
+# 设置正确的权限
+RUN chown -R tspserver:tspserver /app && \
+    chmod +x /usr/local/bin/tspserver && \
+    chmod -R 755 /app/www
 
-# 默认命令显示构建结果
-CMD ["ls", "-lh", "/output/"]
+# 切换到非特权用户
+USER tspserver
+
+# 暴露默认端口
+EXPOSE 9000
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:9000/ || exit 1
+
+# 设置默认环境变量
+ENV TSP_PORT=9000 \
+    TSP_ROOT=/app/www \
+    TSP_MODE=Production
+
+# 启动服务器
+CMD ["tspserver", "--root", "/app/www", "--port", "9000"]
