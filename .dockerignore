@@ -1,9 +1,61 @@
+# Git
+.git
+.gitignore
+
+# Node.js (如果有的话)
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Deno
+.deno
+*.exe
+tspserver
+tspserver-test
+
+# 测试和缓存
+.cache
+tests
+*.test.ts
+
+# 文档和示例 (不需要在二进制中)
+docs
+examples
+*.md
+!README.md
+
+# Docker 相关
+docker-compose.yml
+docker-compose.override.yml
+Dockerfile
+.dockerignore
+
 # Docker 数据和配置文件
 docker/mysql/data/
 docker/redis/data/
+docker/ldap/data/
 docker/mysql/init/
 docker/redis/
+docker/ldap/
 
 # 环境变量文件
 .env
 .env.local
+
+# IDE 和编辑器
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# 操作系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 临时文件
+tmp
+temp
+*.tmp
+*.log

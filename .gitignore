@@ -11,3 +11,4 @@ config.jsonc
 nul
 *.log
 /uploads
+/output
