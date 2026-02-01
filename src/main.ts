@@ -14,6 +14,7 @@ import { serveStaticFileWithCache } from "./static.ts";
 import { join, relative, resolve, dirname } from "std/path";
 import { createMySQL } from "./mysql/factory.ts";
 import { createRedis } from "./redis/factory.ts";
+import { createLdapClient } from "./ldap/client.ts";
 import {
   createSessionManager,
   getDefaultOptions,
@@ -721,6 +722,11 @@ async function main(): Promise<void> {
   // 注册 createRedis 工厂函数
   registerDep("createRedis", () => {
     return createRedis;
+  });
+
+  // 注册 createLdap 工厂函数
+  registerDep("createLdap", () => {
+    return createLdapClient;
   });
 
   // 注册 TSP Info

@@ -178,6 +178,22 @@ export default async function (context: PageContext) {
               </div>
             </div>
           </div>
+
+          <div className="col-lg-6">
+            <div className="card border-0 shadow-sm h-100 bg-white">
+              <div className="card-header bg-transparent border-0 pt-3">
+                <h5 className="mb-0">🔐 LDAP 认证</h5>
+              </div>
+              <div className="card-body">
+                <div className="list-group list-group-flush">
+                  <a href="/ldap-demo" className="list-group-item list-group-item-action d-flex justify-content-between align-items-center border-0 px-0">
+                    <span>LDAP 演示</span>
+                    <span className="badge bg-success rounded-pill">New</span>
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* 技术栈 */}

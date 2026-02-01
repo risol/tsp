@@ -470,6 +470,136 @@ declare global {
   type RedisFactory = (config: RedisConfig) => Promise<RedisClient>;
 
   /**
+   * LDAP 客户端接口
+   * 提供完整的 LDAP 操作功能
+   */
+  interface LdapClient {
+    /**
+     * 绑定到 LDAP 服务器（认证）
+     * @param dn - 可分辨名称（Distinguished Name）
+     * @param password - 密码
+     */
+    bind(dn: string, password: string): Promise<void>;
+
+    /**
+     * 匿名绑定
+     */
+    anonymousBind(): Promise<void>;
+
+    /**
+     * 搜索 LDAP 目录
+     * @param baseDN - 搜索基准 DN
+     * @param options - 搜索选项
+     * @returns 搜索结果（Entry 对象数组）
+     */
+    search(
+      baseDN: string,
+      options?: {
+        /** 搜索范围：base（仅基准）、one（一级）、sub（子树，默认） */
+        scope?: "base" | "one" | "sub";
+        /** 搜索过滤器 */
+        filter?: string;
+        /** 要返回的属性列表，null 返回所有属性 */
+        attributes?: string[] | null;
+        /** 返回条目数量限制 */
+        sizeLimit?: number;
+        /** 超时时间（秒） */
+        timeout?: number;
+      }
+    ): Promise<LdapEntry[]>;
+
+    /**
+     * 添加条目
+     * @param dn - 条目的 DN
+     * @param entry - 条目属性
+     */
+    add(dn: string, entry: Record<string, string | string[]>): Promise<void>;
+
+    /**
+     * 修改条目
+     * @param dn - 条目的 DN
+     * @param changes - 修改操作数组
+     */
+    modify(
+      dn: string,
+      changes: Array<{
+        operation: "add" | "delete" | "replace";
+        modification: Record<string, string | string[]>;
+      }>
+    ): Promise<void>;
+
+    /**
+     * 删除条目
+     * @param dn - 要删除的条目 DN
+     */
+    del(dn: string): Promise<void>;
+
+    /**
+     * 修改条目的 DN（重命名或移动）
+     * @param dn - 当前 DN
+     * @param newDN - 新 DN
+     * @param oldRDN - 是否删除旧的 RDN 属性值
+     */
+    modifyDN(dn: string, newDN: string, oldRDN?: boolean): Promise<void>;
+
+    /**
+     * 比较属性值
+     * @param dn - 条目 DN
+     * @param attribute - 属性名
+     * @param value - 要比较的值
+     * @returns 是否匹配
+     */
+    compare(dn: string, attribute: string, value: string): Promise<boolean>;
+
+    /**
+     * 关闭连接
+     */
+    close(): Promise<void>;
+
+    /**
+     * 检查连接是否已绑定
+     */
+    isBound(): boolean;
+  }
+
+  /**
+   * LDAP 条目接口
+   * 表示 LDAP 搜索返回的条目
+   */
+  interface LdapEntry {
+    /** 条目的 DN */
+    dn: string;
+    /** 条目属性集合 */
+    attributes: Record<string, string[]>;
+  }
+
+  /**
+   * LDAP 连接配置
+   */
+  interface LdapConfig {
+    /** LDAP 服务器地址 */
+    url: string;
+    /** 绑定 DN（用于管理员绑定） */
+    bindDN?: string;
+    /** 绑定密码（用于管理员绑定） */
+    bindCredentials?: string;
+    /** 是否使用 TLS（StartTLS） */
+    startTLS?: boolean;
+    /** 连接超时时间（毫秒） */
+    timeout?: number;
+    /** 基准 DN（用于搜索操作） */
+    baseDN?: string;
+    /** 是否启用详细日志 */
+    verbose?: boolean;
+  }
+
+  /**
+   * LDAP 工厂函数类型
+   * 用于创建 LDAP 客户端实例
+   */
+  type LdapFactory = (config: LdapConfig) => Promise<LdapClient>;
+
+  /**
    * 应用依赖类型
    * 在此声明所有可注入的依赖及其类型
    *
@@ -532,6 +662,32 @@ declare global {
      * ```
      */
     createRedis: RedisFactory;
+
+    /**
+     * LDAP 客户端工厂函数
+     * 在 TSX 中调用以创建 LDAP 连接
+     *
+     * @example
+     * ```tsx
+     * export default Page(async function(ctx, { createLdap, response }) {
+     *   const ldap = await createLdap({
+     *     url: 'ldap://127.0.0.1:389',
+     *     bindDN: 'cn=admin,dc=example,dc=org',
+     *     bindCredentials: 'password',
+     *     baseDN: 'dc=example,dc=org'
+     *   });
+     *
+     *   // 搜索用户
+     *   const entries = await ldap.search('dc=example,dc=org', {
+     *     filter: '(objectClass=person)',
+     *     scope: 'sub'
+     *   });
+     *
+     *   return response.json(entries);
+     * });
+     * ```
+     */
+    createLdap: LdapFactory;
 
     /**
      * Session 管理
