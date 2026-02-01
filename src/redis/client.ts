@@ -84,7 +84,8 @@ export class RedisClientImpl implements globalThis.RedisClient {
   async expire(key: string, seconds: number): Promise<boolean> {
     await this.ensureConnected();
     const result = await this.client.expire(key, seconds);
-    return result === 1;
+    // expire 返回 boolean (true: 成功, false: 失败)
+    return result === true;
   }
 
   /**
@@ -158,7 +159,9 @@ export class RedisClientImpl implements globalThis.RedisClient {
    */
   async spop(key: string): Promise<string | null> {
     await this.ensureConnected();
-    return await this.client.sPop(key);
+    const result = await this.client.sPop(key);
+    // sPop 可能返回 string[] 或 string，处理两种情况
+    return Array.isArray(result) ? (result[0] ?? null) : (result ?? null);
   }
 
   /**
@@ -182,7 +185,8 @@ export class RedisClientImpl implements globalThis.RedisClient {
    */
   async hget(key: string, field: string): Promise<string | null> {
     await this.ensureConnected();
-    return await this.client.hGet(key, field);
+    const result = await this.client.hGet(key, field);
+    return result ?? null;
   }
 
   /**

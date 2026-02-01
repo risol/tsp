@@ -1,9 +1,11 @@
 /**
  * 日志模块
  * 提供结构化的日志记录功能
+ * 支持日志归档（按大小、按日期、压缩）
  */
 
 import { join, dirname } from "std/path";
+import { LogRotator, type RotationConfig } from "./logger-rotation.ts";
 
 /**
  * 日志级别
@@ -66,6 +68,8 @@ export interface LoggerConfig {
   file?: string;
   /** 日志格式 */
   format?: "text" | "json";
+  /** 日志归档配置 */
+  rotation?: RotationConfig;
 }
 
 /**
@@ -132,7 +136,48 @@ function getColoredLevel(level: LogLevel, colorize: boolean): string {
 }
 
 /**
- * 写入日志到文件
+ * 日志写入器（支持归档）
+ */
+class LogWriter {
+  private rotator?: LogRotator;
+  private filepath?: string;
+
+  constructor(config: LoggerConfig) {
+    if (config.file) {
+      this.filepath = config.file;
+      // 如果配置了归档，使用 LogRotator
+      if (config.rotation) {
+        this.rotator = new LogRotator(config.file, config.rotation);
+      }
+    }
+  }
+
+  async write(message: string): Promise<void> {
+    if (!this.filepath) {
+      return;
+    }
+
+    if (this.rotator) {
+      // 使用归档写入器
+      await this.rotator.write(message);
+    } else {
+      // 普通写入（无归档）
+      try {
+        const logDir = dirname(this.filepath);
+        await Deno.mkdir(logDir, { recursive: true });
+        await Deno.writeTextFile(this.filepath, message + "\n", {
+          append: true,
+        });
+      } catch (error) {
+        console.error(`Failed to write to log file: ${error}`);
+      }
+    }
+  }
+}
+
+/**
+ * 写入日志到文件（已废弃，使用 LogWriter）
+ * @deprecated 使用 LogWriter 代替
  */
 async function writeToFile(
   filepath: string,
@@ -160,13 +205,8 @@ export function createLogger(
     format: "text",
   },
 ): Logger {
-  // 确保日志目录存在（在 logger 创建时预先创建）
-  if (config.file) {
-    const logDir = dirname(config.file);
-    Deno.mkdir(logDir, { recursive: true }).catch(() => {
-      // 忽略错误（目录可能已存在）
-    });
-  }
+  // 创建日志写入器
+  const writer = new LogWriter(config);
 
   return {
     debug(...args: unknown[]) {
@@ -186,7 +226,7 @@ export function createLogger(
       }
 
       if (config.file) {
-        writeToFile(config.file, message);
+        writer.write(message);
       }
     },
 
@@ -205,7 +245,7 @@ export function createLogger(
       }
 
       if (config.file) {
-        writeToFile(config.file, message);
+        writer.write(message);
       }
     },
 
@@ -224,7 +264,7 @@ export function createLogger(
       }
 
       if (config.file) {
-        writeToFile(config.file, message);
+        writer.write(message);
       }
     },
 
@@ -245,7 +285,7 @@ export function createLogger(
       }
 
       if (config.file) {
-        writeToFile(config.file, message);
+        writer.write(message);
       }
     },
   };
@@ -273,6 +313,17 @@ export function createProductionLogger(
     file?: string;
     colorize?: boolean;
     format?: "text" | "json";
+    /** 日志归档配置 */
+    rotation?: {
+      /** 单个日志文件最大大小（字节），默认 10MB */
+      maxSize?: number;
+      /** 保留的归档文件数量，默认 5 */
+      maxFiles?: number;
+      /** 是否压缩归档文件（gzip），默认 false */
+      compress?: boolean;
+      /** 按日期归档：每天创建新文件，格式：app.log.2025-01-15 */
+      daily?: boolean;
+    };
   },
 ): Logger {
   // 解析日志级别
@@ -291,6 +342,7 @@ export function createProductionLogger(
     console: true,
     format: config?.format || "text",
     file: config?.file,
+    rotation: config?.rotation,
   });
 }
 

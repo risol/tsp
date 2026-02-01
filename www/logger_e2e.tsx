@@ -3,6 +3,8 @@
  * 用于测试日志记录功能
  */
 
+import { Layout } from "./components/Layout.tsx";
+
 export default Page(async function (ctx, { logger, response }) {
   const action = ctx.query.action || "demo";
 

@@ -2,7 +2,7 @@
   "tasks": {
     "dev": "deno run --watch --allow-net --allow-read --allow-write --allow-env --allow-run src/main.ts --dev",
     "start": "deno run --allow-net --allow-read --allow-write --allow-env src/main.ts",
-    "compile": "deno compile --allow-net --allow-read --allow-write --allow-env --output tspserver src/main.ts",
+    "compile": "deno compile --allow-net --allow-read --allow-write --allow-sys --allow-env --output tspserver src/main.ts",
     "build": "deno run --allow-all src/build_tool.ts",
 
     "precompile": "deno run --allow-net --allow-read --allow-write --allow-env src/precompile_tool.ts",

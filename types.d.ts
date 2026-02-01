@@ -177,6 +177,20 @@ declare global {
   }
 
   /**
+   * 日志归档配置
+   */
+  interface LogRotationConfig {
+    /** 单个日志文件最大大小（字节），默认 10MB */
+    maxSize?: number;
+    /** 保留的归档文件数量，默认 5 */
+    maxFiles?: number;
+    /** 是否压缩归档文件（gzip），默认 false */
+    compress?: boolean;
+    /** 按日期归档：每天创建新文件，格式：app.log.2025-01-15 */
+    daily?: boolean;
+  }
+
+  /**
    * MySQL 客户端接口
    * 提供完整的数据库操作功能
    */

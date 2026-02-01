@@ -39,6 +39,17 @@ export interface LoggerConfig {
   colorize?: boolean;
   /** 日志格式：text 或 json */
   format?: "text" | "json";
+  /** 日志归档配置 */
+  rotation?: {
+    /** 单个日志文件最大大小（字节），默认 10MB */
+    maxSize?: number;
+    /** 保留的归档文件数量，默认 5 */
+    maxFiles?: number;
+    /** 是否压缩归档文件（gzip），默认 false */
+    compress?: boolean;
+    /** 按日期归档：每天创建新文件 */
+    daily?: boolean;
+  };
 }
 
 // 配置接口
@@ -676,7 +687,7 @@ async function main(): Promise<void> {
   // 创建 logger 实例（在 registerDep 之前，确保 serverLogger 能使用）
   const loggerConfig = config.logger;
   if (loggerConfig) {
-    // 使用配置文件创建 logger
+    // 使用配置文件创建 logger（包含归档配置）
     loggerInstance = createProductionLogger(loggerConfig);
   } else if (config.dev) {
     // 开发模式默认日志

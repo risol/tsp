@@ -114,6 +114,26 @@ export default async function (context: PageContext) {
           <div className="col-lg-6">
             <div className="card border-0 shadow-sm h-100 bg-white">
               <div className="card-header bg-transparent border-0 pt-3">
+                <h5 className="mb-0">🧪 测试工具</h5>
+              </div>
+              <div className="card-body">
+                <div className="list-group list-group-flush">
+                  <a href="/logger_e2e" className="list-group-item list-group-item-action d-flex justify-content-between align-items-center border-0 px-0">
+                    <span>Logger 测试</span>
+                    <span className="badge bg-primary rounded-pill">E2E</span>
+                  </a>
+                  <a href="/logger_rotation_e2e" className="list-group-item list-group-item-action d-flex justify-content-between align-items-center border-0 px-0">
+                    <span>日志归档测试</span>
+                    <span className="badge bg-primary rounded-pill">E2E</span>
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="col-lg-6">
+            <div className="card border-0 shadow-sm h-100 bg-white">
+              <div className="card-header bg-transparent border-0 pt-3">
                 <h5 className="mb-0">🗄️ MySQL 数据库</h5>
               </div>
               <div className="card-body">

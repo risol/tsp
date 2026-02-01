@@ -60,6 +60,7 @@ async function compileBinary(): Promise<void> {
       "--allow-net",
       "--allow-read",
       "--allow-write",
+      "--allow-sys",
       "--allow-env",
       "--output",
       outputPath,
