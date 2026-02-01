@@ -1,0 +1,53 @@
+# 创建 developers 组织单元
+dn: ou=developers,dc=example,dc=org
+objectClass: organizationalUnit
+ou: developers
+description: Developers organizational unit
+
+# 测试用户 1: 张三
+dn: cn=zhang san,ou=developers,dc=example,dc=org
+objectClass: inetOrgPerson
+cn: zhang san
+sn: zhang
+givenName: san
+mail: zhang.san@example.com
+userPassword: password123
+
+# 测试用户 2: 李四
+dn: cn=li si,ou=developers,dc=example,dc=org
+objectClass: inetOrgPerson
+cn: li si
+sn: li
+givenName: si
+mail: li.si@example.com
+userPassword: password456
+
+# 测试用户 3: 王五
+dn: cn=wang wu,ou=developers,dc=example,dc=org
+objectClass: inetOrgPerson
+cn: wang wu
+sn: wang
+givenName: wu
+mail: wang.wu@example.com
+userPassword: password789
+
+# 测试用户 4: user01
+dn: cn=user01,ou=developers,dc=example,dc=org
+objectClass: inetOrgPerson
+cn: user01
+sn: user01
+userPassword: password01
+
+# 测试用户 5: user02
+dn: cn=user02,ou=developers,dc=example,dc=org
+objectClass: inetOrgPerson
+cn: user02
+sn: user02
+userPassword: password02
+
+# 测试用户 6: user03
+dn: cn=user03,ou=developers,dc=example,dc=org
+objectClass: inetOrgPerson
+cn: user03
+sn: user03
+userPassword: password03

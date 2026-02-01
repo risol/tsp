@@ -78,8 +78,54 @@ services:
     depends_on:
       - mysql
 
+  # OpenLDAP 服务器（用于 LDAP 测试）
+  openldap:
+    image: osixia/openldap:1.5.0
+    container_name: tsp-openldap
+    restart: unless-stopped
+    environment:
+      LDAP_ORGANISATION: "Example Inc"
+      LDAP_DOMAIN: "example.org"
+      LDAP_ADMIN_PASSWORD: "admin123456"
+      LDAP_TLS_VERIFY_CLIENT: "never"
+      TZ: Asia/Shanghai
+    ports:
+      - "1389:389"
+      - "1636:636"
+    volumes:
+      # 数据持久化
+      - ldap_data:/var/lib/ldap
+      # 配置持久化
+      - ldap_config:/etc/ldap/slapd.d
+      # 自定义 LDIF 文件
+      - ./docker/ldap/test-users.ldif:/ldifs/test-users.ldif:ro
+    command: [--copy-service]
+    healthcheck:
+      test: ["CMD", "ldapsearch", "-x", "-H", "ldap://localhost:389", "-b", "dc=example,dc=org", "-D", "cn=admin,dc=example,dc=org", "-w", "admin123456", "(objectClass=*)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # phpLDAPadmin（LDAP 管理工具，可选）
+  phpldapadmin:
+    image: osixia/phpldapadmin:latest
+    container_name: tsp-phpldapadmin
+    restart: unless-stopped
+    environment:
+      PHPLDAPADMIN_LDAP_HOSTS: "openldap"
+      PHPLDAPADMIN_HTTPS: "false"
+      PHPLDAPADMIN_TRUST_PROXY_SSL: "true"
+    ports:
+      - "8082:80"
+    depends_on:
+      - openldap
+
 volumes:
   mysql_data:
     driver: local
   redis_data:
+    driver: local
+  ldap_data:
+    driver: local
+  ldap_config:
     driver: local

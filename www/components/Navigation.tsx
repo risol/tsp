@@ -71,6 +71,9 @@ export function Navigation() {
                 <li>
                   <a className="dropdown-item" href="/redis-demo">Redis 演示</a>
                 </li>
+                <li>
+                  <a className="dropdown-item" href="/ldap-demo">LDAP 演示</a>
+                </li>
               </ul>
             </li>
             <li className="nav-item dropdown">

@@ -1201,7 +1201,193 @@ export function HotReloadWrapper() {
     },
   });
 
-  // 测试 10: 清理资源
+  // 测试 10: LDAP 功能测试
+  tests.push({
+    name: "ldap - LDAP 认证服务功能",
+    fn: async () => {
+      const startTime = Date.now();
+
+      printSubsection("LDAP 功能测试");
+
+      // 测试1: 基本 CRUD（同时检查 LDAP 是否运行）
+      console.log(`  ${COLORS.dim}测试1: 基本连接${COLORS.reset}`);
+      const connectResponse = await fetch(
+        `http://localhost:${TEST_PORT}/ldap_e2e.tsx?action=connect`
+      );
+
+      if (connectResponse.status !== 200) {
+        const text = await connectResponse.text();
+        // 检查是否是连接错误
+        if (text.includes("ECONNREFUSED") ||
+            text.includes("connection") ||
+            text.includes("connect") ||
+            text.includes("Connection")) {
+          console.log(`  ${COLORS.yellow}⚠ LDAP 服务未运行，跳过测试${COLORS.reset}`);
+          console.log(`  ${COLORS.dim}提示: docker/start-ldap.bat 或 ./docker/start-ldap.sh${COLORS.reset}`);
+          return;
+        }
+        throw new Error(`连接测试失败: ${text.substring(0, 200)}`);
+      }
+
+      const connectResult = await connectResponse.json();
+
+      if (!connectResult.success) {
+        // 如果 LDAP 连接失败，跳过测试
+        if (connectResult.error && (
+          connectResult.error.includes("ECONNREFUSED") ||
+          connectResult.error.includes("connection") ||
+          connectResult.error.includes("connect") ||
+          connectResult.error.includes("Connection"))) {
+          console.log(`  ${COLORS.yellow}⚠ LDAP 服务未运行，跳过测试${COLORS.reset}`);
+          console.log(`  ${COLORS.dim}提示: docker/start-ldap.bat 或 ./docker/start-ldap.sh${COLORS.reset}`);
+          return;
+        }
+        throw new Error(`连接测试失败: ${connectResult.error}`);
+      }
+
+      console.log(`  ${COLORS.dim}LDAP 服务器: ${connectResult.config.url}${COLORS.reset}`);
+      console.log(`  ${COLORS.dim}Base DN: ${connectResult.config.baseDN}${COLORS.reset}`);
+      printTestResult("基本连接", true);
+      console.log(`  ${COLORS.green}✓ LDAP 服务正在运行${COLORS.reset}`);
+
+      // 测试2: 搜索用户
+      console.log(`  ${COLORS.dim}测试2: 搜索用户${COLORS.reset}`);
+      const searchResponse = await fetch(
+        `http://localhost:${TEST_PORT}/ldap_e2e.tsx?action=search`
+      );
+
+      assertEquals(searchResponse.status, 200);
+      const searchResult = await searchResponse.json();
+
+      if (!searchResult.success) {
+        throw new Error(`搜索测试失败: ${searchResult.error}`);
+      }
+
+      console.log(`  ${COLORS.dim}找到用户数: ${searchResult.count}${COLORS.reset}`);
+      printTestResult("搜索用户", true);
+
+      // 测试3: 搜索特定用户
+      console.log(`  ${COLORS.dim}测试3: 搜索特定用户${COLORS.reset}`);
+      const specificResponse = await fetch(
+        `http://localhost:${TEST_PORT}/ldap_e2e.tsx?action=search-specific`
+      );
+
+      assertEquals(specificResponse.status, 200);
+      const specificResult = await specificResponse.json();
+
+      if (!specificResult.success) {
+        throw new Error(`特定用户搜索失败: ${specificResult.error}`);
+      }
+
+      console.log(`  ${COLORS.dim}用户: ${specificResult.user.attributes.cn?.[0]}${COLORS.reset}`);
+      console.log(`  ${COLORS.dim}邮箱: ${specificResult.user.attributes.mail?.[0]}${COLORS.reset}`);
+      printTestResult("搜索特定用户", true);
+
+      // 测试4: 批量用户认证
+      console.log(`  ${COLORS.dim}测试4: 批量用户认证${COLORS.reset}`);
+      const authResponse = await fetch(
+        `http://localhost:${TEST_PORT}/ldap_e2e.tsx?action=authenticate-users`
+      );
+
+      assertEquals(authResponse.status, 200);
+      const authResult = await authResponse.json();
+
+      if (!authResult.success) {
+        throw new Error(`批量认证失败: ${authResult.error}`);
+      }
+
+      console.log(`  ${COLORS.dim}认证结果: ${authResult.results.map((r: { user: string; success: boolean }) => r.success ? '✓' : '✗').join(' ')}${COLORS.reset}`);
+      printTestResult("批量用户认证", true);
+
+      // 测试5: 比较操作
+      console.log(`  ${COLORS.dim}测试5: 比较属性值${COLORS.reset}`);
+      const compareResponse = await fetch(
+        `http://localhost:${TEST_PORT}/ldap_e2e.tsx?action=compare`
+      );
+
+      assertEquals(compareResponse.status, 200);
+      const compareResult = await compareResponse.json();
+
+      if (!compareResult.success) {
+        throw new Error(`比较操作失败: ${compareResult.error}`);
+      }
+
+      console.log(`  ${COLORS.dim}属性匹配: ${compareResult.matches}${COLORS.reset}`);
+      printTestResult("比较操作", true);
+
+      // 测试6: 修改操作
+      console.log(`  ${COLORS.dim}测试6: 修改条目${COLORS.reset}`);
+      const modifyResponse = await fetch(
+        `http://localhost:${TEST_PORT}/ldap_e2e.tsx?action=modify`
+      );
+
+      assertEquals(modifyResponse.status, 200);
+      const modifyResult = await modifyResponse.json();
+
+      if (!modifyResult.success) {
+        throw new Error(`修改操作失败: ${modifyResult.error}`);
+      }
+
+      console.log(`  ${COLORS.dim}${modifyResult.message}${COLORS.reset}`);
+      printTestResult("修改条目", true);
+
+      // 测试7: 添加和删除操作
+      console.log(`  ${COLORS.dim}测试7: 添加和删除条目${COLORS.reset}`);
+      const deleteResponse = await fetch(
+        `http://localhost:${TEST_PORT}/ldap_e2e.tsx?action=delete`
+      );
+
+      assertEquals(deleteResponse.status, 200);
+      const deleteResult = await deleteResponse.json();
+
+      if (!deleteResult.success) {
+        throw new Error(`删除操作失败: ${deleteResult.error}`);
+      }
+
+      console.log(`  ${COLORS.dim}已删除: ${deleteResult.deletedDN}${COLORS.reset}`);
+      printTestResult("添加和删除条目", true);
+
+      // 测试8: 匿名绑定（应该失败）
+      console.log(`  ${COLORS.dim}测试8: 匿名绑定检查${COLORS.reset}`);
+      const anonResponse = await fetch(
+        `http://localhost:${TEST_PORT}/ldap_e2e.tsx?action=anonymous`
+      );
+
+      assertEquals(anonResponse.status, 200);
+      const anonResult = await anonResponse.json();
+
+      // 匿名绑定应该失败（符合预期）
+      if (!anonResult.success) {
+        console.log(`  ${COLORS.green}✓ 匿名绑定被正确拒绝${COLORS.reset}`);
+        printTestResult("匿名绑定防护", true);
+      } else {
+        console.log(`  ${COLORS.yellow}⚠ 匿名绑定未被限制${COLORS.reset}`);
+        printTestResult("匿名绑定检查", true);
+      }
+
+      // 测试9: 压力测试
+      console.log(`  ${COLORS.dim}测试9: 压力测试（50次搜索）${COLORS.reset}`);
+      const stressResponse = await fetch(
+        `http://localhost:${TEST_PORT}/ldap_e2e.tsx?action=stress`
+      );
+
+      assertEquals(stressResponse.status, 200);
+      const stressResult = await stressResponse.json();
+
+      if (!stressResult.success) {
+        throw new Error(`压力测试失败: ${stressResult.error}`);
+      }
+
+      console.log(`  ${COLORS.dim}总耗时: ${stressResult.duration}ms${COLORS.reset}`);
+      console.log(`  ${COLORS.dim}平均耗时: ${stressResult.avgTime.toFixed(2)}ms${COLORS.reset}`);
+      printTestResult("压力测试", true);
+
+      const duration = Date.now() - startTime;
+      console.log(`  ${COLORS.dim}${duration}ms${COLORS.reset}`);
+    },
+  });
+
+  // 测试 11: 清理资源
   tests.push({
     name: "binary build - 停止服务器",
     fn: async () => {

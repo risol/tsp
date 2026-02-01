@@ -3,7 +3,7 @@
  * 提供完整的 LDAP 操作功能，基于 ldapts 库
  */
 
-import { Client, type SearchOptions } from "ldapts";
+import { Client, Change, Attribute, type SearchOptions } from "ldapts";
 
 /**
  * LDAP 客户端实现类
@@ -76,6 +76,11 @@ export class LdapClientImpl implements globalThis.LdapClient {
   private convertAttributes(
     attrs: Record<string, unknown>
   ): Record<string, string[]> {
+    // 处理 null 或 undefined 的情况
+    if (!attrs) {
+      return {};
+    }
+
     const result: Record<string, string[]> = {};
 
     for (const [key, value] of Object.entries(attrs)) {
@@ -108,13 +113,22 @@ export class LdapClientImpl implements globalThis.LdapClient {
       modification: Record<string, string | string[]>;
     }>
   ): Promise<void> {
-    // 转换为 ldapts 期望的格式
+    // 分别处理每个修改操作
     for (const change of changes) {
-      const modification = {
-        operation: change.operation,
-        modification: change.modification,
-      };
-      await this.client.modify(dn, modification as never);
+      // 将 modification 对象转换为 ldapts Attribute 对象
+      for (const [key, value] of Object.entries(change.modification)) {
+        const attribute = new Attribute({
+          type: key,
+          values: Array.isArray(value) ? value : [value],
+        });
+
+        const ldapChange = new Change({
+          operation: change.operation,
+          modification: attribute,
+        });
+
+        await this.client.modify(dn, ldapChange);
+      }
     }
   }
 

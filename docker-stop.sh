@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Docker 服务停止脚本
-# 用于停止并清理 MySQL 和 Redis 容器
+# 用于停止并清理 MySQL、Redis 和 LDAP 容器
 #
 
 set -e
@@ -10,6 +10,7 @@ set -e
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 echo -e "${GREEN}╔════════════════════════════════════════╗${NC}"
@@ -27,9 +28,9 @@ else
     exit 1
 fi
 
-# 检查容器是否运行
+# 停止所有服务
 if $DOCKER_COMPOSE ps | grep -q "Up"; then
-    echo -e "${YELLOW}⏹ 停止服务...${NC}"
+    echo -e "${YELLOW}⏹ 停止所有服务...${NC}"
     $DOCKER_COMPOSE down
     echo -e "${GREEN}✅ 服务已停止${NC}"
 else
@@ -38,7 +39,15 @@ fi
 
 # 询问是否删除数据
 echo ""
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${YELLOW}🗑️  是否要删除数据卷？（所有数据将丢失）${NC}"
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo -e "  ${RED}警告：此操作将删除以下数据：${NC}"
+echo -e "  - MySQL 数据库数据"
+echo -e "  - Redis 缓存数据"
+echo -e "  - LDAP 目录数据"
+echo ""
 echo -n "请输入 'yes' 确认删除，或按 Enter 取消: "
 read -r answer
 
@@ -53,3 +62,4 @@ fi
 
 echo ""
 echo -e "${GREEN}✓ 操作完成${NC}"
+echo ""

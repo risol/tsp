@@ -1,0 +1,68 @@
+# 自定义 LDAP 测试数据
+# 这些数据会在容器启动后导入
+
+# 添加组织单元
+dn: ou=developers,dc=example,dc=org
+objectClass: organizationalUnit
+ou: developers
+description: 开发团队
+
+# 添加测试用户 1
+dn: cn=zhang san,ou=developers,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: organizationalPerson
+objectClass: person
+objectClass: top
+cn: zhang san
+sn: zhang
+givenName: san
+uid: zhang.san
+mail: zhang.san@example.com
+userPassword: password123
+telephoneNumber: 13800000001
+title: 高级工程师
+
+# 添加测试用户 2
+dn: cn=li si,ou=developers,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: organizationalPerson
+objectClass: person
+objectClass: top
+cn: li si
+sn: li
+givenName: si
+uid: li.si
+mail: li.si@example.com
+userPassword: password456
+telephoneNumber: 13800000002
+title: 中级工程师
+
+# 添加测试用户 3
+dn: cn=wang wu,ou=developers,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: organizationalPerson
+objectClass: person
+objectClass: top
+cn: wang wu
+sn: wang
+givenName: wu
+uid: wang.wu
+mail: wang.wu@example.com
+userPassword: password789
+telephoneNumber: 13800000003
+title: 初级工程师
+
+# 添加管理员组
+dn: cn=admin,ou=developers,dc=example,dc=org
+objectClass: groupOfNames
+cn: admin
+member: cn=zhang san,ou=developers,dc=example,dc=org
+description: 管理员组
+
+# 添加普通用户组
+dn: cn=users,ou=developers,dc=example,dc=org
+objectClass: groupOfNames
+cn: users
+member: cn=li si,ou=developers,dc=example,dc=org
+member: cn=wang wu,ou=developers,dc=example,dc=org
+description: 普通用户组
