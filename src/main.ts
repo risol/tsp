@@ -29,6 +29,8 @@ import {
   type Logger,
 } from "./logger.ts";
 import { nanoid } from "nanoid";
+import type { FileManagerConfig } from "./filemanager/types.ts";
+import { validateFileManagerConfig } from "./filemanager/config.ts";
 
 // 日志配置接口
 export interface LoggerConfig {
@@ -62,6 +64,8 @@ export interface Config {
   staticExtensions?: string[];
   /** 日志配置 */
   logger?: LoggerConfig;
+  /** 文件管理器配置 */
+  fileManager?: FileManagerConfig;
 }
 
 // 默认支持的静态文件扩展名
@@ -105,6 +109,8 @@ interface ConfigFile {
   staticExtensions?: string[];
   /** 日志配置 */
   logger?: LoggerConfig;
+  /** 文件管理器配置 */
+  fileManager?: FileManagerConfig;
 }
 
 /**
@@ -184,6 +190,27 @@ async function loadConfigFile(
     }
 
     const config: ConfigFile = JSON.parse(content);
+
+    // 验证文件管理器配置（如果存在）
+    if (config.fileManager) {
+      logger?.info("发现文件管理器配置", { enabled: config.fileManager.enabled });
+      const validated = validateFileManagerConfig(config.fileManager);
+      logger?.info("文件管理器配置验证完成", {
+        enabled: validated.enabled,
+        path: validated.path,
+      });
+      // 如果未启用，移除配置
+      if (!validated.enabled) {
+        logger?.info("文件管理器未启用，移除配置");
+        delete config.fileManager;
+      } else {
+        // 替换为验证后的配置
+        logger?.info("文件管理器已启用并验证通过");
+        (config as Config).fileManager = validated;
+      }
+    } else {
+      logger?.info("未配置文件管理器");
+    }
 
     // 合并默认配置和文件配置
     return {
@@ -346,6 +373,36 @@ async function handleRequest(
   try {
     const url = new URL(req.url);
     const pathname = url.pathname;
+
+    // 文件管理器路由拦截
+    if (config.fileManager?.enabled) {
+      serverLogger.debug("文件管理器已启用", {
+        path: config.fileManager.path,
+        enabled: config.fileManager.enabled,
+      });
+
+      const fmPath = config.fileManager.path || "/__filemanager";
+      // 确保路径比较时格式一致
+      const normalizedFmPath = fmPath.endsWith("/") ? fmPath.slice(0, -1) : fmPath;
+      const normalizedPathname = pathname.endsWith("/") && pathname !== "/"
+        ? pathname.slice(0, -1)
+        : pathname;
+
+      serverLogger.debug("路径匹配检查", {
+        pathname,
+        normalizedPathname,
+        normalizedFmPath,
+        startsWith: normalizedPathname.startsWith(normalizedFmPath + "/"),
+      });
+
+      if (normalizedPathname === normalizedFmPath || normalizedPathname.startsWith(normalizedFmPath + "/")) {
+        serverLogger.info("文件管理器路由匹配", { pathname });
+        const { handleFileManagerRequest } = await import("./filemanager/mod.ts");
+        // 确保传递完整验证过的配置
+        const fmConfig = validateFileManagerConfig(config.fileManager);
+        return handleFileManagerRequest(req, fmConfig, config.root, serverLogger);
+      }
+    }
 
     // 解析文件路径（包含静态文件扩展名）
     const staticExtensions = config.staticExtensions || [];
