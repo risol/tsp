@@ -712,6 +712,21 @@ async function main(): Promise<void> {
     return createRedis;
   });
 
+  // 注册 TSP Info
+  const { TspInfo } = await import("./tspinfo.ts");
+  registerDep("tspinfo", () => {
+    return new TspInfo(
+      {
+        root: config.root,
+        port: config.port,
+        dev: config.dev,
+        accessLogPath: config.accessLogPath,
+        logger: config.logger,
+      },
+      serverLogger,
+    );
+  });
+
   // 记录服务器启动信息
   serverLogger.info("TSP Server 启动中", {
     root: config.root,

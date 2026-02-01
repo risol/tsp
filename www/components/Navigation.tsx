@@ -56,6 +56,11 @@ export function Navigation() {
                 📡 请求信息
               </a>
             </li>
+            <li className="nav-item">
+              <a className="nav-link nav-link-custom" href="/tspinfo">
+                ℹ️ 服务器信息
+              </a>
+            </li>
           </ul>
         </div>
       </div>

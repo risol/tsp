@@ -17,6 +17,7 @@ export default async function (context: PageContext) {
           <div className="d-flex gap-3 justify-content-center">
             <a href="/features" className="btn btn-primary btn-lg">查看功能</a>
             <a href="/demos" className="btn btn-outline-primary btn-lg">功能演示</a>
+            <a href="/tspinfo" className="btn btn-outline-secondary btn-lg">服务器信息</a>
           </div>
         </div>
 

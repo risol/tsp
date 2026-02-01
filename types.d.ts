@@ -555,6 +555,20 @@ declare global {
      * ```
      */
     nanoid: (size?: number) => string;
+
+    /**
+     * TSP Info - 服务器信息查看器
+     * 类似 PHP 的 phpinfo()，显示服务器运行时信息
+     *
+     * @example
+     * ```tsx
+     * export default Page(async function(ctx, { tspinfo }) {
+     *   // 返回 HTML 格式的服务器信息页面
+     *   return tspinfo.renderHTML();
+     * });
+     * ```
+     */
+    tspinfo: import("./src/tspinfo.ts").TspInfo;
   }
 
   /**
