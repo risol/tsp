@@ -188,26 +188,37 @@ export default Page(async function (ctx, { createLdap, response }) {
                     <h6 className="mt-4">TSP 中的 LDAP 使用：</h6>
                     <pre className="bg-light p-3 rounded">
 {`export default Page(async function(ctx, { createLdap }) {
-  // 创建 LDAP 客户端
+  // 创建 LDAP 客户端（Docker 测试环境）
   const ldap = await createLdap({
-    url: 'ldap://localhost:389',
+    url: 'ldap://localhost:1389',  // 注意：Docker 映射端口
     bindDN: 'cn=admin,dc=example,dc=org',
-    bindCredentials: 'password',
+    bindCredentials: 'admin123456',
     baseDN: 'dc=example,dc=org'
   });
 
   // 搜索用户
-  const entries = await ldap.search('dc=example,dc=org', {
+  const entries = await ldap.search('ou=developers,dc=example,dc=org', {
     filter: '(objectClass=person)',
     scope: 'sub'
   });
 
   // 用户认证
-  await ldap.bind(userDN, password);
+  await ldap.bind('cn=zhang san,ou=developers,dc=example,dc=org', 'password123');
 
   await ldap.close();
 });`}
                     </pre>
+
+                    <h6 className="mt-4">Docker 测试环境信息：</h6>
+                    <div className="alert alert-info">
+                      <strong>测试服务器：</strong> ldap://localhost:1389<br/>
+                      <strong>管理员：</strong> cn=admin,dc=example,dc=org / admin123456<br/>
+                      <strong>测试用户（6个）：</strong><br/>
+                      - 张三: cn=zhang san,ou=developers,dc=example,dc=org / password123<br/>
+                      - 李四: cn=li si,ou=developers,dc=example,dc=org / password456<br/>
+                      - 王五: cn=wang wu,ou=developers,dc=example,dc=org / password789<br/>
+                      - user01-03: cn=user01,ou=developers,dc=example,dc=org / password01-03
+                    </div>
 
                     <h6 className="mt-4">配置说明：</h6>
                     <table className="table table-sm">
@@ -222,7 +233,7 @@ export default Page(async function (ctx, { createLdap, response }) {
                         <tr>
                           <td><code>url</code></td>
                           <td>LDAP 服务器地址</td>
-                          <td><code>ldap://localhost:389</code></td>
+                          <td><code>ldap://localhost:1389</code> (Docker)</td>
                         </tr>
                         <tr>
                           <td><code>bindDN</code></td>
@@ -232,12 +243,12 @@ export default Page(async function (ctx, { createLdap, response }) {
                         <tr>
                           <td><code>bindCredentials</code></td>
                           <td>管理员密码</td>
-                          <td><code>secret</code></td>
+                          <td><code>admin123456</code></td>
                         </tr>
                         <tr>
                           <td><code>baseDN</code></td>
                           <td>搜索基准 DN</td>
-                          <td><code>dc=example,dc=org</code></td>
+                          <td><code>ou=developers,dc=example,dc=org</code></td>
                         </tr>
                         <tr>
                           <td><code>startTLS</code></td>
@@ -272,7 +283,7 @@ export default Page(async function (ctx, { createLdap, response }) {
                           className="form-control"
                           id="ldapUrl"
                           name="ldapUrl"
-                          defaultValue="ldap://localhost:389"
+                          defaultValue="ldap://localhost:1389"
                           required
                         />
                       </div>
@@ -317,8 +328,20 @@ export default Page(async function (ctx, { createLdap, response }) {
                           id="userDN"
                           name="userDN"
                           placeholder="cn=user,dc=example,dc=org"
+                          list="testUsers"
                           required
                         />
+                        <datalist id="testUsers">
+                          <option value="cn=zhang san,ou=developers,dc=example,dc=org">张三 (password123)</option>
+                          <option value="cn=li si,ou=developers,dc=example,dc=org">李四 (password456)</option>
+                          <option value="cn=wang wu,ou=developers,dc=example,dc=org">王五 (password789)</option>
+                          <option value="cn=user01,ou=developers,dc=example,dc=org">user01 (password01)</option>
+                          <option value="cn=user02,ou=developers,dc=example,dc=org">user02 (password02)</option>
+                          <option value="cn=user03,ou=developers,dc=example,dc=org">user03 (password03)</option>
+                        </datalist>
+                        <div className="form-text">
+                          测试用户：从下拉列表选择或手动输入
+                        </div>
                       </div>
 
                       <div className="mb-3">
@@ -330,8 +353,12 @@ export default Page(async function (ctx, { createLdap, response }) {
                           className="form-control"
                           id="userPassword"
                           name="userPassword"
+                          placeholder="password123"
                           required
                         />
+                        <div className="form-text">
+                          测试用户密码：张三=password123, 李四=password456, 王五=password789, user01=password01, user02=password02, user03=password03
+                        </div>
                       </div>
 
                       <button type="submit" className="btn btn-primary">
@@ -369,7 +396,7 @@ export default Page(async function (ctx, { createLdap, response }) {
                           className="form-control"
                           id="ldapUrl"
                           name="ldapUrl"
-                          defaultValue="ldap://localhost:389"
+                          defaultValue="ldap://localhost:1389"
                           required
                         />
                       </div>
@@ -397,7 +424,7 @@ export default Page(async function (ctx, { createLdap, response }) {
                           className="form-control"
                           id="password"
                           name="password"
-                          defaultValue="secret"
+                          defaultValue="admin123456"
                           required
                         />
                       </div>
@@ -425,9 +452,12 @@ export default Page(async function (ctx, { createLdap, response }) {
                           className="form-control"
                           id="searchBase"
                           name="searchBase"
-                          defaultValue="dc=example,dc=org"
+                          defaultValue="ou=developers,dc=example,dc=org"
                           required
                         />
+                        <div className="form-text">
+                          测试用户在 ou=developers,dc=example,dc=org 下（6个用户）
+                        </div>
                       </div>
 
                       <div className="mb-3">
@@ -439,9 +469,12 @@ export default Page(async function (ctx, { createLdap, response }) {
                           className="form-control"
                           id="searchFilter"
                           name="searchFilter"
-                          defaultValue="(objectClass=*)"
+                          defaultValue="(objectClass=person)"
                           required
                         />
+                        <div className="form-text">
+                          常用过滤器：(objectClass=*) 所有条目，(objectClass=person) 人员，(cn=zhang san) 特定用户
+                        </div>
                       </div>
 
                       <div className="mb-3">
