@@ -21,7 +21,7 @@ export function Layout({ title, description, children }: LayoutProps) {
         <style>{getCustomStyles()}</style>
         <script src="/static/js/htmx.min.js" defer></script>
       </head>
-      <body className="bg-gradient-brand">
+      <body className="bg-light">
         <Navigation />
         <div className="container py-4 mt-4">
           {children}

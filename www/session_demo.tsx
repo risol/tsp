@@ -125,8 +125,8 @@ export default Page(async function (context, { session }) {
     <Layout title="Session 演示 - TSP" description="TSP Session 管理功能演示">
       {/* Page Header */}
       <div className="text-center mb-5">
-        <h1 className="display-5 fw-bold text-white mb-3">🔐 Session 演示</h1>
-        <p className="text-white-50 fs-5">
+        <h1 className="display-5 fw-bold text-dark mb-3">🔐 Session 演示</h1>
+        <p className="text-muted fs-5">
           完整的 Session 管理功能展示（支持htmx无刷新交互）
         </p>
       </div>
@@ -277,10 +277,10 @@ function SessionStatusCard({ sessionId, isValid }: { sessionId: string; isValid:
 // 用户信息卡片组件（已登录）
 function UserCard({ user }: { user: any }) {
   return (
-    <div className="card shadow-sm mb-4 fade-in">
+    <div className="card shadow-sm mb-4">
       <div className="card-body">
         <h2 className="h4 card-title text-primary mb-3">用户信息</h2>
-        <div className="bg-gradient-primary text-white p-4 rounded-3 mb-4">
+        <div className="bg-primary text-white p-4 rounded-3 mb-4">
           <div className="fs-4 fw-bold mb-1">{user.name}</div>
           <div className="opacity-75 small mb-2">{user.email || "没有邮箱"}</div>
           <div className="small opacity-75">
@@ -333,7 +333,7 @@ function NoUserCard() {
 // Session数据卡片组件
 function SessionDataCard({ visits, lastVisit, cart }: { visits: number; lastVisit?: string; cart?: string[] }) {
   return (
-    <div className="card shadow-sm mb-4 fade-in">
+    <div className="card shadow-sm mb-4">
       <div className="card-body">
         <h2 className="h4 card-title text-primary mb-3">Session 数据</h2>
         <div className="row border-bottom pb-2 mb-2">

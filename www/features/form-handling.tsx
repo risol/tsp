@@ -9,7 +9,7 @@ export default async function (context: PageContext) {
   // 如果是htmx的POST请求，返回结果片段
   if (method === "POST" && body && isHtmx) {
     return (
-      <div className="card bg-success bg-opacity-10 border-success border-2 mb-5 fade-in">
+      <div className="card bg-success bg-opacity-10 border-success border-2 mb-5">
         <div className="card-body">
           <h3 className="h4 text-success mb-3">
             ✅ 提交成功！（htmx无刷新）
@@ -33,8 +33,8 @@ export default async function (context: PageContext) {
     <Layout title="表单处理 - TSP" description="表单提交和数据处理演示（htmx支持）">
       {/* Page Header */}
       <div className="text-center mb-5">
-        <h1 className="display-5 fw-bold text-white mb-3">📝 表单处理</h1>
-        <p className="text-white-50 fs-5">
+        <h1 className="display-5 fw-bold text-dark mb-3">📝 表单处理</h1>
+        <p className="text-muted fs-5">
           支持多种表单提交方式（含htmx无刷新提交）
         </p>
       </div>
@@ -179,7 +179,7 @@ export default async function (context: PageContext) {
 
       {/* Back Button */}
       <div className="mt-4">
-        <a href="/features" className="btn btn-outline-light">
+        <a href="/features" className="btn btn-outline-primary">
           ← 返回功能列表
         </a>
       </div>

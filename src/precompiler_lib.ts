@@ -347,20 +347,36 @@ export async function compileAll(rootDir: string = WWW_DIR): Promise<string[]> {
   log.info(`[INFO] Found ${tsxFiles.length} TSX files`);
 
   // 编译所有文件
+  const compiledFiles: string[] = [];
+  const failedFiles: Array<{ filepath: string; error: string }> = [];
+
   for (const filepath of tsxFiles) {
     try {
       await compileFile(filepath);
+      compiledFiles.push(filepath);
     } catch (error) {
       const err = error as Error;
-      log.error(`[ERROR] Failed to compile ${filepath}:`, err.message);
-      throw error;
+      const errorMsg = err.message || String(error);
+      log.error(`[ERROR] Failed to compile ${filepath}: ${errorMsg}`);
+      // 记录失败的文件，但继续编译其他文件
+      failedFiles.push({ filepath, error: errorMsg });
     }
   }
 
-  log.info(`\n✅ Compiled ${tsxFiles.length} files to cache/`);
+  // 输出编译结果摘要
+  log.info(`\n✅ Successfully compiled ${compiledFiles.length}/${tsxFiles.length} files to cache/`);
 
-  // 返回编译的文件列表（转换为相对于根目录的路径）
-  return tsxFiles.map((f) => relative(Deno.cwd(), f));
+  if (failedFiles.length > 0) {
+    log.warn(`\n⚠️  Failed to compile ${failedFiles.length} file(s):`);
+    for (const { filepath, error } of failedFiles) {
+      log.warn(`   - ${filepath}`);
+      log.debug(`     Error: ${error}`);
+    }
+    log.warn("\nThese files will be compiled on-demand when accessed.");
+  }
+
+  // 返回成功编译的文件列表（转换为相对于根目录的路径）
+  return compiledFiles.map((f) => relative(Deno.cwd(), f));
 }
 
 /**

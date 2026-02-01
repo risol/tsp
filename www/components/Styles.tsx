@@ -9,11 +9,6 @@
  */
 export function getCustomStyles(): string {
   return `
-    /* 品牌渐变背景 */
-    .bg-gradient-brand {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-      min-height: 100vh;
-    }
 
     /* 代码块样式（Bootstrap没有深色代码块） */
     .code-block {
@@ -76,15 +71,9 @@ export function getCustomStyles(): string {
       border-radius: 0.75rem;
       padding: 1.5rem;
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-      transition: transform 0.2s, box-shadow 0.2s;
       display: flex;
       flex-direction: column;
       height: 100%;
-    }
-
-    .card:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     }
 
     /* htmx加载指示器 */
@@ -115,10 +104,6 @@ export function getCustomStyles(): string {
       }
     }
 
-    /* 渐变背景 */
-    .bg-gradient-primary {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    }
   `;
 }
 

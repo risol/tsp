@@ -748,10 +748,16 @@ Starting server...
     console.log(precompileMsg);
     serverLogger.info("开始预编译 TSX 文件");
     const { compileAll } = await import("./precompiler_lib.ts");
-    try {
-      // 计算相对于 CWD 的根目录路径
-      const rootDir = relative(Deno.cwd(), config.root);
-      const compiledFiles = await compileAll(rootDir);
+
+    // 计算相对于 CWD 的根目录路径
+    const rootDir = relative(Deno.cwd(), config.root);
+    const compiledFiles = await compileAll(rootDir);
+
+    if (compiledFiles.length === 0) {
+      const noCompileMsg = "⚠️  No files were successfully precompiled";
+      console.warn(noCompileMsg);
+      serverLogger.warn("没有文件成功预编译");
+    } else {
       serverLogger.info("预编译完成", { count: compiledFiles.length });
 
       // 预热缓存：加载所有编译后的模块到内存
@@ -779,15 +785,6 @@ Starting server...
       const warmupDoneMsg = "✓ Cache warmed up";
       console.log(warmupDoneMsg);
       serverLogger.info("缓存预热完成", { count: compiledFiles.length });
-    } catch (error) {
-      const err = error as Error;
-      const errorMsg = `\n❌ Precompilation failed: ${err.message}`;
-      console.error(errorMsg);
-      serverLogger.error("预编译失败", {
-        error: err.message,
-        stack: err.stack,
-      });
-      Deno.exit(1);
     }
   }
 

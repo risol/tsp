@@ -20,8 +20,8 @@ export default Page(async function (ctx, { cookies, nanoid }) {
       <Layout title="Cookie 演示 - TSP" description="TSP Cookie 管理功能演示">
         {/* Page Header */}
         <div className="text-center mb-5">
-          <h1 className="display-5 fw-bold text-white mb-3">🍪 Cookie 管理演示</h1>
-          <p className="text-white-50 fs-5">
+          <h1 className="display-5 fw-bold text-dark mb-3">🍪 Cookie 管理演示</h1>
+          <p className="text-muted fs-5">
             完整的 Cookie 操作功能展示（支持htmx无刷新交互）
           </p>
         </div>
@@ -212,7 +212,7 @@ export default Page(async function (ctx, { cookies, nanoid }) {
 // Cookie表格组件
 function CookiesTable({ cookies }: { cookies: Record<string, string> }) {
   return (
-    <div className="card shadow-sm mb-4 fade-in">
+    <div className="card shadow-sm mb-4">
       <div className="card-body">
         <h2 className="h4 card-title text-primary mb-3">当前 Cookies</h2>
         {Object.keys(cookies).length > 0
