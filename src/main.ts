@@ -256,7 +256,6 @@ async function parseArgs(logger?: Logger): Promise<Config> {
     // 尝试自动查找默认配置文件
     const defaultConfigFiles = [
       "config.jsonc",
-      "config.json",
     ];
 
     for (const filename of defaultConfigFiles) {
@@ -320,7 +319,7 @@ TSP: TypeScript Server Page
   ./tspserver [options]
 
 选项:
-  --config, -c <file>     配置文件路径 (默认: 自动查找 config.json)
+  --config, -c <file>     配置文件路径 (默认: config.jsonc)
   --root, -r <path>       文档根目录 (默认: ./www)
   --port, -p <port>       监听端口 (默认: 9000)
   --dev, -d               开发模式 (显示错误详情)
@@ -328,11 +327,9 @@ TSP: TypeScript Server Page
   --help, -h              显示帮助信息
 
 配置文件:
-  支持的配置文件名（按优先级）:
-    - config.jsonc
-    - config.json
+  支持的配置文件名: config.jsonc
 
-  配置文件格式 (JSON):
+  配置文件格式 (JSONC，支持注释):
   {
     "root": "./www",
     "port": 9000,
@@ -348,7 +345,7 @@ TSP: TypeScript Server Page
   ./tspserver
 
   # 指定配置文件
-  ./tspserver --config ./my-config.json
+  ./tspserver --config ./my-config.jsonc
 
   # 命令行参数覆盖配置文件
   ./tspserver --port 8080 --dev

@@ -71,6 +71,56 @@ export default Page(async function(ctx, { session }) {
 });
 ```
 
+## 脚本规则
+
+### 🪙 Windows 脚本要求
+
+**Windows 下只允许使用 PowerShell 脚本（.ps1）**
+
+1. **禁止使用批处理文件（.bat）**
+   - 不创建新的 `.bat` 文件
+   - 将所有现有的 `.bat` 文件替换为 `.ps1` 脚本
+   - `.bat` 文件被视为过时和不受支持
+
+2. **优先使用 PowerShell**
+   - 所有 Windows 脚本必须使用 PowerShell（.ps1）
+   - PowerShell 提供更强大的功能和更好的错误处理
+   - 支持现代 Windows 系统管理
+
+3. **脚本命名规范**
+   - Windows 脚本：`script-name.ps1`
+   - Linux/macOS 脚本：`script-name.sh`
+   - 使用清晰、描述性的文件名
+
+4. **PowerShell 最佳实践**
+   - 添加 `$ErrorActionPreference = "Stop"` 在脚本开头
+   - 使用 PowerShell 命令let（`Write-Host`, `Get-Command` 等）
+   - 提供清晰的错误消息和用户提示
+   - 使用参数验证和错误处理
+
+### 📝 示例
+
+```powershell
+# ✅ 正确 - PowerShell 脚本
+$ErrorActionPreference = "Stop"
+
+Write-Host "启动服务..." -ForegroundColor Green
+try {
+    docker-compose up -d
+    Write-Host "✓ 服务启动成功" -ForegroundColor Green
+} catch {
+    Write-Host "✗ 服务启动失败" -ForegroundColor Red
+    exit 1
+}
+```
+
+```batch
+# ❌ 错误 - 批处理文件（已废弃）
+@echo off
+echo 启动服务...
+docker-compose up -d
+```
+
 ## Project Overview
 
 TSP (TypeScript Server Page) is a template server built with Deno + TSX + Preact. It executes `.tsx` files directly (like PHP) and serves them as HTML, with intelligent module caching and hot reload support for nested dependencies.
@@ -134,6 +184,55 @@ deno task lint
 cd dist
 ./tspserver --root ./www --port 9000
 ```
+
+## 重要架构原则
+
+### 🔄 TSX 动态编译规则
+
+**生产模式必须支持动态编译 TSX 文件**
+
+TSP 的核心特性是支持运行时动态加载和编译 `.tsx` 文件，这在生产环境中同样需要：
+
+1. **热重载支持**：即使在生产环境，修改 `.tsx` 文件后也应能自动重新编译
+2. **动态依赖跟踪**：支持嵌套组件依赖关系的自动检测和重新编译
+3. **缓存机制**：基于文件修改时间的智能缓存，避免不必要的重新编译
+4. **版本化编译**：使用版本号绕过 Deno 的 import 缓存机制
+
+#### 关键实现细节
+
+- **编译器**：使用 `@deno/loader` 的 Workspace 进行 TSX → JS 转译
+- **缓存位置**：`.cache/tsp/` 目录，与源文件相同的目录结构
+- **版本号**：编译后的文件名包含版本号（如 `Component.v5.js`）来绕过缓存
+- **反向依赖图**：跟踪文件间的依赖关系，支持级联重新编译
+
+#### ⚠️ 常见错误
+
+**错误做法**：
+```typescript
+// ❌ 错误：在生产模式禁用动态编译
+if (Deno.env.get("NODE_ENV") === "production") {
+  // 跳过编译，直接加载缓存
+}
+```
+
+**正确做法**：
+```typescript
+// ✅ 正确：始终支持动态编译，只是使用缓存优化
+const cached = moduleCache.get(filepath);
+if (cached && !needsRecompile) {
+  return cached.module;
+}
+// 生产模式也会编译，只是有缓存优化
+await compileFile(filepath);
+```
+
+#### deno compile 注意事项
+
+当使用 `deno compile` 编译二进制时：
+- ✅ 必须包含 `@deno/loader` 及其所有依赖
+- ✅ 必须支持运行时动态导入和编译
+- ✅ 不应该在生产模式禁用 TSX 编译功能
+- ❌ 不能假设所有文件都已预编译
 
 ## Critical Architecture Rules
 
