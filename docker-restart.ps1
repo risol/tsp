@@ -1,40 +1,58 @@
-# Docker Test Services Restart Script
-# Quick restart MySQL and Redis containers
+# Docker 服务重启脚本 (Windows)
 
-Write-Host "========================================" -ForegroundColor Green
-Write-Host "     Restart Docker Test Services          " -ForegroundColor Green
-Write-Host "========================================" -ForegroundColor Green
+$ErrorActionPreference = "Stop"
+$CONTAINER_NAME = "tsp-openldap"
+
+Write-Host ""
+Write-Host "============================================"
+Write-Host "  重启 Docker 测试服务"
+Write-Host "============================================"
 Write-Host ""
 
-# Check for docker-compose
-$composeCmd = $null
-if (Get-Command "docker-compose" -ErrorAction SilentlyContinue) {
-    $composeCmd = "docker-compose"
-} elseif (Get-Command "docker" -ErrorAction SilentlyContinue) {
-    if (docker compose version 2>&1 | Out-Null) {
-        $composeCmd = "docker compose"
-    }
+Write-Host "重启服务..."
+docker-compose restart
+
+Write-Host ""
+Write-Host "[SUCCESS] 服务已重启!" -ForegroundColor Green
+Write-Host ""
+Write-Host "============================================"
+Write-Host "服务状态："
+Write-Host "============================================"
+Write-Host ""
+docker-compose ps
+Write-Host ""
+
+# 健康检查
+Write-Host "============================================"
+Write-Host "健康检查："
+Write-Host "============================================"
+Write-Host ""
+
+Write-Host "MySQL:" -NoNewline
+try {
+    docker exec tsp-mysql mysqladmin ping -h localhost -uroot -proot123456 | Out-Null
+    Write-Host "     [OK] 运行中" -ForegroundColor Green
+} catch {
+    Write-Host "     [FAIL] 未响应" -ForegroundColor Red
 }
 
-if (-not $composeCmd) {
-    Write-Host "[ERROR] docker-compose not found" -ForegroundColor Red
-    Read-Host "Press Enter to exit"
-    exit 1
+Write-Host "Redis:" -NoNewline
+try {
+    docker exec tsp-redis redis-cli ping | Out-Null
+    Write-Host "     [OK] 运行中" -ForegroundColor Green
+} catch {
+    Write-Host "     [FAIL] 未响应" -ForegroundColor Red
 }
 
-Write-Host "Restarting services..." -ForegroundColor Yellow
-Write-Host ""
-
-# Restart services
-& $composeCmd restart
-
-Write-Host ""
-Write-Host "========================================" -ForegroundColor Green
-Write-Host "     Services Restarted!                  " -ForegroundColor Green
-Write-Host "========================================" -ForegroundColor Green
-Write-Host ""
-Write-Host "Service Status:" -ForegroundColor Yellow
-& $composeCmd ps
+Write-Host "LDAP:" -NoNewline
+try {
+    docker exec $CONTAINER_NAME ldapsearch -x -H ldap://localhost:389 -b dc=example,dc=org -D "cn=admin,dc=example,dc=org" -w admin123456 "(objectClass=*)" | Out-Null
+    Write-Host "     [OK] 运行中" -ForegroundColor Green
+} catch {
+    Write-Host "     [FAIL] 未响应" -ForegroundColor Red
+}
 
 Write-Host ""
-Read-Host "Press Enter to continue..."
+Write-Host "============================================"
+Write-Host ""
+Read-Host "按 Enter 键退出"
