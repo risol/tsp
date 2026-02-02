@@ -1,57 +1,69 @@
 # Git
 .git
 .gitignore
+.github
+
+# Windows 脚本（我们只需要源代码）
+*.ps1
+*.bat
+
+# Shell 脚本
+*.sh
+docker-*.sh
+
+# 编译输出和二进制文件
+dist
+output
+*.exe
+tspserver
+tspserver-test
+tspserver-test.exe
+
+# Deno 缓存
+.deno
+.cache
+
+# 日志文件
+*.log
+dev-server.log
+server.log
+access.log
 
 # Node.js (如果有的话)
 node_modules
 npm-debug.log
 yarn-error.log
 
-# Deno
-.deno
-*.exe
-tspserver
-tspserver-test
-
-# 编译输出
-dist
-output
-
-# 测试和缓存
-.cache
-tests/.cache
+# 测试目录（构建时不需要）
+tests
 *.test.ts
+*_test.ts
 
-# 文档和示例 (保留 README)
+# 文档和示例（保留 README）
 README.md
 docs
 examples
+*.md
+!README.md
 
-# 构建脚本
-docker-build.sh
-docker-build.bat
-
-# Docker 相关（除了当前 Dockerfile）
-docker-compose.yml
-docker-compose.override.yml
+# 其他 Docker 文件
+Dockerfile*
+docker-compose*.yml
 .dockerignore
 
-# Docker 数据和配置文件
-docker/mysql/data/
-docker/redis/data/
-docker/ldap/data/
-docker/mysql/init/
-docker/redis/
-docker/ldap/
+# 构建脚本和工具
+build-*.ps1
+docker-*.ps1
+LINUX-BUILD.md
 
 # E2E 测试相关
 tests/Dockerfile.e2e
 tests/run_e2e_tests_linux_docker.ts
-tests/run-linux-e2e.*
 
 # 环境变量文件
 .env
 .env.local
+.env.*
 
 # IDE 和编辑器
 .vscode
@@ -69,11 +81,8 @@ desktop.ini
 tmp
 temp
 *.tmp
-*.log
-dev-server.log
-server.log
 
-# 清理和状态文档
+# 其他
 CLEANUP_REPORT.md
 DOCKER_RECONFIGURE_SUMMARY.md
 REDIS_INTEGRATION_SUMMARY.md
