@@ -13,6 +13,7 @@ import { exists } from "https://deno.land/std@0.224.0/fs/exists.ts";
 const DIST_DIR = "dist";
 const BINARY_NAME = "tspserver";
 const CONFIG_FILE = "config.jsonc";
+const DENO_CONFIG_FILE = "deno.json";
 
 /**
  * 获取平台相关的二进制文件名
@@ -100,6 +101,14 @@ async function copyConfigFiles(): Promise<void> {
     console.log(`✓ 配置文件已复制: ${CONFIG_FILE}`);
   } else {
     console.log(`ℹ  未找到配置文件 ${CONFIG_FILE}（跳过）`);
+  }
+
+  const denoConfigTarget = join(DIST_DIR, DENO_CONFIG_FILE);
+  if (await exists(DENO_CONFIG_FILE)) {
+    await Deno.copyFile(DENO_CONFIG_FILE, denoConfigTarget);
+    console.log(`✓ 构建配置已复制: ${DENO_CONFIG_FILE}`);
+  } else {
+    console.log(`ℹ  未找到构建配置 ${DENO_CONFIG_FILE}（跳过）`);
   }
 }
 

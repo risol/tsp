@@ -190,6 +190,11 @@ if [ -f config.jsonc ]; then
     echo "[OK] Config copied"
 fi
 
+if [ -f deno.json ]; then
+    cp deno.json "$INSTALL_DIR/"
+    echo "[OK] Deno config copied"
+fi
+
 if [ -f tspserver.service ]; then
     cp tspserver.service /etc/systemd/system/
     systemctl daemon-reload
