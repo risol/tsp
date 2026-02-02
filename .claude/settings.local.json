@@ -38,7 +38,8 @@
       "Bash(git commit:*)",
       "Bash(xargs:*)",
       "Bash(start:*)",
-      "Bash(tee:*)"
+      "Bash(tee:*)",
+      "Bash(powershell:*)"
     ]
   }
 }

@@ -1,3 +1,3 @@
 export function HotReloadComponent() {
-  return <div data-testid="component">MODIFIED_VERSION</div>;
+  return <div data-testid="component">INITIAL_VERSION</div>;
 }

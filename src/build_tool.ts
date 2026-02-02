@@ -12,8 +12,7 @@ import { exists } from "https://deno.land/std@0.224.0/fs/exists.ts";
 
 const DIST_DIR = "dist";
 const BINARY_NAME = "tspserver";
-const CONFIG_FILES = ["config.json", "config.jsonc"];
-const EXAMPLE_CONFIG = "config.example.jsonc";
+const CONFIG_FILE = "config.jsonc";
 
 /**
  * 获取平台相关的二进制文件名
@@ -57,11 +56,8 @@ async function compileBinary(): Promise<void> {
   const command = new Deno.Command("deno", {
     args: [
       "compile",
-      "--allow-net",
-      "--allow-read",
-      "--allow-write",
-      "--allow-sys",
-      "--allow-env",
+      "--config", "deno.json",  // 关键：指定配置文件，确保 JSX 配置正确传递
+      "--allow-all",
       "--output",
       outputPath,
       "src/main.ts",
@@ -93,34 +89,17 @@ async function copyWwwDir(): Promise<void> {
 }
 
 /**
- * 复制配置文件（如果存在）
+ * 复制配置文件
  */
 async function copyConfigFiles(): Promise<void> {
-  let copied = false;
+  const sourcePath = CONFIG_FILE;
+  const targetPath = join(DIST_DIR, CONFIG_FILE);
 
-  // 优先复制实际配置文件
-  for (const filename of CONFIG_FILES) {
-    const sourcePath = filename;
-    const targetPath = join(DIST_DIR, filename);
-
-    if (await exists(sourcePath)) {
-      await Deno.copyFile(sourcePath, targetPath);
-      console.log(`✓ 配置文件已复制: ${filename}`);
-      copied = true;
-      break; // 找到一个就停止
-    }
-  }
-
-  // 如果没有实际配置文件，复制示例配置文件
-  if (!copied && await exists(EXAMPLE_CONFIG)) {
-    const targetPath = join(DIST_DIR, "config.jsonc");
-    await Deno.copyFile(EXAMPLE_CONFIG, targetPath);
-    console.log(`✓ 示例配置文件已复制: config.jsonc`);
-    copied = true;
-  }
-
-  if (!copied) {
-    console.log("ℹ  未找到配置文件（跳过）");
+  if (await exists(sourcePath)) {
+    await Deno.copyFile(sourcePath, targetPath);
+    console.log(`✓ 配置文件已复制: ${CONFIG_FILE}`);
+  } else {
+    console.log(`ℹ  未找到配置文件 ${CONFIG_FILE}（跳过）`);
   }
 }
 
@@ -146,9 +125,9 @@ DENO_DIR=./.deno ./${binaryName}
 
 ### 2. 配置服务器
 
-创建 \`config.json\` 或 \`config.jsonc\`:
+编辑 \`config.jsonc\` 配置文件（包含所有配置项和详细注释）：
 
-\`\`\`json
+\`\`\`jsonc
 {
   "root": "./www",
   "port": 9000,
@@ -181,7 +160,7 @@ dist/
 │   ├── index.tsx
 │   ├── form.tsx
 │   └── ...
-├── config.json         # 可选配置文件
+├── config.jsonc        # 配置文件（包含所有选项和详细注释）
 └── README.md           # 本文件
 \`\`\`
 
@@ -213,7 +192,7 @@ function showSummary(): void {
 📦 构建产物: ${DIST_DIR}/
 ├── ${binaryName}          # 服务器二进制
 ├── www/                   # 网站文件
-├── config.json            # 配置文件（如果存在）
+├── config.jsonc           # 配置文件（包含所有选项和详细注释）
 └── README.md              # 使用说明
 
 🚀 快速启动:
@@ -222,7 +201,7 @@ function showSummary(): void {
 
 💡 提示:
    - 确保 DENO_DIR 环境变量指向 ./.deno
-   - 修改 config.json 配置服务器行为
+   - 修改 config.jsonc 配置服务器行为
    - 查看 README.md 了解更多信息
 `);
 }
