@@ -29,7 +29,7 @@ apk add --no-cache build-base sqlite-dev
 Use the build command to create a complete release package:
 
 ```bash
-./tsp.sh build:tspserver:rel
+./tsp.sh build:tspserver
 ```
 
 This command will:
@@ -40,10 +40,13 @@ This command will:
 ### Other Build Commands
 
 ```bash
-# Build debug version
+# Build release version (default)
 ./tsp.sh build:tspserver
 
-# Build release version
+# Build debug version
+./tsp.sh build:tspserver:dev
+
+# Build release version (alias)
 ./tsp.sh build:tspserver:rel
 
 # First build deno-tsp (required)

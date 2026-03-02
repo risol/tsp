@@ -6,6 +6,7 @@
     "build:denort": "sh ./tsp.sh build:denort:win",
     "build:deno": "sh ./tsp.sh build:deno:win",
     "compile": "sh ./tsp.sh build:tspserver",
+    "compile:dev": "sh ./tsp.sh build:tspserver:dev",
     "compile:rel": "sh ./tsp.sh build:tspserver:rel",
     "test": "sh ./tsp.sh test",
     "test:unit": "sh ./tsp.sh test:unit",

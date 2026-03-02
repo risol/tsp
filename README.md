@@ -62,6 +62,38 @@ sh ./tsp.sh start
 
 Open browser and visit `http://localhost:9000`
 
+## Example
+
+A simple `.tsp` file looks like this:
+
+```tsx
+// www/hello.tsp - Access at /hello
+export default Page(async function(ctx, { response }) {
+  return (
+    <html>
+      <head>
+        <title>Hello TSP!</title>
+        <style>{`
+          body { font-family: sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+          h1 { color: #3178c6; }
+        `}</style>
+      </head>
+      <body>
+        <h1>Hello, TSP!</h1>
+        <p>URL: {ctx.url.pathname}</p>
+        <p>Method: {ctx.method}</p>
+        <p>Time: {new Date().toLocaleString()}</p>
+      </body>
+    </html>
+  );
+});
+```
+
+Key features:
+- **No imports needed** - `Page`, `ctx`, `response` are all global
+- **JSX support** - Write HTML directly in TypeScript
+- **Type-safe** - Full TypeScript support with auto-completion
+
 ## Build from Source (Advanced)
 
 Most users should download pre-built releases instead. Building from source requires:
