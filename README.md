@@ -63,12 +63,12 @@ AI can generate working code without:
 
 Just create a `.tsp` file and it works.
 
-### 4. Global Type System
+### 4. Type-Safe Dependency Injection
 
-All types are global—no imports needed:
+All types are injected through the Page function—no imports needed:
 
 ```tsx
-// These are all available globally:
+// Types come from dependency injection:
 export default Page(async function(ctx, { response, session, z }) {
   // ctx: PageContext (method, url, query, body, cookies, files)
   // response: ResponseBuilder (json, html, redirect, file, error)
@@ -76,6 +76,8 @@ export default Page(async function(ctx, { response, session, z }) {
   // z: Zod (for schema validation)
 });
 ```
+
+This ensures **full type inference** without any imports.
 
 ### 5. Schema-First Database API
 
