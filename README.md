@@ -93,6 +93,22 @@ const users = await db.query(UserSchema, 'SELECT * FROM users');
 
 AI can't produce unsafe queries—**Zod validates everything**.
 
+### 6. Instant Hot Reload
+
+Save a `.tsp` file and **instantly see changes**—no rebuild, no restart:
+
+```bash
+sh ./tsp.sh dev
+# Edit any .tsp file, refresh browser to see changes
+```
+
+This enables **rapid feedback loops**:
+- AI generates code → save → see result → iterate
+- Fix bugs in seconds, not minutes
+- Test database queries live without restart
+
+Works with **nested dependencies** too—edit a component, all pages using it update instantly.
+
 ## Quick Start
 
 ### Option 1: Download Pre-built Release (Recommended)
