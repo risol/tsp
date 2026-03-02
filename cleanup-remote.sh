@@ -72,6 +72,10 @@ done
 echo -e "${YELLOW}Creating clean history...${NC}"
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
+# Delete temp branch if it already exists (both local and remote)
+git branch -D temp-cleanup 2>/dev/null || true
+git push "$REMOTE" --delete temp-cleanup 2>/dev/null || true
+
 # Create temporary orphan branch
 git checkout --orphan temp-cleanup
 
@@ -84,6 +88,11 @@ git push "$REMOTE" temp-cleanup:$TARGET_BRANCH --force
 
 # Create and push version tag
 echo -e "${YELLOW}Creating version tag v$VERSION...${NC}"
+# Delete local tag if it exists
+git tag -d "v$VERSION" 2>/dev/null || true
+# Delete remote tag if it exists
+git push "$REMOTE" --delete "v$VERSION" 2>/dev/null || true
+# Create and push new tag
 git tag -a "v$VERSION" -m "Release v$VERSION"
 git push "$REMOTE" "v$VERSION"
 
