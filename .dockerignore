@@ -1,0 +1,79 @@
+# Git
+.git
+.gitignore
+
+# Node.js (如果有的话)
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Deno
+.deno
+*.exe
+tspserver
+tspserver-test
+
+# 编译输出
+dist
+output
+
+# 测试和缓存
+.cache
+tests/.cache
+*.test.ts
+
+# 文档和示例 (保留 README)
+README.md
+docs
+examples
+
+# 构建脚本
+docker-build.sh
+docker-build.bat
+
+# Docker 相关（除了当前 Dockerfile）
+docker-compose.yml
+docker-compose.override.yml
+.dockerignore
+
+# Docker 数据和配置文件
+docker/mysql/data/
+docker/redis/data/
+docker/ldap/data/
+docker/mysql/init/
+docker/redis/
+docker/ldap/
+
+# E2E 测试相关
+tests/Dockerfile.e2e
+tests/run_e2e_tests_linux_docker.ts
+tests/run-linux-e2e.*
+
+# 环境变量文件
+.env
+.env.local
+
+# IDE 和编辑器
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# 操作系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 临时文件
+tmp
+temp
+*.tmp
+*.log
+dev-server.log
+server.log
+
+# 清理和状态文档
+CLEANUP_REPORT.md
+DOCKER_RECONFIGURE_SUMMARY.md
+REDIS_INTEGRATION_SUMMARY.md

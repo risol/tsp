@@ -1,0 +1,39 @@
+{
+  "version": "0.1.0",
+  "tasks": {
+    "dev": "sh ./tsp.sh dev",
+    "start": "sh ./tsp.sh start",
+    "build:denort": "sh ./tsp.sh build:denort",
+    "build:denort:rel": "sh ./tsp.sh build:denort:rel",
+    "build:deno": "sh ./tsp.sh build:deno",
+    "build:deno:rel": "sh ./tsp.sh build:deno:rel",
+    "compile": "sh ./tsp.sh build:tspserver",
+    "compile:rel": "sh ./tsp.sh build:tspserver:rel",
+    "test": "sh ./tsp.sh test",
+    "test:unit": "sh ./tsp.sh test:unit",
+    "test:e2e": "sh ./tsp.sh test:e2e",
+    "check": "sh ./tsp.sh check",
+    "fmt": "sh ./tsp.sh fmt",
+    "lint": "sh ./tsp.sh lint",
+    "clean": "rm -rf tspserver tspserver.exe tests/tspserver-test tests/tspserver-test.exe .cache dist dist-* release"
+  },
+  "imports": {
+    "@deno-library/compress": "jsr:@deno-library/compress@^0.5.6",
+    "@std/path": "jsr:@std/path@1.0.0",
+    "std/path": "jsr:@std/path@1.0.0",
+    "react": "npm:react@18.3.1",
+    "react-dom": "npm:react-dom@18.3.1",
+    "react-dom/server": "npm:react-dom@18.3.1/server",
+    "zod": "npm:zod@^3.23.8",
+    "nanoid": "npm:nanoid@5.0.9",
+    "mysql2": "npm:mysql2@^2.3.3",
+    "redis": "npm:redis@^4.6.0",
+    "ldapts": "npm:ldapts@^5.0.0"
+  },
+  "compilerOptions": {
+    "jsx": "react",
+    "lib": ["deno.window", "DOM"],
+    "types": ["./types.d.ts"]
+  }
+}
+

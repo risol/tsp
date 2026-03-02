@@ -1,0 +1,36 @@
+{
+  // TSP server basic config
+  "root": "./www",
+  "port": 9000,
+  "dev": false,
+  "accessLogPath": ".logs/access.log",
+
+  "session": {
+    "secure": false
+  },
+
+  "logger": {
+    "level": "INFO",
+    "file": ".logs/app.log",
+    "colorize": true,
+    "format": "text"
+  },
+
+  "fileManager": {
+    "enabled": true,
+    "path": "/__filemanager",
+    "password": "CHANGE_ME_FILEMANAGER_PASSWORD",
+    "deniedPaths": [".git", ".deno", "node_modules", ".cache"],
+    "maxUploadSize": 104857600,
+    "allowDelete": true,
+    "allowRename": true,
+    "allowMkdir": true,
+    "allowMove": true,
+    "allowExtract": true,
+    "allowCompress": true,
+    "allowedArchiveExtensions": ["zip", "tar", "tgz"],
+    "maxExtractSize": 1073741824,
+    "maxCompressSize": 524288000,
+    "maxExtractFileCount": 10000
+  }
+}

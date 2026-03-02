@@ -1,0 +1,280 @@
+#!/bin/bash
+# TSP development script - unified entry point
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$SCRIPT_DIR"
+
+# Parse arguments
+COMMAND="${1:-}"
+
+# Get deno-tsp binary path
+get_deno_bin() {
+    local target="${1:-debug}"
+    local deno_bin="$PROJECT_ROOT/deno/target/$target/deno-tsp"
+
+    case "$(uname -s)" in
+        CYGWIN*|MINGW*|MSYS*|Windows_NT)
+        deno_bin="$deno_bin.exe"
+        ;;
+    esac
+
+    echo "$deno_bin"
+}
+
+ensure_deno_bin() {
+    local deno_bin="$1"
+    if [ ! -f "$deno_bin" ]; then
+        echo "Error: $deno_bin does not exist"
+        echo "Please run: sh ./tsp.sh build:denort && sh ./tsp.sh build:deno"
+        exit 1
+    fi
+}
+
+# Build denort-tsp
+build_denort() {
+    cd "$PROJECT_ROOT/deno"
+    cargo build -p denort-tsp "${@}"
+}
+
+# Build deno-tsp
+build_deno() {
+    cd "$PROJECT_ROOT/deno"
+    cargo build -p deno-tsp "${@}"
+}
+
+# Run development server
+run_dev() {
+    local deno_bin
+    deno_bin="$(get_deno_bin debug)"
+    ensure_deno_bin "$deno_bin"
+
+    "$deno_bin" run --watch --dynamic-import-no-cache --allow-all "$PROJECT_ROOT/src/main.ts" --dev
+}
+
+# Run production server
+run_start() {
+    local deno_bin
+    deno_bin="$(get_deno_bin debug)"
+    ensure_deno_bin "$deno_bin"
+
+    "$deno_bin" run --allow-all "$PROJECT_ROOT/src/main.ts"
+}
+
+# Get OS type
+get_os_type() {
+    case "$(uname -s)" in
+        Linux*)     echo "linux";;
+        Darwin*)    echo "macos";;
+        CYGWIN*|MINGW*|MSYS*) echo "windows";;
+        *)          echo "unknown";;
+    esac
+}
+
+# Get CPU architecture
+get_arch() {
+    case "$(uname -m)" in
+        x86_64)     echo "x64";;
+        aarch64|arm64) echo "arm64";;
+        *)          echo "x64";;
+    esac
+}
+
+# Get version from deno.json
+get_version() {
+    local deno_json="$PROJECT_ROOT/deno.json"
+    if [ -f "$deno_json" ]; then
+        # Extract version using grep and sed
+        grep -m1 '"version"' "$deno_json" | sed 's/.*"version": *"\([^"]*\)".*/\1/'
+    else
+        echo "0.0.0"
+    fi
+}
+
+# Build TSP server
+build_tspserver() {
+    local build_type="${1:-debug}"
+    local os_type
+    local arch
+    local output_dir
+    local tspserver_bin
+    local dist_base="$PROJECT_ROOT/dist"
+    local version
+    version="$(get_version)"
+
+    os_type="$(get_os_type)"
+    arch="$(get_arch)"
+
+    # Determine output directory (combined os-arch-version - suitable for GitHub releases)
+    if [ "$build_type" = "release" ]; then
+        output_dir="$dist_base/${os_type}-${arch}-v${version}"
+    else
+        output_dir="$dist_base/${os_type}-${arch}-v${version}-dev"
+    fi
+
+    # Determine deno-tsp path to use
+    local deno_bin
+    if [ "$build_type" = "release" ]; then
+        deno_bin="$(get_deno_bin release)"
+    else
+        deno_bin="$(get_deno_bin debug)"
+    fi
+
+    ensure_deno_bin "$deno_bin"
+
+    echo "=== Building TSP server ($build_type) ==="
+    echo "Output directory: $output_dir"
+    echo ""
+
+    # Create output directory
+    mkdir -p "$output_dir"
+
+    # Compile tspserver
+    local tspserver_name="tspserver"
+    if [ "$os_type" = "windows" ]; then
+        tspserver_name="tspserver.exe"
+    fi
+
+    echo "Compiling tspserver..."
+    "$deno_bin" compile --allow-all --dynamic-import-no-cache --output "$output_dir/$tspserver_name" "$PROJECT_ROOT/src/main.ts"
+
+    # Copy config file
+    echo "Copying config file..."
+
+    # Copy config.jsonc (if exists)
+    if [ -f "$PROJECT_ROOT/config.jsonc" ]; then
+        cp "$PROJECT_ROOT/config.jsonc" "$output_dir/"
+    elif [ -f "$PROJECT_ROOT/config.json" ]; then
+        cp "$PROJECT_ROOT/config.json" "$output_dir/"
+    fi
+
+    # Copy types.d.ts
+    if [ -f "$PROJECT_ROOT/types.d.ts" ]; then
+        cp "$PROJECT_ROOT/types.d.ts" "$output_dir/"
+    fi
+
+    # Create www directory and copy CLAUDE_GUIDE_README.md
+    mkdir -p "$output_dir/www"
+    if [ -f "$PROJECT_ROOT/www/CLAUDE_GUIDE_README.md" ]; then
+        cp "$PROJECT_ROOT/www/CLAUDE_GUIDE_README.md" "$output_dir/www/"
+    fi
+
+    echo ""
+    echo "✓ Build complete!"
+    echo "  Output directory: $output_dir"
+    echo "  Main binary: $output_dir/$tspserver_name"
+}
+
+# Run tests
+run_test() {
+    local deno_bin
+    local test_file="${1:-run_all_tests.ts}"
+    deno_bin="$(get_deno_bin debug)"
+    ensure_deno_bin "$deno_bin"
+
+    "$deno_bin" run --allow-all "$PROJECT_ROOT/tests/$test_file"
+}
+
+run_check() {
+    local deno_bin
+    deno_bin="$(get_deno_bin debug)"
+    ensure_deno_bin "$deno_bin"
+    "$deno_bin" check "$PROJECT_ROOT/src/main.ts"
+}
+
+run_fmt() {
+    local deno_bin
+    deno_bin="$(get_deno_bin debug)"
+    ensure_deno_bin "$deno_bin"
+    "$deno_bin" fmt --allow-write "$PROJECT_ROOT/src" "$PROJECT_ROOT/www" "$PROJECT_ROOT/tests"
+}
+
+run_lint() {
+    local deno_bin
+    deno_bin="$(get_deno_bin debug)"
+    ensure_deno_bin "$deno_bin"
+    "$deno_bin" lint "$PROJECT_ROOT/src" "$PROJECT_ROOT/www" "$PROJECT_ROOT/tests"
+}
+
+run_e2e() {
+    run_test run_e2e_tests.ts
+}
+
+# Show help
+show_help() {
+    echo "TSP development script"
+    echo ""
+    echo "Usage: ./tsp.sh <command> [args]"
+    echo ""
+    echo "Commands:"
+    echo "  build:denort         Build denort-tsp (debug)"
+    echo "  build:denort:rel     Build denort-tsp (release)"
+    echo "  build:deno           Build deno-tsp (debug)"
+    echo "  build:deno:rel       Build deno-tsp (release)"
+    echo "  build:tspserver      Build TSP server (debug) -> dist/<os>-<arch>-v<version>-dev/"
+    echo "  build:tspserver:rel  Build TSP server (release) -> dist/<os>-<arch>-v<version>/"
+    echo "  dev                  Run development server (hot reload)"
+    echo "  start                Run production server"
+    echo "  test                 Run all tests"
+    echo "  test:unit            Run unit tests"
+    echo "  test:e2e             Run E2E tests"
+    echo "  check                Type check"
+    echo "  fmt                  Format code"
+    echo "  lint                 Lint code"
+    echo ""
+    echo "Examples:"
+    echo "  ./tsp.sh build:denort"
+    echo "  ./tsp.sh build:deno"
+    echo "  ./tsp.sh build:tspserver"
+    echo "  ./tsp.sh dev"
+}
+
+# Main logic
+case "$COMMAND" in
+    build:denort)
+        build_denort
+        ;;
+    build:denort:rel)
+        build_denort --release
+        ;;
+    build:deno)
+        build_deno
+        ;;
+    build:deno:rel)
+        build_deno --release
+        ;;
+    dev)
+        run_dev
+        ;;
+    start)
+        run_start
+        ;;
+    build:tspserver)
+        build_tspserver debug
+        ;;
+    build:tspserver:rel)
+        build_tspserver release
+        ;;
+    test)
+        run_test
+        ;;
+    test:unit)
+        run_test run_unit_tests.ts
+        ;;
+    test:e2e)
+        run_e2e
+        ;;
+    check)
+        run_check
+        ;;
+    fmt)
+        run_fmt
+        ;;
+    lint)
+        run_lint
+        ;;
+    *)
+        show_help
+        ;;
+esac

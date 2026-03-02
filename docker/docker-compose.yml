@@ -1,0 +1,153 @@
+services:
+  # MySQL 数据库
+  mysql:
+    image: mysql:8.0
+    container_name: tsp-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root123456
+      MYSQL_DATABASE: test_db
+      MYSQL_USER: test_user
+      MYSQL_PASSWORD: test123456
+      # 时区设置为中国时区
+      TZ: Asia/Shanghai
+    ports:
+      - "3306:3306"
+    volumes:
+      # 数据持久化
+      - mysql_data:/var/lib/mysql
+      # 初始化脚本
+      - ./config/mysql/init:/docker-entrypoint-initdb.d
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot123456"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis 缓存
+  redis:
+    image: redis:7-alpine
+    container_name: tsp-redis
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      - "6379:6379"
+    volumes:
+      # 数据持久化
+      - redis_data:/data
+      # 配置文件
+      - ./config/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis 可视化管理工具（可选）
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: tsp-redis-commander
+    restart: unless-stopped
+    environment:
+      - REDIS_HOSTS=redis:6379
+      - REDIS_HOSTS_TLS=
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+
+  # phpMyAdmin（可选，用于 MySQL 管理）
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: tsp-phpmyadmin
+    restart: unless-stopped
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      PMA_USER: root
+      PMA_PASSWORD: root123456
+      UPLOAD_LIMIT: 100M
+    ports:
+      - "8080:80"
+    depends_on:
+      - mysql
+
+  # Samba Active Directory Domain Controller (用于 LDAP 测试)
+  samba-ad:
+    image: diegogslomp/samba-ad-dc:latest
+    container_name: tsp-samba-ad
+    restart: unless-stopped
+    environment:
+      # 域配置
+      - REALM=EXAMPLE.COM
+      - DOMAIN=EXAMPLE
+      - ADMIN_PASS=P@ssw0rd123
+      - DNS_FORWARDER=8.8.8.8
+      # 允许明文 LDAP 连接（开发环境）
+      - ALLOW_INSECURE_LDAP=true
+      # 时区设置
+      - TZ=Asia/Shanghai
+      # 设置为域控制器
+      - SERVER_ROLE=dc
+    ports:
+      - "389:389"      # LDAP
+      - "636:636"      # LDAPS
+      - "3268:3268"    # Global Catalog LDAP
+      - "53:53"        # DNS
+      - "88:88"        # Kerberos
+    volumes:
+      # 数据持久化
+      - samba_data:/var/lib/samba
+      - samba_etc:/etc/samba
+      # 初始化脚本
+      - ./config/samba/entrypoint.d:/entrypoint.d:ro
+    privileged: true
+    hostname: samba-ad
+    healthcheck:
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost:389 -b DC=example,DC=com -D \"CN=Administrator,CN=Users,DC=example,DC=com\" -w P@ssw0rd123 \"(objectClass=*)\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # LDAP Admin Tool（用于管理 Samba AD）
+  ldap-admin:
+    image: ldapaccountmanager/lam:latest
+    container_name: tsp-ldap-admin
+    restart: unless-stopped
+    environment:
+      # LAM 配置密码
+      - LAM_PASSWORD=admin
+      # 语言设置
+      - LAM_LANG=zh_CN.UTF-8
+      # LDAP 服务器配置
+      - LDAP_DOMAIN=example.com
+      - LDAP_BASE_DN=DC=example,DC=com
+      - LDAP_USERS_DN=CN=Users,DC=example,DC=com
+      - LDAP_GROUPS_DN=CN=Users,DC=example,DC=com
+      - LDAP_SERVER=ldap://samba-ad:389
+      - LDAP_USER=CN=Administrator,CN=Users,DC=example,DC=com
+    ports:
+      - "8082:80"
+    depends_on:
+      - samba-ad
+
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+  samba_data:
+    driver: local
+  samba_etc:
+    driver: local
+
+networks:
+  default:
+    name: tsp

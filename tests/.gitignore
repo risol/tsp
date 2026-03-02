@@ -1,0 +1,10 @@
+# Test generated binaries
+tspserver-test
+tspserver-test.exe
+
+# Test output
+*.log
+
+# test_www runtime artifacts
+/test_www/*.log
+/test_www/test_exceljs_*.xlsx

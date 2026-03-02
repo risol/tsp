@@ -1,0 +1,1106 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index b47ff84..57cd292 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1625,8 +1625,19 @@ dependencies = [
+ ]
+ 
+ [[package]]
+-name = "deno"
+-version = "2.7.1"
++name = "deno-tower-lsp-macros"
++version = "0.12.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f9faf94704f67b21ae4e9e9bdd6cb3a876fdaeecd047cc2ecf2b3bd4d4978a7e"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn 2.0.87",
++]
++
++[[package]]
++name = "deno-tsp"
++version = "2.7.1-tsp"
+ dependencies = [
+  "anstream",
+  "async-trait",
+@@ -1767,17 +1778,6 @@ dependencies = [
+  "zstd",
+ ]
+ 
+-[[package]]
+-name = "deno-tower-lsp-macros"
+-version = "0.12.0"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "f9faf94704f67b21ae4e9e9bdd6cb3a876fdaeecd047cc2ecf2b3bd4d4978a7e"
+-dependencies = [
+- "proc-macro2",
+- "quote",
+- "syn 2.0.87",
+-]
+-
+ [[package]]
+ name = "deno_ast"
+ version = "0.53.1"
+@@ -3334,11 +3334,12 @@ dependencies = [
+ ]
+ 
+ [[package]]
+-name = "denort"
+-version = "2.7.1"
++name = "denort-tsp"
++version = "2.7.1-tsp"
+ dependencies = [
+  "async-trait",
+  "bincode",
++ "deno_ast",
+  "deno_cache_dir",
+  "deno_config",
+  "deno_core",
+diff --git a/cli/Cargo.toml b/cli/Cargo.toml
+index f0f403b..72cc19d 100644
+--- a/cli/Cargo.toml
++++ b/cli/Cargo.toml
+@@ -1,17 +1,17 @@
+ # Copyright 2018-2026 the Deno authors. MIT license.
+ 
+ [package]
+-name = "deno"
+-version = "2.7.1"
++name = "deno-tsp"
++version = "2.7.1-tsp"
+ authors.workspace = true
+-default-run = "deno"
++default-run = "deno-tsp"
+ edition.workspace = true
+ license.workspace = true
+ repository.workspace = true
+ description = "Provides the deno executable"
+ 
+ [[bin]]
+-name = "deno"
++name = "deno-tsp"
+ path = "main.rs"
+ doc = false
+ 
+@@ -207,9 +207,12 @@ pretty_assertions.workspace = true
+ sys_traits = { workspace = true, features = ["memory"] }
+ test_util.workspace = true
+ 
++[package.metadata]
++product-name = "deno-tsp"
++
+ [package.metadata.winres]
+ # This section defines the metadata that appears in the deno.exe PE header.
+-OriginalFilename = "deno.exe"
++OriginalFilename = "deno-tsp.exe"
+ LegalCopyright = "© Deno contributors & Deno Land Inc. MIT licensed."
+-ProductName = "Deno"
+-FileDescription = "Deno: A secure runtime for JavaScript and TypeScript"
++ProductName = "Deno-tsp"
++FileDescription = "Deno-tsp: A secure runtime for JavaScript and TypeScript (TSP version)"
+diff --git a/cli/args/flags.rs b/cli/args/flags.rs
+index d625407..818453b 100644
+--- a/cli/args/flags.rs
++++ b/cli/args/flags.rs
+@@ -175,6 +175,9 @@ pub struct CompileFlags {
+   pub exclude: Vec<String>,
+   pub eszip: bool,
+   pub self_extracting: bool,
++  /// When enabled, dynamic imports will not use the VFS cache
++  /// and will be read from the actual file system at runtime.
++  pub dynamic_import_no_cache: bool,
+ }
+ 
+ impl CompileFlags {
+@@ -412,6 +415,9 @@ pub struct RunFlags {
+   pub bare: bool,
+   pub coverage_dir: Option<String>,
+   pub print_task_list: bool,
++  /// When enabled, dynamic imports will not use cache and will always check filesystem.
++  /// This enables hot reload for dynamically imported modules.
++  pub dynamic_import_no_cache: bool,
+ }
+ 
+ impl RunFlags {
+@@ -423,6 +429,7 @@ impl RunFlags {
+       bare: false,
+       coverage_dir: None,
+       print_task_list: false,
++      dynamic_import_no_cache: false,
+     }
+   }
+ 
+@@ -508,6 +515,9 @@ pub struct WatchFlags {
+ #[derive(Clone, Default, Debug, Eq, PartialEq)]
+ pub struct WatchFlagsWithPaths {
+   pub hmr: bool,
++  /// When enabled, dynamic imports will not use cache and will always
++  /// check filesystem for changes. Useful for hot reload.
++  pub dynamic_import_no_cache: bool,
+   pub paths: Vec<String>,
+   pub no_clear_screen: bool,
+   pub exclude: Vec<String>,
+@@ -2067,10 +2077,10 @@ pub fn clap_root() -> Command {
+     DENO_VERSION_INFO.typescript
+   );
+ 
+-  run_args(Command::new("deno"), true)
++  run_args(Command::new("deno-tsp"), true)
+     .with_unstable_args(UnstableArgsConfig::ResolutionAndRuntime)
+     .next_line_help(false)
+-    .bin_name("deno")
++    .bin_name("deno-tsp")
+     .styles(
+       clap::builder::Styles::styled()
+         .header(AnsiColor::Yellow.on_default())
+@@ -2810,6 +2820,13 @@ On the first invocation of `deno compile`, Deno will download the relevant binar
+           .action(ArgAction::SetTrue)
+           .help_heading(COMPILE_HEADING),
+       )
++      .arg(
++        Arg::new("dynamic-import-no-cache")
++          .long("dynamic-import-no-cache")
++          .help("Dynamic imports will not use the VFS cache and will be read from the actual file system at runtime. This enables hot reload for dynamically imported modules in the compiled binary.")
++          .action(ArgAction::SetTrue)
++          .help_heading(COMPILE_HEADING),
++      )
+       .arg(executable_ext_arg())
+       .arg(env_file_arg())
+       .arg(
+@@ -4039,6 +4056,13 @@ fn run_args(command: Command, top_level: bool) -> Command {
+     .arg(no_code_cache_arg())
+     .arg(coverage_arg())
+     .arg(tunnel_arg())
++    .arg(
++      Arg::new("dynamic-import-no-cache")
++        .long("dynamic-import-no-cache")
++        .help("Dynamic imports will not use cache and will always check filesystem for changes. This enables hot reload for dynamically imported modules.")
++        .action(ArgAction::SetTrue)
++        .help_heading(FILE_WATCHING_HEADING),
++    )
+ }
+ 
+ #[cfg(test)]
+@@ -6130,6 +6154,7 @@ fn compile_parse(
+   let no_terminal = matches.get_flag("no-terminal");
+   let eszip = matches.get_flag("eszip-internal-do-not-use");
+   let self_extracting = matches.get_flag("self-extracting");
++  let dynamic_import_no_cache = matches.get_flag("dynamic-import-no-cache");
+   let include = matches
+     .remove_many::<String>("include")
+     .map(|f| f.collect::<Vec<_>>())
+@@ -6153,6 +6178,7 @@ fn compile_parse(
+     exclude,
+     eszip,
+     self_extracting,
++    dynamic_import_no_cache,
+   });
+ 
+   Ok(())
+@@ -6925,16 +6951,21 @@ fn run_parse(
+   flags.code_cache_enabled = !matches.get_flag("no-code-cache");
+   let coverage_dir = matches.remove_one::<String>("coverage");
+ 
++  // Get the dynamic_import_no_cache flag
++  let dynamic_import_no_cache = matches.get_flag("dynamic-import-no-cache");
++
+   match matches.remove_many::<String>("script_arg") {
+     Some(mut script_arg) => {
+       let script = script_arg.next().unwrap();
+       flags.argv.extend(script_arg);
++      let watch = watch_arg_parse_with_paths(matches)?;
+       flags.subcommand = DenoSubcommand::Run(RunFlags {
+         script,
+-        watch: watch_arg_parse_with_paths(matches)?,
++        watch,
+         bare,
+         coverage_dir,
+         print_task_list: false,
++        dynamic_import_no_cache,
+       });
+     }
+     _ => {
+@@ -6951,6 +6982,7 @@ fn run_parse(
+           bare: false,
+           coverage_dir: None,
+           print_task_list: true,
++          dynamic_import_no_cache,
+         });
+       }
+     }
+@@ -7846,12 +7878,22 @@ fn watch_arg_parse(
+ fn watch_arg_parse_with_paths(
+   matches: &mut ArgMatches,
+ ) -> clap::error::Result<Option<WatchFlagsWithPaths>> {
++  let dynamic_import_no_cache = if matches
++    .try_contains_id("dynamic-import-no-cache")
++    .unwrap_or(false)
++  {
++    matches.get_flag("dynamic-import-no-cache")
++  } else {
++    false
++  };
++
+   if let Some(paths) = matches.remove_many::<String>("watch") {
+     return Ok(Some(WatchFlagsWithPaths {
+       paths: paths
+         .flat_map(flat_escape_split_commas)
+         .collect::<Result<Vec<_>, _>>()?,
+       hmr: false,
++      dynamic_import_no_cache,
+       no_clear_screen: matches.get_flag("no-clear-screen"),
+       exclude: matches
+         .remove_many::<String>("watch-exclude")
+@@ -7864,7 +7906,7 @@ fn watch_arg_parse_with_paths(
+     }));
+   }
+ 
+-  if matches.try_contains_id("hmr").is_ok() {
++  if matches.try_contains_id("hmr").unwrap_or(false) {
+     return matches
+       .remove_many::<String>("hmr")
+       .map(|paths| {
+@@ -7873,6 +7915,7 @@ fn watch_arg_parse_with_paths(
+             .flat_map(flat_escape_split_commas)
+             .collect::<Result<Vec<_>, _>>()?,
+           hmr: true,
++          dynamic_import_no_cache,
+           no_clear_screen: matches.get_flag("no-clear-screen"),
+           exclude: matches
+             .remove_many::<String>("watch-exclude")
+diff --git a/cli/build.rs b/cli/build.rs
+index c32e801..e0931e7 100644
+--- a/cli/build.rs
++++ b/cli/build.rs
+@@ -253,8 +253,8 @@ fn main() {
+     return;
+   }
+ 
+-  deno_napi::print_linker_flags("deno");
+-  deno_webgpu::print_linker_flags("deno");
++  deno_napi::print_linker_flags("deno-tsp");
++  deno_webgpu::print_linker_flags("deno-tsp");
+ 
+   // Host snapshots won't work when cross compiling.
+   let target = env::var("TARGET").unwrap();
+diff --git a/cli/lib/Cargo.toml b/cli/lib/Cargo.toml
+index fbce49a..a912e33 100644
+--- a/cli/lib/Cargo.toml
++++ b/cli/lib/Cargo.toml
+@@ -8,7 +8,7 @@ edition.workspace = true
+ license.workspace = true
+ readme = "README.md"
+ repository.workspace = true
+-description = "Shared code between the Deno CLI and denort"
++description = "Shared code between the Deno CLI and denort-tsp"
+ 
+ [lib]
+ path = "lib.rs"
+diff --git a/cli/lib/README.md b/cli/lib/README.md
+index bc6d7b5..d32ccf3 100644
+--- a/cli/lib/README.md
++++ b/cli/lib/README.md
+@@ -1,4 +1,4 @@
+ # deno_lib
+ 
+-This crate contains the shared code between the Deno CLI and denort. It is
++This crate contains the shared code between the Deno CLI and denort-tsp. It is
+ highly unstable.
+diff --git a/cli/lib/standalone/binary.rs b/cli/lib/standalone/binary.rs
+index 2db2cbf..3957af1 100644
+--- a/cli/lib/standalone/binary.rs
++++ b/cli/lib/standalone/binary.rs
+@@ -96,6 +96,10 @@ pub struct Metadata {
+   /// hash of the VFS data used for versioning the extraction directory.
+   #[serde(default, skip_serializing_if = "Option::is_none")]
+   pub self_extracting: Option<String>,
++  /// When enabled, dynamic imports will not use the VFS cache
++  /// and will be read from the actual file system at runtime.
++  #[serde(default, skip_serializing_if = "Option::is_none")]
++  pub dynamic_import_no_cache: Option<bool>,
+ }
+ 
+ #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+diff --git a/cli/lib/version.rs b/cli/lib/version.rs
+index 66885b1..79754d4 100644
+--- a/cli/lib/version.rs
++++ b/cli/lib/version.rs
+@@ -8,7 +8,7 @@ use crate::shared::ReleaseChannel;
+ 
+ pub fn otel_runtime_config() -> OtelRuntimeConfig {
+   OtelRuntimeConfig {
+-    runtime_name: Cow::Borrowed("deno"),
++    runtime_name: Cow::Borrowed("deno-tsp"),
+     runtime_version: Cow::Borrowed(crate::version::DENO_VERSION_INFO.deno),
+   }
+ }
+@@ -66,13 +66,13 @@ pub static DENO_VERSION_INFO: std::sync::LazyLock<DenoVersionInfo> =
+       // Keep in sync with `deno` field.
+       user_agent: if release_channel == ReleaseChannel::Canary {
+         concat!(
+-          "Deno/",
++          "Deno-tsp/",
+           env!("DENO_VERSION"),
+           "+",
+           env!("GIT_COMMIT_HASH_SHORT")
+         )
+       } else {
+-        concat!("Deno/", env!("DENO_VERSION"))
++        concat!("Deno-tsp/", env!("DENO_VERSION"))
+       },
+ 
+       typescript: TYPESCRIPT,
+diff --git a/cli/main.rs b/cli/main.rs
+index 9237522..0741b44 100644
+--- a/cli/main.rs
++++ b/cli/main.rs
+@@ -5,5 +5,5 @@ pub fn main() {
+   // to run tests without building a binary on the CI.
+   //
+   // Prefer to keep this file simple and mostly empty.
+-  deno::main()
++  deno_tsp::main()
+ }
+diff --git a/cli/module_loader.rs b/cli/module_loader.rs
+index 1922794..ad17e5d 100644
+--- a/cli/module_loader.rs
++++ b/cli/module_loader.rs
+@@ -107,6 +107,7 @@ use crate::sys::CliSys;
+ use crate::type_checker::CheckError;
+ use crate::type_checker::CheckOptions;
+ use crate::type_checker::TypeChecker;
++use crate::util::path::map_tsp_to_tsx;
+ use crate::util::progress_bar::ProgressBar;
+ use crate::util::text_encoding::code_without_source_map;
+ use crate::util::text_encoding::source_map_from_code;
+@@ -221,6 +222,19 @@ impl ModuleLoadPreparer {
+         }
+       }
+     }
++
++    // TSP file support: add content-type header override for .tsp files
++    // This ensures .tsp files are treated as TSX for proper module resolution
++    let tsp_content_type = "text/tsx".to_string();
++    let tsp_header = std::collections::HashMap::from([(
++      "content-type".to_string(),
++      tsp_content_type.clone(),
++    )]);
++    for root in roots {
++      if root.as_str().ends_with(".tsp") {
++        loader.insert_file_header_override(root.clone(), tsp_header.clone());
++      }
++    }
+     log::debug!("Building module graph.");
+     let has_type_checked = !graph.roots.is_empty();
+ 
+@@ -1442,7 +1456,7 @@ impl<TGraphContainer: ModuleGraphContainer> NodeRequireLoader
+     path: &Path,
+   ) -> Result<FastString, JsErrorBox> {
+     // todo(dsherret): use the preloaded module from the graph if available?
+-    let media_type = MediaType::from_path(path);
++    let media_type = map_tsp_to_tsx(MediaType::from_path(path), &deno_path_util::url_from_file_path(path).unwrap_or_else(|_| ModuleSpecifier::parse("file:///unknown").unwrap()));
+     let text_result = self.sys.fs_read_to_string_lossy(path);
+     let text = match text_result {
+       Ok(text) => text,
+@@ -1491,7 +1505,7 @@ impl<TGraphContainer: ModuleGraphContainer> NodeRequireLoader
+     &self,
+     specifier: &ModuleSpecifier,
+   ) -> Result<bool, PackageJsonLoadError> {
+-    let media_type = MediaType::from_specifier(specifier);
++    let media_type = map_tsp_to_tsx(MediaType::from_specifier(specifier), specifier);
+     self.cjs_tracker.is_maybe_cjs(specifier, media_type)
+   }
+ 
+diff --git a/cli/rt/Cargo.toml b/cli/rt/Cargo.toml
+index 01cd1f5..3b5f797 100644
+--- a/cli/rt/Cargo.toml
++++ b/cli/rt/Cargo.toml
+@@ -1,18 +1,18 @@
+ # Copyright 2018-2026 the Deno authors. MIT license.
+ 
+ [package]
+-name = "denort"
+-version = "2.7.1"
++name = "denort-tsp"
++version = "2.7.1-tsp"
+ authors.workspace = true
+-default-run = "denort"
++default-run = "denort-tsp"
+ edition.workspace = true
+ license.workspace = true
+ publish = false
+ repository.workspace = true
+-description = "Provides the denort executable"
++description = "Provides the denort-tsp executable"
+ 
+ [[bin]]
+-name = "denort"
++name = "denort-tsp"
+ path = "main.rs"
+ doc = false
+ 
+@@ -35,6 +35,7 @@ deno_core = { workspace = true, features = ["include_js_files_for_snapshotting"]
+ deno_error.workspace = true
+ deno_lib.workspace = true
+ deno_media_type = { workspace = true, features = ["data_url", "decoding"] }
++deno_ast = { workspace = true, features = ["transpiling"] }
+ deno_npm.workspace = true
+ deno_package_json = { workspace = true, features = ["sync"] }
+ deno_path_util.workspace = true
+diff --git a/cli/rt/binary.rs b/cli/rt/binary.rs
+index 316e836..d315b50 100644
+--- a/cli/rt/binary.rs
++++ b/cli/rt/binary.rs
+@@ -17,6 +17,10 @@ use deno_core::anyhow::bail;
+ use deno_core::error::AnyError;
+ use deno_core::serde_json;
+ use deno_core::url::Url;
++use deno_ast::EmitOptions;
++use deno_ast::SourceMapOption;
++use deno_ast::TranspileOptions;
++use deno_ast::TranspileModuleOptions;
+ use deno_error::JsError;
+ use deno_error::JsErrorBox;
+ use deno_lib::standalone::binary::DenoRtDeserializable;
+@@ -42,6 +46,69 @@ use thiserror::Error;
+ 
+ use crate::file_system::FileBackedVfs;
+ use crate::file_system::VfsRoot;
++use deno_path_util::url_to_file_path;
++
++/// Check if a file extension requires transpilation (TypeScript, TSX, or TSP)
++fn needs_transpilation(media_type: MediaType, specifier: &Url) -> bool {
++  match media_type {
++    MediaType::TypeScript | MediaType::Tsx => true,
++    MediaType::Unknown => {
++      // TSP file support: check for .tsp extension
++      if let Ok(path) = url_to_file_path(specifier) {
++        if let Some(ext) = path.extension() {
++          return ext.eq_ignore_ascii_case("tsp");
++        }
++      }
++      false
++    }
++    _ => false,
++  }
++}
++
++/// Get the media type for transpilation (maps .tsp to Tsx)
++fn get_transpile_media_type(media_type: MediaType, specifier: &Url) -> MediaType {
++  if media_type == MediaType::Unknown {
++    if let Ok(path) = url_to_file_path(specifier) {
++      if let Some(ext) = path.extension() {
++        if ext.eq_ignore_ascii_case("tsp") {
++          return MediaType::Tsx;
++        }
++      }
++    }
++  }
++  media_type
++}
++
++/// Transpile TypeScript/TSX/TSP source code to JavaScript
++fn transpile_source(
++  source: &str,
++  specifier: &Url,
++  media_type: MediaType,
++) -> Result<String, AnyError> {
++  let parsed_source = deno_ast::parse_program(deno_ast::ParseParams {
++    specifier: specifier.clone(),
++    text: source.into(),
++    media_type,
++    capture_tokens: false,
++    scope_analysis: false,
++    maybe_syntax: None,
++  })?;
++
++  let transpile_result = parsed_source.transpile(
++    &TranspileOptions {
++      imports_not_used_as_values: deno_ast::ImportsNotUsedAsValues::Remove,
++      ..Default::default()
++    },
++    &TranspileModuleOptions::default(),
++    &EmitOptions {
++      source_map: SourceMapOption::None,
++      ..Default::default()
++    },
++  )?;
++
++  let emit = transpile_result.into_source();
++  Ok(emit.text)
++}
+ 
+ pub struct StandaloneData {
+   pub metadata: Metadata,
+@@ -64,6 +131,9 @@ pub fn extract_standalone(
+   // read metadata first to determine the root path
+   let (mut metadata, remaining) = read_section_metadata(data)?;
+ 
++  // Extract dynamic_import_no_cache before metadata is moved
++  let dynamic_import_no_cache = metadata.dynamic_import_no_cache.unwrap_or(false);
++
+   // for self-extracting executables, use the extraction directory as root
+   // so that module specifiers resolve to extracted file paths
+   let root_path = if let Some(hash) = &metadata.self_extracting {
+@@ -120,6 +190,7 @@ pub fn extract_standalone(
+     modules: Arc::new(StandaloneModules {
+       modules: remote_modules,
+       vfs: vfs.clone(),
++      dynamic_import_no_cache,
+     }),
+     npm_snapshot,
+     root_path,
+@@ -569,6 +640,9 @@ impl SpecifierStore {
+ pub struct StandaloneModules {
+   modules: RemoteModulesStore,
+   vfs: Arc<FileBackedVfs>,
++  /// When enabled, dynamic imports will not use the VFS cache
++  /// and will be read from the actual file system at runtime.
++  dynamic_import_no_cache: bool,
+ }
+ 
+ impl StandaloneModules {
+@@ -595,6 +669,47 @@ impl StandaloneModules {
+     if specifier.scheme() == "file" {
+       let path = deno_path_util::url_to_file_path(specifier)
+         .map_err(JsErrorBox::from_err)?;
++
++      // If dynamic_import_no_cache is enabled, always try filesystem first for hot reload
++      // Then fall back to VFS if file doesn't exist on filesystem
++      if self.dynamic_import_no_cache {
++        #[allow(clippy::disallowed_types)]
++        match sys_traits::impls::RealSys.fs_read(&path) {
++          Ok(bytes) => {
++            let source = String::from_utf8_lossy(&bytes);
++            let media_type = MediaType::from_specifier(specifier);
++            let transpile_media_type = get_transpile_media_type(media_type, specifier);
++            let need_transpile = needs_transpilation(media_type, specifier);
++            let (data, transpiled) = if need_transpile {
++              match transpile_source(&source, specifier, transpile_media_type) {
++                Ok(transpiled_code) => {
++                  (bytes, Some(Cow::Owned(transpiled_code.into_bytes())))
++                }
++                Err(err) => {
++                  log::warn!("Failed to transpile {}: {}", path.display(), err);
++                  (bytes, None)
++                }
++              }
++            } else {
++              (bytes, None)
++            };
++
++            return Ok(Some(DenoCompileModuleData {
++              media_type: transpile_media_type,
++              specifier,
++              is_valid_utf8: true,
++              data: Cow::Owned(data.to_vec()),
++              transpiled,
++              source_map: None,
++              cjs_export_analysis: None,
++            }));
++          }
++          Err(_err) => {
++            // File not found on filesystem, fall through to try VFS
++          }
++        }
++      }
++
+       let mut transpiled = None;
+       let mut source_map = None;
+       let mut cjs_export_analysis = None;
+@@ -621,17 +736,62 @@ impl StandaloneModules {
+           // actually use the real file system here
+           #[allow(clippy::disallowed_types)]
+           match sys_traits::impls::RealSys.fs_read(&path) {
+-            Ok(bytes) => bytes,
++            Ok(bytes) => {
++              // Check if we need to transpile this file
++              let source = String::from_utf8_lossy(&bytes);
++              let media_type = MediaType::from_specifier(specifier);
++              let transpile_media_type = get_transpile_media_type(media_type, specifier);
++
++              if needs_transpilation(media_type, specifier) {
++                match transpile_source(&source, specifier, transpile_media_type) {
++                  Ok(transpiled_code) => {
++                    log::debug!("Transpiled {} to JavaScript", path.display());
++                    return Ok(Some(DenoCompileModuleData {
++                      media_type: transpile_media_type,
++                      specifier,
++                      is_valid_utf8: true,
++                      data: Cow::Owned(bytes.to_vec()),
++                      transpiled: Some(Cow::Owned(transpiled_code.into_bytes())),
++                      source_map: None,
++                      cjs_export_analysis: None,
++                    }));
++                  }
++                  Err(err) => {
++                    log::warn!("Failed to transpile {}: {}", path.display(), err);
++                  }
++                }
++              }
++              bytes
++            }
+             Err(err) if err.kind() == ErrorKind::NotFound => {
+               return Ok(None);
+             }
+             Err(err) => return Err(JsErrorBox::from_err(err)),
+           }
+         }
+-        Err(err) => return Err(JsErrorBox::from_err(err)),
++        Err(_err) => {
++          // VFS 中找不到，回退到文件系统并返回带路径的错误
++          let err_msg = format!(
++            "Module not found in VFS: {} (path: {})",
++            specifier,
++            path.display()
++          );
++          return Err(JsErrorBox::generic(err_msg));
++        }
+       };
+       Ok(Some(DenoCompileModuleData {
+-        media_type: MediaType::from_specifier(specifier),
++        media_type: {
++          let mut mt = MediaType::from_specifier(specifier);
++          // TSP file support: .tsp files are treated as TSX
++          if mt == MediaType::Unknown {
++            if let Ok(path) = url_to_file_path(specifier) {
++              if path.extension().map(|e| e == "tsp").unwrap_or(false) {
++                mt = MediaType::Tsx;
++              }
++            }
++          }
++          mt
++        },
+         specifier,
+         is_valid_utf8,
+         data: bytes,
+diff --git a/cli/rt/build.rs b/cli/rt/build.rs
+index 24f94ea..991c200 100644
+--- a/cli/rt/build.rs
++++ b/cli/rt/build.rs
+@@ -6,6 +6,6 @@ fn main() {
+     return;
+   }
+ 
+-  deno_runtime::deno_napi::print_linker_flags("denort");
+-  deno_runtime::deno_webgpu::print_linker_flags("denort");
++  deno_runtime::deno_napi::print_linker_flags("denort-tsp");
++  deno_runtime::deno_webgpu::print_linker_flags("denort-tsp");
+ }
+diff --git a/cli/rt/main.rs b/cli/rt/main.rs
+index 098cea8..1085912 100644
+--- a/cli/rt/main.rs
++++ b/cli/rt/main.rs
+@@ -5,5 +5,5 @@ pub fn main() {
+   // to run tests without building a binary on the CI.
+   //
+   // Prefer to keep this file simple and mostly empty.
+-  denort::main()
++  denort_tsp::main()
+ }
+diff --git a/cli/rt/run.rs b/cli/rt/run.rs
+index e2b4046..b5f9278 100644
+--- a/cli/rt/run.rs
++++ b/cli/rt/run.rs
+@@ -6,6 +6,10 @@ use std::path::PathBuf;
+ use std::rc::Rc;
+ use std::sync::Arc;
+ use std::sync::OnceLock;
++use std::sync::atomic::AtomicU64;
++use std::sync::atomic::Ordering;
++use std::time::SystemTime;
++use std::time::UNIX_EPOCH;
+ 
+ use deno_cache_dir::npm::NpmCacheDir;
+ use deno_config::workspace::ResolverWorkspaceJsrPackage;
+@@ -18,6 +22,61 @@ use deno_core::ModuleType;
+ use deno_core::RequestedModuleType;
+ use deno_core::ResolutionKind;
+ use deno_core::SourceCodeCacheInfo;
++
++const HOT_RELOAD_TOKEN_PARAM: &str = "__tsp_v";
++static HOT_RELOAD_TOKEN_SEQ: AtomicU64 = AtomicU64::new(0);
++
++fn now_millis_token() -> String {
++  let millis = SystemTime::now()
++    .duration_since(UNIX_EPOCH)
++    .map(|d| d.as_millis().to_string())
++    .unwrap_or_else(|_| "0".to_string());
++  let seq = HOT_RELOAD_TOKEN_SEQ.fetch_add(1, Ordering::Relaxed);
++  format!("{millis}-{seq}")
++}
++
++fn extract_hot_reload_token(url: &Url) -> Option<String> {
++  let mut token = None;
++  for (key, value) in url.query_pairs() {
++    if key == HOT_RELOAD_TOKEN_PARAM {
++      token = Some(value.into_owned());
++    }
++  }
++  token
++}
++
++fn without_hot_reload_token(mut specifier: Url) -> Url {
++  if specifier.scheme() != "file" {
++    return specifier;
++  }
++
++  let existing_pairs = specifier
++    .query_pairs()
++    .filter(|(k, _)| k != HOT_RELOAD_TOKEN_PARAM)
++    .map(|(k, v)| (k.into_owned(), v.into_owned()))
++    .collect::<Vec<_>>();
++
++  specifier.set_query(None);
++  if !existing_pairs.is_empty() {
++    let mut pairs = specifier.query_pairs_mut();
++    for (key, value) in existing_pairs {
++      pairs.append_pair(&key, &value);
++    }
++  }
++  specifier
++}
++
++fn with_hot_reload_token(specifier: Url, token: &str) -> Url {
++  let mut specifier = without_hot_reload_token(specifier);
++  if specifier.scheme() != "file" {
++    return specifier;
++  }
++  {
++    let mut pairs = specifier.query_pairs_mut();
++    pairs.append_pair(HOT_RELOAD_TOKEN_PARAM, token);
++  }
++  specifier
++}
+ use deno_core::error::AnyError;
+ use deno_core::error::ModuleLoaderError;
+ use deno_core::futures::FutureExt;
+@@ -115,6 +174,7 @@ struct SharedModuleLoaderState {
+   npm_req_resolver: Arc<DenoRtNpmReqResolver>,
+   vfs: Arc<FileBackedVfs>,
+   workspace_resolver: WorkspaceResolver<DenoRtSys>,
++  dynamic_import_no_cache: bool,
+ }
+ 
+ impl SharedModuleLoaderState {
+@@ -162,7 +222,7 @@ impl ModuleLoader for EmbeddedModuleLoader {
+     &self,
+     raw_specifier: &str,
+     referrer: &str,
+-    _kind: ResolutionKind,
++    kind: ResolutionKind,
+   ) -> Result<Url, ModuleLoaderError> {
+     let referrer = if referrer == "." {
+       #[allow(clippy::disallowed_methods)] // ok to use current_dir here
+@@ -178,6 +238,16 @@ impl ModuleLoader for EmbeddedModuleLoader {
+         ))
+       })?
+     };
++    let inherited_hot_reload_token = if self.shared.dynamic_import_no_cache {
++      extract_hot_reload_token(&referrer)
++    } else {
++      None
++    };
++    let referrer = if self.shared.dynamic_import_no_cache {
++      without_hot_reload_token(referrer)
++    } else {
++      referrer
++    };
+     let resolution_mode = if self
+       .shared
+       .cjs_tracker
+@@ -209,7 +279,7 @@ impl ModuleLoader for EmbeddedModuleLoader {
+       deno_resolver::workspace::ResolutionKind::Execution,
+     );
+ 
+-    match mapped_resolution {
++    let resolved = match mapped_resolution {
+       Ok(MappedResolution::WorkspaceJsrPackage { specifier, .. }) => {
+         Ok(specifier)
+       }
+@@ -358,7 +428,23 @@ impl ModuleLoader for EmbeddedModuleLoader {
+         Err(JsErrorBox::from_err(err))
+       }
+       Err(err) => Err(JsErrorBox::from_err(err)),
++    }?;
++
++    if !self.shared.dynamic_import_no_cache || resolved.scheme() != "file" {
++      return Ok(resolved);
++    }
++
++    if matches!(kind, ResolutionKind::DynamicImport)
++      && raw_specifier.starts_with("file:")
++    {
++      return Ok(with_hot_reload_token(resolved, &now_millis_token()));
++    }
++
++    if let Some(token) = inherited_hot_reload_token.as_deref() {
++      return Ok(with_hot_reload_token(resolved, token));
+     }
++
++    Ok(resolved)
+   }
+ 
+   fn get_host_defined_options<'s>(
+@@ -444,7 +530,14 @@ impl ModuleLoader for EmbeddedModuleLoader {
+       );
+     }
+ 
+-    match self.shared.modules.read(original_specifier) {
++    let module_read_specifier =
++      if self.shared.dynamic_import_no_cache && original_specifier.scheme() == "file" {
++        without_hot_reload_token(original_specifier.clone())
++      } else {
++        original_specifier.clone()
++      };
++
++    match self.shared.modules.read(&module_read_specifier) {
+       Ok(Some(module)) => {
+         match options.requested_module_type {
+           RequestedModuleType::Text | RequestedModuleType::Bytes => {
+@@ -479,10 +572,17 @@ impl ModuleLoader for EmbeddedModuleLoader {
+         let media_type = module.media_type;
+         let (module_specifier, module_type, module_source) =
+           module.into_parts();
++        let module_specifier = if self.shared.dynamic_import_no_cache
++          && original_specifier.scheme() == "file"
++        {
++          original_specifier
++        } else {
++          module_specifier
++        };
+         let is_maybe_cjs = match self
+           .shared
+           .cjs_tracker
+-          .is_maybe_cjs(original_specifier, media_type)
++          .is_maybe_cjs(&module_read_specifier, media_type)
+         {
+           Ok(is_maybe_cjs) => is_maybe_cjs,
+           Err(err) => {
+@@ -996,6 +1096,7 @@ pub async fn run(
+       npm_req_resolver,
+       vfs: vfs.clone(),
+       workspace_resolver,
++      dynamic_import_no_cache: metadata.dynamic_import_no_cache.unwrap_or(false),
+     }),
+     sys: sys.clone(),
+   };
+diff --git a/cli/standalone/binary.rs b/cli/standalone/binary.rs
+index 33d0590..48afbd0 100644
+--- a/cli/standalone/binary.rs
++++ b/cli/standalone/binary.rs
+@@ -74,6 +74,7 @@ use crate::npm::CliNpmResolver;
+ use crate::resolver::CliCjsTracker;
+ use crate::sys::CliSys;
+ use crate::util::archive;
++use crate::util::path::map_tsp_to_tsx;
+ use crate::util::progress_bar::ProgressBar;
+ use crate::util::progress_bar::ProgressBarStyle;
+ 
+@@ -278,14 +279,14 @@ impl<'a> DenoCompileBinaryWriter<'a> {
+     // Phase 2 of the 'min sized' deno compile RFC talks
+     // about adding this as a flag.
+     if let Some(path) = get_dev_binary_path() {
+-      log::debug!("Resolved denort: {}", path.to_string_lossy());
++      log::debug!("Resolved denort-tsp: {}", path.to_string_lossy());
+       return std::fs::read(&path).with_context(|| {
+-        format!("Could not find denort at '{}'", path.to_string_lossy())
++        format!("Could not find denort-tsp at '{}'", path.to_string_lossy())
+       });
+     }
+ 
+     let target = compile_flags.resolve_target();
+-    let binary_name = format!("denort-{target}.zip");
++    let binary_name = format!("denort-tsp-{target}.zip");
+ 
+     let binary_path_suffix = match DENO_VERSION_INFO.release_channel {
+       ReleaseChannel::Canary => {
+@@ -298,7 +299,7 @@ impl<'a> DenoCompileBinaryWriter<'a> {
+ 
+     let download_directory = self.deno_dir.dl_folder_path();
+     let binary_path = download_directory.join(&binary_path_suffix);
+-    log::debug!("Resolved denort: {}", binary_path.display());
++    log::debug!("Resolved denort-tsp: {}", binary_path.display());
+ 
+     let read_file = |path: &Path| -> Result<Vec<u8>, AnyError> {
+       std::fs::read(path).with_context(|| format!("Reading {}", path.display()))
+@@ -313,7 +314,7 @@ impl<'a> DenoCompileBinaryWriter<'a> {
+     };
+     let temp_dir = tempfile::TempDir::new()?;
+     let base_binary_path = archive::unpack_into_dir(archive::UnpackArgs {
+-      exe_name: "denort",
++      exe_name: "denort-tsp",
+       archive_name: &binary_name,
+       archive_data: &archive_data,
+       is_windows: target.contains("windows"),
+@@ -574,13 +575,15 @@ impl<'a> DenoCompileBinaryWriter<'a> {
+             // it's ok to bypass permissions here because we verified the module
+             // loaded successfully in the graph
+             let file = self.load_asset_bypass_permissions(url).await?;
++            let media_type = MediaType::from_specifier_and_headers(
++              &file.url,
++              file.maybe_headers.as_ref(),
++            );
++            let media_type = map_tsp_to_tsx(media_type, &file.url);
+             remote_modules_store.add(
+               specifier_id,
+               RemoteModuleEntry {
+-                media_type: MediaType::from_specifier_and_headers(
+-                  &file.url,
+-                  file.maybe_headers.as_ref(),
+-                ),
++                media_type,
+                 is_valid_utf8: is_valid_utf8(&file.source),
+                 data: Cow::Owned(file.source.to_vec()),
+                 maybe_cjs_export_analysis: None,
+@@ -627,6 +630,7 @@ impl<'a> DenoCompileBinaryWriter<'a> {
+       }
+       let specifier = deno_path_util::url_from_file_path(&file_path)?;
+       let media_type = MediaType::from_specifier(&specifier);
++      let media_type = map_tsp_to_tsx(media_type, &specifier);
+       if self.cjs_tracker.is_maybe_cjs(&specifier, media_type)? {
+         let maybe_source = vfs
+           .file_bytes(file.offset)
+@@ -833,6 +837,11 @@ impl<'a> DenoCompileBinaryWriter<'a> {
+       } else {
+         None
+       },
++      dynamic_import_no_cache: if compile_flags.dynamic_import_no_cache {
++        Some(true)
++      } else {
++        None
++      },
+     };
+ 
+     let (data_section_bytes, section_sizes) = serialize_binary_data_section(
+@@ -1241,9 +1250,9 @@ fn serialize_npm_snapshot(
+ fn get_denort_path(deno_exe: PathBuf) -> Option<OsString> {
+   let mut denort = deno_exe;
+   denort.set_file_name(if cfg!(windows) {
+-    "denort.exe"
++    "denort-tsp.exe"
+   } else {
+-    "denort"
++    "denort-tsp"
+   });
+   denort.exists().then(|| denort.into_os_string())
+ }
+diff --git a/cli/tools/compile.rs b/cli/tools/compile.rs
+index 9562e4b..40a616b 100644
+--- a/cli/tools/compile.rs
++++ b/cli/tools/compile.rs
+@@ -384,10 +384,29 @@ fn get_module_roots_and_include_paths(
+     if url.scheme() != "file" {
+       return true;
+     }
+-    is_module_graph_media_type(MediaType::from_specifier(url))
++    is_module_graph_media_type(MediaType::from_specifier(url), Some(url))
+   }
+ 
+-  fn is_module_graph_media_type(media_type: MediaType) -> bool {
++  // TSP file support: check if file has .tsp extension
++  fn is_tsp_file(url: &ModuleSpecifier) -> bool {
++    if url.scheme() != "file" {
++      return false;
++    }
++    if let Ok(path) = url_to_file_path(url) {
++      if let Some(ext) = path.extension() {
++        return ext.eq_ignore_ascii_case("tsp");
++      }
++    }
++    false
++  }
++
++  fn is_module_graph_media_type(media_type: MediaType, url: Option<&ModuleSpecifier>) -> bool {
++    // TSP file support: .tsp files should be treated as module files
++    if let Some(url) = url {
++      if is_tsp_file(url) {
++        return true;
++      }
++    }
+     match media_type {
+       MediaType::JavaScript
+       | MediaType::Jsx
+@@ -462,8 +481,10 @@ fn get_module_roots_and_include_paths(
+     } else {
+       analyze_path(&url, &exclude_set, &mut searched_paths, |file_path| {
+         let media_type = MediaType::from_path(file_path);
+-        if is_module_graph_media_type(media_type)
+-          && let Ok(file_url) = url_from_file_path(file_path)
++        // TSP file support: create a specifier to check for .tsp extension
++        let file_url = url_from_file_path(file_path);
++        if is_module_graph_media_type(media_type, file_url.as_ref().ok())
++          && let Ok(file_url) = file_url
+         {
+           module_roots.push(file_url);
+         }
+diff --git a/cli/tools/installer/mod.rs b/cli/tools/installer/mod.rs
+index 2015f6e..8b67734 100644
+--- a/cli/tools/installer/mod.rs
++++ b/cli/tools/installer/mod.rs
+@@ -1131,6 +1131,7 @@ async fn install_global_compiled(
+     exclude: vec![],
+     eszip: false,
+     self_extracting: false,
++    dynamic_import_no_cache: false,
+   };
+ 
+   let mut new_flags = flags.as_ref().clone();
+diff --git a/cli/util/path.rs b/cli/util/path.rs
+index 5be815c..3acd61d 100644
+--- a/cli/util/path.rs
++++ b/cli/util/path.rs
+@@ -14,7 +14,7 @@ pub fn is_script_ext(path: &Path) -> bool {
+   if let Some(ext) = get_extension(path) {
+     matches!(
+       ext.as_str(),
+-      "ts" | "tsx" | "js" | "jsx" | "mjs" | "mts" | "cjs" | "cts"
++      "ts" | "tsx" | "tsp" | "js" | "jsx" | "mjs" | "mts" | "cjs" | "cts"
+     )
+   } else {
+     false
+@@ -28,6 +28,7 @@ pub fn is_importable_ext(path: &Path) -> bool {
+       ext.as_str(),
+       "ts"
+         | "tsx"
++        | "tsp"
+         | "js"
+         | "jsx"
+         | "mjs"
+@@ -42,6 +43,27 @@ pub fn is_importable_ext(path: &Path) -> bool {
+   }
+ }
+ 
++/// TSP file support: .tsp files are treated as TSX
++/// This function maps MediaType::Unknown (for .tsp files) to MediaType::Tsx
++pub fn map_tsp_to_tsx(
++  media_type: MediaType,
++  specifier: &ModuleSpecifier,
++) -> MediaType {
++  // If already known, return as-is
++  if media_type != MediaType::Unknown {
++    return media_type;
++  }
++
++  // Check if the file has .tsp extension
++  if let Some(ext) = specifier.path().rsplit('.').next() {
++    if ext.eq_ignore_ascii_case("tsp") {
++      return MediaType::Tsx;
++    }
++  }
++
++  media_type
++}
++
+ /// Get the extension of a file in lowercase.
+ pub fn get_extension(file_path: &Path) -> Option<String> {
+   file_path
+@@ -58,6 +80,7 @@ pub fn mapped_specifier_for_tsc(
+   media_type: MediaType,
+ ) -> Option<String> {
+   let ext_media_type = MediaType::from_specifier(specifier);
++  let ext_media_type = map_tsp_to_tsx(ext_media_type, specifier);
+   if media_type != ext_media_type {
+     // we can't just add on the extension because typescript considers
+     // all .d.*.ts files as declaration files in TS 5.0+
