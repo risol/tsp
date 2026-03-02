@@ -4,6 +4,24 @@
 
 TSP provides a complete build toolchain to package projects into independent distributable versions.
 
+## Prerequisites
+
+### Linux Build Dependencies
+
+If building on Linux, install the required dependencies:
+
+```bash
+# Ubuntu/Debian
+sudo apt-get update
+sudo apt-get install -y build-essential clang pkg-config libsqlite3-dev
+
+# CentOS/RHEL
+sudo yum install -y gcc gcc-c++ sqlite-devel
+
+# Alpine
+apk add --no-cache build-base sqlite-dev
+```
+
 ## Build Commands
 
 ### Full Build
