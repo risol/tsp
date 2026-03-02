@@ -68,9 +68,9 @@ See [DOCKER_SERVICES.md](./docker/DOCKER_SERVICES.md)
 
 ## Documentation
 
-- [Getting Started](./docs/getting-started.md) - Quick start guide
-- [Development Guide](./docs/development.md) - Development setup
-- [Configuration](./docs/configuration.md) - Server configuration
-- [Features](./docs/features/readme.md) - Feature documentation
-- [Testing](./docs/testing/readme.md) - Testing guide
-- [Changelog](./docs/changelog.md) - Version change log
+- [Getting Started](./docs/getting-started) - Quick start guide
+- [Development Guide](./docs/development) - Development setup
+- [Configuration](./docs/configuration) - Server configuration
+- [Features](./docs/features) - Feature documentation
+- [Testing](./docs/testing) - Testing guide
+- [Changelog](./docs/changelog) - Version change log
