@@ -1,7 +1,6 @@
-#!/bin/bash
+#!/bin/sh
 # TSP development script - unified entry point
-
-set -e
+# POSIX-compliant: works with sh, dash, bash, etc.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
@@ -11,8 +10,8 @@ COMMAND="${1:-}"
 
 # Get deno-tsp binary path
 get_deno_bin() {
-    local target="${1:-debug}"
-    local deno_bin="$PROJECT_ROOT/deno/target/$target/deno-tsp"
+    target="${1:-debug}"
+    deno_bin="$PROJECT_ROOT/deno/target/$target/deno-tsp"
 
     case "$(uname -s)" in
         CYGWIN*|MINGW*|MSYS*|Windows_NT)
@@ -24,7 +23,7 @@ get_deno_bin() {
 }
 
 ensure_deno_bin() {
-    local deno_bin="$1"
+    deno_bin="$1"
     if [ ! -f "$deno_bin" ]; then
         echo "Error: $deno_bin does not exist"
         echo "Please run: sh ./tsp.sh build:denort:win && sh ./tsp.sh build:deno:win"
@@ -44,89 +43,161 @@ build_denort_win_dev() {
     cargo build -p denort-tsp "${@}"
 }
 
-# Find sysroot path automatically
-find_sysroot_path() {
-    local base_path="$HOME/deno-sysroot"
-    local local_path="$PROJECT_ROOT/sysroot"
+# Get Linux arch for sysroot package naming
+get_sysroot_arch() {
+    case "$(uname -m)" in
+        x86_64) echo "x86_64";;
+        aarch64|arm64) echo "aarch64";;
+        *)
+            echo "Error: unsupported Linux architecture: $(uname -m)"
+            exit 1
+            ;;
+    esac
+}
 
-    # Check environment variable first
-    if [ -n "$SYSROOT_PATH" ] && [ -d "$SYSROOT_PATH" ]; then
-        echo "$SYSROOT_PATH"
-        return 0
+# Download file with curl/wget fallback
+download_file() {
+    url="$1"
+    output="$2"
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fL "$url" -o "$output"
+        return $?
     fi
 
-    # Check local sysroot (in project directory)
-    if [ -d "$local_path" ]; then
-        local first_dir
-        first_dir=$(ls "$local_path" 2>/dev/null | head -1)
-        if [ -n "$first_dir" ] && [ -d "$local_path/$first_dir" ]; then
-            echo "$local_path/$first_dir"
-            return 0
-        fi
+    if command -v wget >/dev/null 2>&1; then
+        wget -O "$output" "$url"
+        return $?
     fi
 
-    # Check home directory sysroot
-    if [ -d "$base_path/x86_64-unknown-linux-gnu" ]; then
-        echo "$base_path/x86_64-unknown-linux-gnu"
-        return 0
-    fi
-
-    # Check if sysroot extraction created different structure
-    if [ -d "$base_path" ]; then
-        local first_dir
-        first_dir=$(ls "$base_path" 2>/dev/null | head -1)
-        if [ -n "$first_dir" ] && [ -d "$base_path/$first_dir" ]; then
-            echo "$base_path/$first_dir"
-            return 0
-        fi
-    fi
-
+    echo "Error: neither curl nor wget is available"
     return 1
 }
 
-# Build denort-tsp for Linux (static linking with sysroot)
-build_denort_linux() {
-    local sysroot_path
-    sysroot_path=$(find_sysroot_path) || {
-        echo "Error: Sysroot not found"
-        echo ""
-        echo "Please download and extract sysroot first:"
-        echo "  wget https://github.com/denoland/deno_sysroot_build/releases/download/sysroot-20250207/sysroot-x86_64.tar.xz"
-        echo "  tar -xf sysroot-x86_64.tar.xz -C ~"
-        echo ""
-        echo "Or check where it was extracted:"
-        echo "  ls -la ~/deno-sysroot/"
-        echo ""
-        echo "Or set custom path:"
-        echo "  SYSROOT_PATH=/your/path sh ./tsp.sh build:denort:linux"
-        exit 1
-    }
+# Ensure sysroot exists locally (auto download + extract when missing)
+ensure_sysroot_path() {
+    sysroot_arch="$(get_sysroot_arch)"
+    sysroot_version="${TSP_SYSROOT_VERSION:-20250207}"
 
-    echo "Using sysroot: $sysroot_path"
+    # Custom path override
+    if [ -n "${SYSROOT_PATH:-}" ]; then
+        if [ -f "$SYSROOT_PATH/.env" ]; then
+            echo "$SYSROOT_PATH"
+            return 0
+        fi
+        if [ -f "$SYSROOT_PATH/sysroot/.env" ]; then
+            echo "$SYSROOT_PATH/sysroot"
+            return 0
+        fi
+        echo "Error: SYSROOT_PATH is set but no .env found: $SYSROOT_PATH" >&2
+        return 1
+    fi
 
-    cd "$PROJECT_ROOT/deno"
-    RUSTFLAGS="--sysroot=$sysroot_path -C target-feature=-crt-static" cargo build -p denort-tsp --release "${@}"
+    sysroot_base="${TSP_SYSROOT_DIR:-$PROJECT_ROOT/.sysroot/$sysroot_arch}"
+    sysroot_path="$sysroot_base/sysroot"
+    archive_name="sysroot-${sysroot_arch}.tar.xz"
+    archive_path="$sysroot_base/$archive_name"
+    download_url="https://github.com/denoland/deno_sysroot_build/releases/download/sysroot-${sysroot_version}/${archive_name}"
+
+    if [ -f "$sysroot_path/.env" ]; then
+        echo "$sysroot_path"
+        return 0
+    fi
+
+    mkdir -p "$sysroot_base"
+
+    if [ ! -f "$archive_path" ]; then
+        echo "Downloading sysroot: $download_url" >&2
+        if ! download_file "$download_url" "$archive_path"; then
+            echo "Error: failed to download sysroot archive" >&2
+            return 1
+        fi
+    fi
+
+    echo "Extracting sysroot to: $sysroot_base" >&2
+    rm -rf "$sysroot_path"
+    if ! tar -xJf "$archive_path" -C "$sysroot_base"; then
+        echo "Error: failed to extract sysroot archive: $archive_path" >&2
+        return 1
+    fi
+
+    if [ ! -f "$sysroot_path/.env" ]; then
+        echo "Error: invalid sysroot package layout (missing $sysroot_path/.env)" >&2
+        return 1
+    fi
+
+    echo "$sysroot_path"
 }
 
-# Build denort-tsp for Linux (debug, static linking with sysroot)
-build_denort_linux_dev() {
-    local sysroot_path
-    sysroot_path=$(find_sysroot_path) || {
-        echo "Error: Sysroot not found"
-        echo ""
-        echo "Please download and extract sysroot first:"
-        echo "  wget https://github.com/denoland/deno_sysroot_build/releases/download/sysroot-20250207/sysroot-x86_64.tar.xz"
-        echo "  tar -xf sysroot-x86_64.tar.xz -C ~"
-        echo ""
-        echo "Or set custom path:"
-        echo "  SYSROOT_PATH=/your/path sh ./tsp.sh build:denort:linux:dev"
-        exit 1
-    }
+# Apply sysroot .env to current shell (replace /sysroot with local path)
+apply_sysroot_env() {
+    sysroot_path="$1"
+    env_file="$sysroot_path/.env"
+    resolved_env="$sysroot_path/.env.resolved"
+    prev_rustflags="${RUSTFLAGS:-}"
+    prev_cflags="${CFLAGS:-}"
 
+    if [ ! -f "$env_file" ]; then
+        echo "Error: sysroot env file not found: $env_file"
+        return 1
+    fi
+
+    sed "s|/sysroot|$sysroot_path|g" "$env_file" > "$resolved_env"
+
+    # shellcheck disable=SC1090
+    . "$resolved_env"
+
+    rm -f "$resolved_env"
+
+    if [ -n "$prev_rustflags" ]; then
+        RUSTFLAGS="$RUSTFLAGS $prev_rustflags"
+    fi
+    if [ -n "$prev_cflags" ]; then
+        CFLAGS="$CFLAGS $prev_cflags"
+    fi
+
+    export RUSTFLAGS
+    export CFLAGS
+}
+
+# Run cargo build with auto sysroot
+linux_cargo_build() {
+    package_name="$1"
+    shift
+
+    if [ "$(get_os_type)" != "linux" ]; then
+        echo "Error: Linux sysroot build must run on Linux host"
+        exit 1
+    fi
+
+    sysroot_path="$(ensure_sysroot_path)" || exit 1
+    apply_sysroot_env "$sysroot_path" || exit 1
     echo "Using sysroot: $sysroot_path"
 
     cd "$PROJECT_ROOT/deno"
-    RUSTFLAGS="--sysroot=$sysroot_path -C target-feature=-crt-static" cargo build -p denort-tsp "${@}"
+    cargo build -p "$package_name" "${@}"
+}
+
+# Build denort-tsp for Linux (auto sysroot)
+build_denort_linux() {
+    linux_cargo_build denort-tsp --release "${@}"
+}
+
+# Build denort-tsp for Linux (debug, auto sysroot)
+build_denort_linux_dev() {
+    linux_cargo_build denort-tsp "${@}"
+}
+
+# Build denort-tsp for Linux (native, no sysroot)
+build_denort_linux_native() {
+    cd "$PROJECT_ROOT/deno"
+    cargo build -p denort-tsp --release "${@}"
+}
+
+# Build denort-tsp for Linux (native, debug, no sysroot)
+build_denort_linux_native_dev() {
+    cd "$PROJECT_ROOT/deno"
+    cargo build -p denort-tsp "${@}"
 }
 
 # Build deno-tsp for Windows (default release)
@@ -141,51 +212,31 @@ build_deno_win_dev() {
     cargo build -p deno-tsp "${@}"
 }
 
-# Build deno-tsp for Linux (static linking with sysroot)
+# Build deno-tsp for Linux (auto sysroot)
 build_deno_linux() {
-    local sysroot_path
-    sysroot_path=$(find_sysroot_path) || {
-        echo "Error: Sysroot not found"
-        echo ""
-        echo "Please download and extract sysroot first:"
-        echo "  wget https://github.com/denoland/deno_sysroot_build/releases/download/sysroot-20250207/sysroot-x86_64.tar.xz"
-        echo "  tar -xf sysroot-x86_64.tar.xz -C .  # extract to project root"
-        echo ""
-        echo "Or set custom path:"
-        echo "  SYSROOT_PATH=/your/path sh ./tsp.sh build:deno:linux"
-        exit 1
-    }
-
-    echo "Using sysroot: $sysroot_path"
-
-    cd "$PROJECT_ROOT/deno"
-    RUSTFLAGS="--sysroot=$sysroot_path -C target-feature=-crt-static" cargo build -p deno-tsp --release "${@}"
+    linux_cargo_build deno-tsp --release "${@}"
 }
 
-# Build deno-tsp for Linux (debug, static linking with sysroot)
+# Build deno-tsp for Linux (debug, auto sysroot)
 build_deno_linux_dev() {
-    local sysroot_path
-    sysroot_path=$(find_sysroot_path) || {
-        echo "Error: Sysroot not found"
-        echo ""
-        echo "Please download and extract sysroot first:"
-        echo "  wget https://github.com/denoland/deno_sysroot_build/releases/download/sysroot-20250207/sysroot-x86_64.tar.xz"
-        echo "  tar -xf sysroot-x86_64.tar.xz -C .  # extract to project root"
-        echo ""
-        echo "Or set custom path:"
-        echo "  SYSROOT_PATH=/your/path sh ./tsp.sh build:deno:linux:dev"
-        exit 1
-    }
+    linux_cargo_build deno-tsp "${@}"
+}
 
-    echo "Using sysroot: $sysroot_path"
-
+# Build deno-tsp for Linux (native, no sysroot)
+build_deno_linux_native() {
     cd "$PROJECT_ROOT/deno"
-    RUSTFLAGS="--sysroot=$sysroot_path -C target-feature=-crt-static" cargo build -p deno-tsp "${@}"
+    cargo build -p deno-tsp --release "${@}"
+}
+
+# Build deno-tsp for Linux (native, debug, no sysroot)
+build_deno_linux_native_dev() {
+    cd "$PROJECT_ROOT/deno"
+    cargo build -p deno-tsp "${@}"
 }
 
 # Run development server
 run_dev() {
-    local deno_bin
+    deno_bin
     deno_bin="$(get_deno_bin debug)"
     ensure_deno_bin "$deno_bin"
 
@@ -194,7 +245,7 @@ run_dev() {
 
 # Run production server
 run_start() {
-    local deno_bin
+    deno_bin
     deno_bin="$(get_deno_bin debug)"
     ensure_deno_bin "$deno_bin"
 
@@ -222,7 +273,7 @@ get_arch() {
 
 # Get version from deno.json
 get_version() {
-    local deno_json="$PROJECT_ROOT/deno.json"
+    deno_json="$PROJECT_ROOT/deno.json"
     if [ -f "$deno_json" ]; then
         # Extract version using grep and sed
         grep -m1 '"version"' "$deno_json" | sed 's/.*"version": *"\([^"]*\)".*/\1/'
@@ -233,13 +284,13 @@ get_version() {
 
 # Build TSP server
 build_tspserver() {
-    local build_type="${1:-debug}"
-    local os_type
-    local arch
-    local output_dir
-    local tspserver_bin
-    local dist_base="$PROJECT_ROOT/dist"
-    local version
+    build_type="${1:-release}"
+    os_type
+    arch
+    output_dir
+    tspserver_bin
+    dist_base="$PROJECT_ROOT/dist"
+    version
     version="$(get_version)"
 
     os_type="$(get_os_type)"
@@ -253,7 +304,7 @@ build_tspserver() {
     fi
 
     # Determine deno-tsp path to use
-    local deno_bin
+    deno_bin
     if [ "$build_type" = "release" ]; then
         deno_bin="$(get_deno_bin release)"
     else
@@ -270,7 +321,7 @@ build_tspserver() {
     mkdir -p "$output_dir"
 
     # Compile tspserver
-    local tspserver_name="tspserver"
+    tspserver_name="tspserver"
     if [ "$os_type" = "windows" ]; then
         tspserver_name="tspserver.exe"
     fi
@@ -307,8 +358,8 @@ build_tspserver() {
 
 # Run tests
 run_test() {
-    local deno_bin
-    local test_file="${1:-run_all_tests.ts}"
+    deno_bin
+    test_file="${1:-run_all_tests.ts}"
     deno_bin="$(get_deno_bin debug)"
     ensure_deno_bin "$deno_bin"
 
@@ -316,21 +367,21 @@ run_test() {
 }
 
 run_check() {
-    local deno_bin
+    deno_bin
     deno_bin="$(get_deno_bin debug)"
     ensure_deno_bin "$deno_bin"
     "$deno_bin" check "$PROJECT_ROOT/src/main.ts"
 }
 
 run_fmt() {
-    local deno_bin
+    deno_bin
     deno_bin="$(get_deno_bin debug)"
     ensure_deno_bin "$deno_bin"
     "$deno_bin" fmt --allow-write "$PROJECT_ROOT/src" "$PROJECT_ROOT/www" "$PROJECT_ROOT/tests"
 }
 
 run_lint() {
-    local deno_bin
+    deno_bin
     deno_bin="$(get_deno_bin debug)"
     ensure_deno_bin "$deno_bin"
     "$deno_bin" lint "$PROJECT_ROOT/src" "$PROJECT_ROOT/www" "$PROJECT_ROOT/tests"
@@ -342,11 +393,11 @@ run_e2e() {
 
 # Package build output
 package() {
-    local build_type="${1:-release}"  # release or debug
-    local os_type
-    local arch
-    local version
-    local dist_base="$PROJECT_ROOT/dist"
+    build_type="${1:-release}"  # release or debug
+    os_type
+    arch
+    version
+    dist_base="$PROJECT_ROOT/dist"
 
     os_type="$(get_os_type)"
     arch="$(get_arch)"
@@ -354,13 +405,13 @@ package() {
 
     # Determine directory name
     if [ "$build_type" = "debug" ]; then
-        local dir_name="${os_type}-${arch}-v${version}-dev"
+        dir_name="${os_type}-${arch}-v${version}-dev"
     else
-        local dir_name="${os_type}-${arch}-v${version}"
+        dir_name="${os_type}-${arch}-v${version}"
     fi
 
-    local source_dir="$dist_base/$dir_name"
-    local output_file="$dist_base/tsp-${dir_name}"
+    source_dir="$dist_base/$dir_name"
+    output_file="$dist_base/tsp-${dir_name}"
 
     # Check if directory exists
     if [ ! -d "$source_dir" ]; then
@@ -385,9 +436,9 @@ package() {
         if command -v powershell &> /dev/null; then
             # Use PowerShell's Compress-Archive (convert path to Windows style)
             cd "$dist_base"
-            local win_path=$(to_windows_path "$(pwd)")
-            local win_dir=$(to_windows_path "$dir_name")
-            local win_output=$(to_windows_path "${output_file}.zip")
+            win_path=$(to_windows_path "$(pwd)")
+            win_dir=$(to_windows_path "$dir_name")
+            win_output=$(to_windows_path "${output_file}.zip")
             powershell -Command "Compress-Archive -Path '$win_dir' -DestinationPath '$win_output' -Force"
             echo "✓ Package created: ${output_file}.zip"
         elif command -v 7z &> /dev/null; then
@@ -421,14 +472,19 @@ show_help() {
     echo "Commands:"
     echo "  build:denort:win      Build denort-tsp for Windows"
     echo "  build:denort:win:dev Build denort-tsp for Windows (debug)"
-    echo "  build:denort:linux   Build denort-tsp for Linux (static)"
-    echo "  build:denort:linux:dev Build denort-tsp for Linux (static, debug)"
-    echo "  build:deno:win       Build deno-tsp for Windows"
-    echo "  build:deno:win:dev   Build deno-tsp for Windows (debug)"
-    echo "  build:deno:linux     Build deno-tsp for Linux (static)"
-    echo "  build:deno:linux:dev Build deno-tsp for Linux (static, debug)"
-    echo "  build:tspserver            Build TSP server (debug) -> dist/<os>-<arch>-v<version>-dev/"
-    echo "  build:tspserver:rel       Build TSP server (release) -> dist/<os>-<arch>-v<version>/"
+    echo "  build:denort:linux      Build denort-tsp for Linux (auto sysroot download/extract)"
+    echo "  build:denort:linux:dev Build denort-tsp for Linux (auto sysroot, debug)"
+    echo "  build:denort:linux:native  Build denort-tsp for Linux (native, no sysroot)"
+    echo "  build:denort:linux:native:dev Build denort-tsp for Linux (native, debug)"
+    echo "  build:deno:win        Build deno-tsp for Windows"
+    echo "  build:deno:win:dev    Build deno-tsp for Windows (debug)"
+    echo "  build:deno:linux      Build deno-tsp for Linux (auto sysroot download/extract)"
+    echo "  build:deno:linux:dev  Build deno-tsp for Linux (auto sysroot, debug)"
+    echo "  build:deno:linux:native  Build deno-tsp for Linux (native, no sysroot)"
+    echo "  build:deno:linux:native:dev Build deno-tsp for Linux (native, debug)"
+    echo "  build:tspserver            Build TSP server (release) -> dist/<os>-<arch>-v<version>/"
+    echo "  build:tspserver:dev       Build TSP server (debug) -> dist/<os>-<arch>-v<version>-dev/"
+    echo "  build:tspserver:rel       Build TSP server (release, alias) -> dist/<os>-<arch>-v<version>/"
     echo "  package                   Package build output to zip/tar.gz"
     echo "  dev                       Run development server (hot reload)"
     echo "  start                     Run production server"
@@ -460,6 +516,12 @@ case "$COMMAND" in
     build:denort:linux:dev)
         build_denort_linux_dev
         ;;
+    build:denort:linux:native)
+        build_denort_linux_native
+        ;;
+    build:denort:linux:native:dev)
+        build_denort_linux_native_dev
+        ;;
     build:deno:win)
         build_deno_win
         ;;
@@ -472,6 +534,12 @@ case "$COMMAND" in
     build:deno:linux:dev)
         build_deno_linux_dev
         ;;
+    build:deno:linux:native)
+        build_deno_linux_native
+        ;;
+    build:deno:linux:native:dev)
+        build_deno_linux_native_dev
+        ;;
     dev)
         run_dev
         ;;
@@ -479,6 +547,9 @@ case "$COMMAND" in
         run_start
         ;;
     build:tspserver)
+        build_tspserver release
+        ;;
+    build:tspserver:dev)
         build_tspserver debug
         ;;
     build:tspserver:rel)
