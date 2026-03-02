@@ -3,10 +3,8 @@
   "tasks": {
     "dev": "sh ./tsp.sh dev",
     "start": "sh ./tsp.sh start",
-    "build:denort": "sh ./tsp.sh build:denort",
-    "build:denort:rel": "sh ./tsp.sh build:denort:rel",
-    "build:deno": "sh ./tsp.sh build:deno",
-    "build:deno:rel": "sh ./tsp.sh build:deno:rel",
+    "build:denort": "sh ./tsp.sh build:denort:win",
+    "build:deno": "sh ./tsp.sh build:deno:win",
     "compile": "sh ./tsp.sh build:tspserver",
     "compile:rel": "sh ./tsp.sh build:tspserver:rel",
     "test": "sh ./tsp.sh test",
