@@ -201,6 +201,78 @@ run_e2e() {
     run_test run_e2e_tests.ts
 }
 
+# Package build output
+package() {
+    local build_type="${1:-release}"  # release or debug
+    local os_type
+    local arch
+    local version
+    local dist_base="$PROJECT_ROOT/dist"
+
+    os_type="$(get_os_type)"
+    arch="$(get_arch)"
+    version="$(get_version)"
+
+    # Determine directory name
+    if [ "$build_type" = "debug" ]; then
+        local dir_name="${os_type}-${arch}-v${version}-dev"
+    else
+        local dir_name="${os_type}-${arch}-v${version}"
+    fi
+
+    local source_dir="$dist_base/$dir_name"
+    local output_file="$dist_base/tsp-${dir_name}"
+
+    # Check if directory exists
+    if [ ! -d "$source_dir" ]; then
+        echo "Error: Directory not found: $source_dir"
+        echo "Please run './tsp.sh build:tspserver' first"
+        exit 1
+    fi
+
+    # Convert path for PowerShell (Unix to Windows)
+    to_windows_path() {
+        echo "$1" | sed 's|^/d/|D:/|;s|/|\\\\|g'
+    }
+
+    echo "=== Packaging TSP server ($build_type) ==="
+    echo "Source: $source_dir"
+    echo "Output: $output_file"
+    echo ""
+
+    # Create archive based on OS
+    if [ "$os_type" = "windows" ]; then
+        # Windows: try multiple methods
+        if command -v powershell &> /dev/null; then
+            # Use PowerShell's Compress-Archive (convert path to Windows style)
+            cd "$dist_base"
+            local win_path=$(to_windows_path "$(pwd)")
+            local win_dir=$(to_windows_path "$dir_name")
+            local win_output=$(to_windows_path "${output_file}.zip")
+            powershell -Command "Compress-Archive -Path '$win_dir' -DestinationPath '$win_output' -Force"
+            echo "✓ Package created: ${output_file}.zip"
+        elif command -v 7z &> /dev/null; then
+            # Use 7z if available
+            cd "$dist_base"
+            7z a -r "${output_file}.zip" "$dir_name"
+            echo "✓ Package created: ${output_file}.zip"
+        elif command -v zip &> /dev/null; then
+            # Use zip if available (Git Bash with MSYS)
+            cd "$dist_base"
+            zip -r "${output_file}.zip" "$dir_name"
+            echo "✓ Package created: ${output_file}.zip"
+        else
+            echo "Error: No compression tool found. Install 7zip or use PowerShell."
+            exit 1
+        fi
+    else
+        # Linux/macOS: tar.gz
+        cd "$dist_base"
+        tar -czf "${output_file}.tar.gz" "$dir_name"
+        echo "✓ Package created: ${output_file}.tar.gz"
+    fi
+}
+
 # Show help
 show_help() {
     echo "TSP development script"
@@ -214,6 +286,7 @@ show_help() {
     echo "  build:deno:rel       Build deno-tsp (release)"
     echo "  build:tspserver      Build TSP server (debug) -> dist/<os>-<arch>-v<version>-dev/"
     echo "  build:tspserver:rel  Build TSP server (release) -> dist/<os>-<arch>-v<version>/"
+    echo "  package             Package build output to zip/tar.gz"
     echo "  dev                  Run development server (hot reload)"
     echo "  start                Run production server"
     echo "  test                 Run all tests"
@@ -264,6 +337,9 @@ case "$COMMAND" in
         ;;
     test:e2e)
         run_e2e
+        ;;
+    package)
+        package "${2:-release}"
         ;;
     check)
         run_check
