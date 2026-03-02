@@ -64,7 +64,7 @@ Build output is in the `release/` directory.
 
 The project includes Docker Compose configuration for quickly starting MySQL and Redis services needed for testing.
 
-See [DOCKER_SERVICES.md](./docker/DOCKER_SERVICES.md)
+See [DOCKER_SERVICES.md](docker/DOCKER_SERVICES.md)
 
 ## Documentation
 
