@@ -21,16 +21,23 @@ A TypeScript server that executes `.tsp` files directly like PHP, designed for A
 
 ## Quick Start
 
-### 1. Prepare deno-tsp
+### Option 1: Download Pre-built Release (Recommended)
 
-Build the project's built-in `deno-tsp` first (no dependency on official Deno executable):
+Download the latest release from [GitHub Releases](https://github.com/risol/tsp/releases):
 
 ```bash
-sh ./tsp.sh build:denort
-sh ./tsp.sh build:deno
+# Download and extract (replace with your platform)
+curl -L https://github.com/risol/tsp/releases/latest/download/tsp-linux-x64.tar.gz -o tsp.tar.gz
+tar -xzf tsp.tar.gz
+cd tsp-linux-x64
+
+# Start the server
+./tspserver --root ./www --port 9000
 ```
 
-### 2. Start the Server
+### Option 2: Build from Source
+
+If you want to build from source, you need Rust and C build tools:
 
 ```bash
 # Clone the repository (with submodules)
@@ -39,6 +46,10 @@ cd tsp
 
 # Or if already cloned, init submodules
 git submodule update --init --recursive
+
+# Build deno-tsp runtime
+sh ./tsp.sh build:denort
+sh ./tsp.sh build:deno
 
 # Start development server
 sh ./tsp.sh dev
@@ -51,17 +62,26 @@ sh ./tsp.sh start
 
 Open browser and visit `http://localhost:9000`
 
-## Build Executable
+## Build from Source (Advanced)
+
+Most users should download pre-built releases instead. Building from source requires:
+
+- Rust toolchain
+- C compiler (gcc/clang)
+- For Linux static builds: sysroot (auto-downloaded)
 
 ```bash
-# Build binary for current platform
+# Build release binary for current platform
 sh ./tsp.sh build:tspserver
 
-# Build release binary
+# Build debug binary
+sh ./tsp.sh build:tspserver:dev
+
+# Build release binary (alias)
 sh ./tsp.sh build:tspserver:rel
 ```
 
-Build output is in the `release/` directory.
+Build output is in the `dist/` directory.
 
 ## Docker Test Services
 
