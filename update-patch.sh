@@ -28,11 +28,11 @@ fi
 
 # Show modification statistics
 echo "Modified files:"
-git diff --stat cli/
+git diff --stat
 echo ""
 
-# Export modifications to patch file
-git diff --no-color cli/ > "$PATCH_FILE"
+# Export all modifications to patch file
+git diff --no-color > "$PATCH_FILE"
 
 # Check if patch file was generated successfully
 if [ -f "$PATCH_FILE" ] && [ -s "$PATCH_FILE" ]; then
