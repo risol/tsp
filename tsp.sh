@@ -44,17 +44,65 @@ build_denort_win_dev() {
     cargo build -p denort-tsp "${@}"
 }
 
+# Find sysroot path automatically
+find_sysroot_path() {
+    local base_path="$HOME/deno-sysroot"
+    local local_path="$PROJECT_ROOT/sysroot"
+
+    # Check environment variable first
+    if [ -n "$SYSROOT_PATH" ] && [ -d "$SYSROOT_PATH" ]; then
+        echo "$SYSROOT_PATH"
+        return 0
+    fi
+
+    # Check local sysroot (in project directory)
+    if [ -d "$local_path" ]; then
+        local first_dir
+        first_dir=$(ls "$local_path" 2>/dev/null | head -1)
+        if [ -n "$first_dir" ] && [ -d "$local_path/$first_dir" ]; then
+            echo "$local_path/$first_dir"
+            return 0
+        fi
+    fi
+
+    # Check home directory sysroot
+    if [ -d "$base_path/x86_64-unknown-linux-gnu" ]; then
+        echo "$base_path/x86_64-unknown-linux-gnu"
+        return 0
+    fi
+
+    # Check if sysroot extraction created different structure
+    if [ -d "$base_path" ]; then
+        local first_dir
+        first_dir=$(ls "$base_path" 2>/dev/null | head -1)
+        if [ -n "$first_dir" ] && [ -d "$base_path/$first_dir" ]; then
+            echo "$base_path/$first_dir"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
 # Build denort-tsp for Linux (static linking with sysroot)
 build_denort_linux() {
-    local sysroot_path="${SYSROOT_PATH:-$HOME/deno-sysroot/x86_64-unknown-linux-gnu}"
-
-    if [ ! -d "$sysroot_path" ]; then
-        echo "Error: Sysroot not found at $sysroot_path"
+    local sysroot_path
+    sysroot_path=$(find_sysroot_path) || {
+        echo "Error: Sysroot not found"
+        echo ""
         echo "Please download and extract sysroot first:"
         echo "  wget https://github.com/denoland/deno_sysroot_build/releases/download/sysroot-20250207/sysroot-x86_64.tar.xz"
         echo "  tar -xf sysroot-x86_64.tar.xz -C ~"
+        echo ""
+        echo "Or check where it was extracted:"
+        echo "  ls -la ~/deno-sysroot/"
+        echo ""
+        echo "Or set custom path:"
+        echo "  SYSROOT_PATH=/your/path sh ./tsp.sh build:denort:linux"
         exit 1
-    fi
+    }
+
+    echo "Using sysroot: $sysroot_path"
 
     cd "$PROJECT_ROOT/deno"
     RUSTFLAGS="--sysroot=$sysroot_path -C target-feature=-crt-static" cargo build -p denort-tsp --release "${@}"
@@ -62,15 +110,20 @@ build_denort_linux() {
 
 # Build denort-tsp for Linux (debug, static linking with sysroot)
 build_denort_linux_dev() {
-    local sysroot_path="${SYSROOT_PATH:-$HOME/deno-sysroot/x86_64-unknown-linux-gnu}"
-
-    if [ ! -d "$sysroot_path" ]; then
-        echo "Error: Sysroot not found at $sysroot_path"
+    local sysroot_path
+    sysroot_path=$(find_sysroot_path) || {
+        echo "Error: Sysroot not found"
+        echo ""
         echo "Please download and extract sysroot first:"
         echo "  wget https://github.com/denoland/deno_sysroot_build/releases/download/sysroot-20250207/sysroot-x86_64.tar.xz"
         echo "  tar -xf sysroot-x86_64.tar.xz -C ~"
+        echo ""
+        echo "Or set custom path:"
+        echo "  SYSROOT_PATH=/your/path sh ./tsp.sh build:denort:linux:dev"
         exit 1
-    fi
+    }
+
+    echo "Using sysroot: $sysroot_path"
 
     cd "$PROJECT_ROOT/deno"
     RUSTFLAGS="--sysroot=$sysroot_path -C target-feature=-crt-static" cargo build -p denort-tsp "${@}"
@@ -90,15 +143,20 @@ build_deno_win_dev() {
 
 # Build deno-tsp for Linux (static linking with sysroot)
 build_deno_linux() {
-    local sysroot_path="${SYSROOT_PATH:-$HOME/deno-sysroot/x86_64-unknown-linux-gnu}"
-
-    if [ ! -d "$sysroot_path" ]; then
-        echo "Error: Sysroot not found at $sysroot_path"
+    local sysroot_path
+    sysroot_path=$(find_sysroot_path) || {
+        echo "Error: Sysroot not found"
+        echo ""
         echo "Please download and extract sysroot first:"
         echo "  wget https://github.com/denoland/deno_sysroot_build/releases/download/sysroot-20250207/sysroot-x86_64.tar.xz"
-        echo "  tar -xf sysroot-x86_64.tar.xz -C ~"
+        echo "  tar -xf sysroot-x86_64.tar.xz -C .  # extract to project root"
+        echo ""
+        echo "Or set custom path:"
+        echo "  SYSROOT_PATH=/your/path sh ./tsp.sh build:deno:linux"
         exit 1
-    fi
+    }
+
+    echo "Using sysroot: $sysroot_path"
 
     cd "$PROJECT_ROOT/deno"
     RUSTFLAGS="--sysroot=$sysroot_path -C target-feature=-crt-static" cargo build -p deno-tsp --release "${@}"
@@ -106,15 +164,20 @@ build_deno_linux() {
 
 # Build deno-tsp for Linux (debug, static linking with sysroot)
 build_deno_linux_dev() {
-    local sysroot_path="${SYSROOT_PATH:-$HOME/deno-sysroot/x86_64-unknown-linux-gnu}"
-
-    if [ ! -d "$sysroot_path" ]; then
-        echo "Error: Sysroot not found at $sysroot_path"
+    local sysroot_path
+    sysroot_path=$(find_sysroot_path) || {
+        echo "Error: Sysroot not found"
+        echo ""
         echo "Please download and extract sysroot first:"
         echo "  wget https://github.com/denoland/deno_sysroot_build/releases/download/sysroot-20250207/sysroot-x86_64.tar.xz"
-        echo "  tar -xf sysroot-x86_64.tar.xz -C ~"
+        echo "  tar -xf sysroot-x86_64.tar.xz -C .  # extract to project root"
+        echo ""
+        echo "Or set custom path:"
+        echo "  SYSROOT_PATH=/your/path sh ./tsp.sh build:deno:linux:dev"
         exit 1
-    fi
+    }
+
+    echo "Using sysroot: $sysroot_path"
 
     cd "$PROJECT_ROOT/deno"
     RUSTFLAGS="--sysroot=$sysroot_path -C target-feature=-crt-static" cargo build -p deno-tsp "${@}"
