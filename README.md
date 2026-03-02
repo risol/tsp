@@ -1,5 +1,7 @@
 # TSP
 
+![Banner](./docs/images/banner.png)
+
 A TypeScript server that executes `.tsp` files directly like PHP, designed for AI-driven development.
 
 ## Features

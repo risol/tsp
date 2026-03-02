@@ -17,6 +17,23 @@ if ! git rev-parse --git-dir > /dev/null 2>&1; then
     exit 1
 fi
 
+# Get project root
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$SCRIPT_DIR"
+
+# Get version from deno.json
+get_version() {
+    local deno_json="$PROJECT_ROOT/deno.json"
+    if [ -f "$deno_json" ]; then
+        grep -m1 '"version"' "$deno_json" | sed 's/.*"version": *"\([^"]*\)".*/\1/'
+    else
+        echo "0.0.0"
+    fi
+}
+
+VERSION=$(get_version)
+echo "Version: $VERSION"
+
 # Get remote name (default: origin)
 REMOTE="${1:-origin}"
 
@@ -59,11 +76,16 @@ CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 git checkout --orphan temp-cleanup
 
 # Commit current state
-git commit -m "Clean reset to current state" 2>/dev/null || echo "No changes to commit"
+git commit -m "Release v$VERSION" 2>/dev/null || echo "No changes to commit"
 
 # Force push to target branch (master or main)
 TARGET_BRANCH="master"
 git push "$REMOTE" temp-cleanup:$TARGET_BRANCH --force
+
+# Create and push version tag
+echo -e "${YELLOW}Creating version tag v$VERSION...${NC}"
+git tag -a "v$VERSION" -m "Release v$VERSION"
+git push "$REMOTE" "v$VERSION"
 
 # Switch back to original branch
 git checkout "$CURRENT_BRANCH"
@@ -75,4 +97,5 @@ echo -e "${GREEN}Done! Remote cleaned successfully.${NC}"
 echo ""
 echo "Remote: $REMOTE"
 echo "Branch: $TARGET_BRANCH"
+echo "Tag: v$VERSION"
 echo "Commits: 1"
