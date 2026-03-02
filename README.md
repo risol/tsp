@@ -33,9 +33,12 @@ sh ./tsp.sh build:deno
 ### 2. Start the Server
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-repo/tsp.git
+# Clone the repository (with submodules)
+git clone --recursive https://github.com/risol/tsp.git
 cd tsp
+
+# Or if already cloned, init submodules
+git submodule update --init --recursive
 
 # Start development server
 sh ./tsp.sh dev
