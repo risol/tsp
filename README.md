@@ -100,8 +100,9 @@ AI can't produce unsafe queries—**Zod validates everything**.
 Save a `.tsp` file and **instantly see changes**—no rebuild, no restart:
 
 ```bash
-sh ./tsp.sh dev
-# Edit any .tsp file, refresh browser to see changes
+# Production mode (recommended for deployment)
+./tspserver --root ./www --port 9000
+# Or: sh ./tsp.sh start
 ```
 
 This enables **rapid feedback loops**:
