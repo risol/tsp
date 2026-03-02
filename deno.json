@@ -19,7 +19,6 @@
   },
   "imports": {
     "@deno-library/compress": "jsr:@deno-library/compress@^0.5.6",
-    "@std/path": "jsr:@std/path@1.0.0",
     "std/path": "jsr:@std/path@1.0.0",
     "react": "npm:react@18.3.1",
     "react-dom": "npm:react-dom@18.3.1",

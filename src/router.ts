@@ -3,7 +3,7 @@
  * Responsible for URL to filesystem mapping
  */
 
-import { join, normalize, resolve } from "jsr:@std/path@1.0.0";
+import { join, normalize, resolve } from "std/path";
 
 // Path resolution result
 interface PathResult {
