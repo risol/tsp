@@ -19,6 +19,80 @@ A TypeScript server that executes `.tsp` files directly like PHP, designed for A
 - **Port Management** - Automatically detect and clean up processes occupying ports
 - **Database Integration** - Schema-first MySQL/Redis/LDAP support, type-safe database queries
 
+## Why TSP for AI Code Generation?
+
+TSP is designed specifically for AI-driven development with unique advantages:
+
+### 1. Minimal Behavioral Space
+
+Unlike full-stack frameworks with endless patterns (MVC, hooks, contexts, providers), TSP has **only one way** to write server-side code:
+
+```tsx
+export default Page(async function(ctx, deps) {
+  // Your logic here
+  return <html>...</html>;
+});
+```
+
+This constrains AI to a tiny, predictable pattern—**no choice paralysis**, **no framework-hopping**.
+
+### 2. Built-in Dependency Injection
+
+All dependencies must be obtained through **function factories**:
+
+```tsx
+export default Page(async function(ctx, { createMySQL, createRedis, z, response }) {
+  const db = await createMySQL(config, z);
+  const redis = await createRedis(config);
+  // ...
+});
+```
+
+This ensures:
+- **Consistency** - AI always uses the same patterns
+- **Type safety** - Schemas are enforced at the factory level
+- **No ad-hoc imports** - Can't bypass the system
+
+### 3. Zero Configuration
+
+AI can generate working code without:
+- No `package.json` to manage
+- No `tsconfig.json` to configure
+- No router files to wire up
+- No environment variables to set
+
+Just create a `.tsp` file and it works.
+
+### 4. Global Type System
+
+All types are global—no imports needed:
+
+```tsx
+// These are all available globally:
+export default Page(async function(ctx, { response, session, z }) {
+  // ctx: PageContext (method, url, query, body, cookies, files)
+  // response: ResponseBuilder (json, html, redirect, file, error)
+  // session: SessionManager
+  // z: Zod (for schema validation)
+});
+```
+
+### 5. Schema-First Database API
+
+Database operations require schemas upfront:
+
+```tsx
+const UserSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  email: z.string().email()
+});
+
+const users = await db.query(UserSchema, 'SELECT * FROM users');
+```
+
+AI can't produce unsafe queries—**Zod validates everything**.
+
 ## Quick Start
 
 ### Option 1: Download Pre-built Release (Recommended)
