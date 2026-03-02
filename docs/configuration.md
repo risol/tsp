@@ -385,7 +385,6 @@ If configured port is already in use:
 ## Related Documentation
 
 - [Getting Started](./getting-started.md) - Quick start in 5 minutes
-- [Development Tasks](./tasks.md) - All Deno task descriptions
 - [Development Guide](./development.md) - Development environment setup
 - [Architecture](./architecture.md) - System architecture description
 

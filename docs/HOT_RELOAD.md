@@ -290,6 +290,4 @@ www/
 
 ## Related Documentation
 
-- [Precompilation Documentation](./PRECOMPILATION.md)
 - [Build and Deployment Documentation](./BUILD.md)
-- [Coding Standards](./CODING_STANDARDS.md)

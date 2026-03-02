@@ -14,7 +14,7 @@ TSP is a TypeScript server that executes `.tsp` files directly like PHP, designe
 - [Architecture](./architecture.md) - System architecture and design principles
 - [Development Guide](./development.md) - Development setup and best practices
 - [Hot Reload](./hot_reload.md) - Automatic code reloading
-- [Build & Deployment](./build.md) - Build and deploy instructions
+- [Build & Deployment](./BUILD.md) - Build and deploy instructions
 
 ## Features
 

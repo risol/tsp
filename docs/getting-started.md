@@ -89,7 +89,6 @@ For detailed documentation: [Configuration Documentation](./configuration.md)
 
 ## More Documentation
 
-- [Command Line Arguments](./tasks.md) - Complete command line argument documentation
 - [Development Guide](./development.md) - Development environment setup
 - [Features](./features/README.md) - Learn TSP features
 

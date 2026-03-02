@@ -6,11 +6,6 @@ This document introduces TSP's testing framework and testing methods.
 
 ### Testing Guides
 
-- [Testing Overview](./overview.md) - Testing framework introduction and running methods
-- [Test Pages Setup](./test-pages.md) - Test pages configuration and usage
-- [Test WWW Description](./test-www.md) - Test pages directory description
-- [Task Permissions](./task-permissions.md) - Deno task permissions configuration
-
 ## Quick Start
 
 ### Run All Tests

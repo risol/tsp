@@ -359,7 +359,6 @@ headers["Cache-Control"] = "public, max-age=604800";
 
 - [Configuration Documentation](../configuration.md) - Configuration options details
 - [Architecture Documentation](../architecture.md) - Learn static file service implementation
-- [Security Documentation](../security.md) - Security related features
 
 ---
 

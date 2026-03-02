@@ -397,6 +397,4 @@ A: You can use `--log` level or enable development mode:
 
 ## Related Documentation
 
-- [Precompilation Documentation](./PRECOMPILATION.md)
-- [Coding Standards](./CODING_STANDARDS.md)
 - [README](../README.md)
