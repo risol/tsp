@@ -213,22 +213,39 @@ apply_sysroot_env() {
         return 1
     fi
 
-    sed "s|/sysroot|$sysroot_path|g" "$env_file" > "$resolved_env"
+    # Replace /sysroot with actual path and strip trailing whitespace
+    sed "s|/sysroot|$sysroot_path|g" "$env_file" | sed 's/[[:space:]]*$//' > "$resolved_env"
 
     # shellcheck disable=SC1090
     . "$resolved_env"
 
     rm -f "$resolved_env"
 
-    if [ -n "$prev_rustflags" ]; then
+    # Merge previous flags if they exist and are non-empty
+    if [ -n "$prev_rustflags" ] && [ -n "${RUSTFLAGS:-}" ]; then
         RUSTFLAGS="$RUSTFLAGS $prev_rustflags"
-    fi
-    if [ -n "$prev_cflags" ]; then
-        CFLAGS="$CFLAGS $prev_cflags"
+    elif [ -n "$prev_rustflags" ]; then
+        RUSTFLAGS="$prev_rustflags"
     fi
 
-    export RUSTFLAGS
-    export CFLAGS
+    if [ -n "$prev_cflags" ] && [ -n "${CFLAGS:-}" ]; then
+        CFLAGS="$CFLAGS $prev_cflags"
+    elif [ -n "$prev_cflags" ]; then
+        CFLAGS="$prev_cflags"
+    fi
+
+    # Only export if non-empty (avoid passing empty strings to cargo)
+    if [ -n "${RUSTFLAGS:-}" ]; then
+        export RUSTFLAGS
+    else
+        unset RUSTFLAGS
+    fi
+
+    if [ -n "${CFLAGS:-}" ]; then
+        export CFLAGS
+    else
+        unset CFLAGS
+    fi
 }
 
 # Run cargo build with auto sysroot
@@ -273,15 +290,21 @@ linux_cargo_build() {
 
 # Build denort-tsp for Linux (auto sysroot)
 build_denort_linux() {
-    do_clean="${1:-}"
-    linux_cargo_build denort-tsp release "$do_clean"
+    if [ "${1:-}" = "clean" ]; then
+        linux_cargo_build denort-tsp release clean
+    else
+        linux_cargo_build denort-tsp release
+    fi
     copy_deno_bins release
 }
 
 # Build denort-tsp for Linux (debug, auto sysroot)
 build_denort_linux_dev() {
-    do_clean="${1:-}"
-    linux_cargo_build denort-tsp debug "$do_clean"
+    if [ "${1:-}" = "clean" ]; then
+        linux_cargo_build denort-tsp debug clean
+    else
+        linux_cargo_build denort-tsp debug
+    fi
     copy_deno_bins debug
 }
 
@@ -331,15 +354,21 @@ build_deno_win_dev() {
 
 # Build deno-tsp for Linux (auto sysroot)
 build_deno_linux() {
-    do_clean="${1:-}"
-    linux_cargo_build deno-tsp release "$do_clean"
+    if [ "${1:-}" = "clean" ]; then
+        linux_cargo_build deno-tsp release clean
+    else
+        linux_cargo_build deno-tsp release
+    fi
     copy_deno_bins release
 }
 
 # Build deno-tsp for Linux (debug, auto sysroot)
 build_deno_linux_dev() {
-    do_clean="${1:-}"
-    linux_cargo_build deno-tsp debug "$do_clean"
+    if [ "${1:-}" = "clean" ]; then
+        linux_cargo_build deno-tsp debug clean
+    else
+        linux_cargo_build deno-tsp debug
+    fi
     copy_deno_bins debug
 }
 
@@ -491,11 +520,11 @@ build_tspserver() {
     # Copy config file
     echo "Copying config file..."
 
-    # Copy config.jsonc (if exists)
-    if [ -f "$PROJECT_ROOT/config.jsonc" ]; then
-        cp "$PROJECT_ROOT/config.jsonc" "$output_dir/"
-    elif [ -f "$PROJECT_ROOT/config.json" ]; then
-        cp "$PROJECT_ROOT/config.json" "$output_dir/"
+    # Copy config.example.jsonc (example config, not the actual config with sensitive data)
+    if [ -f "$PROJECT_ROOT/config.example.jsonc" ]; then
+        cp "$PROJECT_ROOT/config.example.jsonc" "$output_dir/"
+    elif [ -f "$PROJECT_ROOT/config.example.json" ]; then
+        cp "$PROJECT_ROOT/config.example.json" "$output_dir/"
     fi
 
     # Copy types.d.ts

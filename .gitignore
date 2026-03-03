@@ -24,3 +24,4 @@ test_*.xlsx
 /dist
 
 .docker_build_info
+/deno-tsp

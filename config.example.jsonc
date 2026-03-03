@@ -17,7 +17,7 @@
   },
 
   "fileManager": {
-    "enabled": true,
+    "enabled": false,
     "path": "/__filemanager",
     "password": "CHANGE_ME_FILEMANAGER_PASSWORD",
     "deniedPaths": [".git", ".deno", "node_modules", ".cache"],
