@@ -11,7 +11,8 @@ COMMAND="${1:-}"
 # Get deno-tsp binary path
 get_deno_bin() {
     target="${1:-debug}"
-    deno_bin="$PROJECT_ROOT/deno/target/$target/deno-tsp"
+    os_type="$(get_os_type)"
+    deno_bin="$PROJECT_ROOT/deno-tsp/$target/$os_type/deno-tsp"
 
     case "$(uname -s)" in
         CYGWIN*|MINGW*|MSYS*|Windows_NT)
@@ -31,16 +32,86 @@ ensure_deno_bin() {
     fi
 }
 
+get_denort_bin() {
+    target="${1:-debug}"
+    os_type="$(get_os_type)"
+    denort_bin="$PROJECT_ROOT/deno-tsp/$target/$os_type/denort-tsp"
+
+    case "$(uname -s)" in
+        CYGWIN*|MINGW*|MSYS*|Windows_NT)
+        denort_bin="$denort_bin.exe"
+        ;;
+    esac
+
+    echo "$denort_bin"
+}
+
+ensure_denort_bin() {
+    denort_bin="$1"
+    if [ ! -f "$denort_bin" ]; then
+        echo "Error: $denort_bin does not exist"
+        echo "Please run: sh ./tsp.sh build:denort:linux (or matching target)"
+        exit 1
+    fi
+}
+
+# Copy deno binaries to deno-tsp directory
+copy_deno_bins() {
+    target="${1:-debug}"
+
+    # Get OS type for subdirectory
+    os_type="$(get_os_type)"
+
+    dest_dir="$PROJECT_ROOT/deno-tsp/$target/$os_type"
+    src_dir="$PROJECT_ROOT/deno/target/$target"
+
+    # Handle Windows executable extension
+    denort_name="denort-tsp"
+    deno_name="deno-tsp"
+    case "$(uname -s)" in
+        CYGWIN*|MINGW*|MSYS*|Windows_NT)
+            denort_name="denort-tsp.exe"
+            deno_name="deno-tsp.exe"
+            ;;
+    esac
+
+    # Create destination directory
+    mkdir -p "$dest_dir"
+
+    # Copy binaries
+    if [ -f "$src_dir/$denort_name" ]; then
+        cp "$src_dir/$denort_name" "$dest_dir/"
+        echo "Copied $denort_name to $dest_dir/"
+    fi
+
+    if [ -f "$src_dir/$deno_name" ]; then
+        cp "$src_dir/$deno_name" "$dest_dir/"
+        echo "Copied $deno_name to $dest_dir/"
+    fi
+}
+
 # Build denort-tsp for Windows (default release)
 build_denort_win() {
+    do_clean="${1:-}"
+    if [ "$do_clean" = "clean" ]; then
+        cd "$PROJECT_ROOT/deno"
+        cargo clean -p denort-tsp
+    fi
     cd "$PROJECT_ROOT/deno"
-    cargo build -p denort-tsp --release "${@}"
+    cargo build -p denort-tsp --release
+    copy_deno_bins release
 }
 
 # Build denort-tsp for Windows (debug)
 build_denort_win_dev() {
+    do_clean="${1:-}"
+    if [ "$do_clean" = "clean" ]; then
+        cd "$PROJECT_ROOT/deno"
+        cargo clean -p denort-tsp
+    fi
     cd "$PROJECT_ROOT/deno"
-    cargo build -p denort-tsp "${@}"
+    cargo build -p denort-tsp
+    copy_deno_bins debug
 }
 
 # Get Linux arch for sysroot package naming
@@ -165,6 +236,13 @@ linux_cargo_build() {
     package_name="$1"
     shift
 
+    # Check for clean parameter
+    do_clean=""
+    if [ "$1" = "clean" ]; then
+        do_clean="clean"
+        shift
+    fi
+
     if [ "$(get_os_type)" != "linux" ]; then
         echo "Error: Linux sysroot build must run on Linux host"
         exit 1
@@ -175,63 +253,104 @@ linux_cargo_build() {
     echo "Using sysroot: $sysroot_path"
 
     cd "$PROJECT_ROOT/deno"
+    if [ -n "$do_clean" ]; then
+        cargo clean -p "$package_name"
+    fi
     cargo build -p "$package_name" "${@}"
 }
 
 # Build denort-tsp for Linux (auto sysroot)
 build_denort_linux() {
-    linux_cargo_build denort-tsp --release "${@}"
+    do_clean="${1:-}"
+    linux_cargo_build denort-tsp --release "$do_clean"
+    copy_deno_bins release
 }
 
 # Build denort-tsp for Linux (debug, auto sysroot)
 build_denort_linux_dev() {
-    linux_cargo_build denort-tsp "${@}"
+    do_clean="${1:-}"
+    linux_cargo_build denort-tsp "$do_clean"
+    copy_deno_bins debug
 }
 
 # Build denort-tsp for Linux (native, no sysroot)
 build_denort_linux_native() {
+    do_clean="${1:-}"
     cd "$PROJECT_ROOT/deno"
-    cargo build -p denort-tsp --release "${@}"
+    if [ "$do_clean" = "clean" ]; then
+        cargo clean -p denort-tsp
+    fi
+    cargo build -p denort-tsp --release
+    copy_deno_bins release
 }
 
 # Build denort-tsp for Linux (native, debug, no sysroot)
 build_denort_linux_native_dev() {
+    do_clean="${1:-}"
     cd "$PROJECT_ROOT/deno"
-    cargo build -p denort-tsp "${@}"
+    if [ "$do_clean" = "clean" ]; then
+        cargo clean -p denort-tsp
+    fi
+    cargo build -p denort-tsp
+    copy_deno_bins debug
 }
 
 # Build deno-tsp for Windows (default release)
 build_deno_win() {
+    do_clean="${1:-}"
     cd "$PROJECT_ROOT/deno"
-    cargo build -p deno-tsp --release "${@}"
+    if [ "$do_clean" = "clean" ]; then
+        cargo clean -p deno-tsp
+    fi
+    cargo build -p deno-tsp --release
+    copy_deno_bins release
 }
 
 # Build deno-tsp for Windows (debug)
 build_deno_win_dev() {
+    do_clean="${1:-}"
     cd "$PROJECT_ROOT/deno"
-    cargo build -p deno-tsp "${@}"
+    if [ "$do_clean" = "clean" ]; then
+        cargo clean -p deno-tsp
+    fi
+    cargo build -p deno-tsp
+    copy_deno_bins debug
 }
 
 # Build deno-tsp for Linux (auto sysroot)
 build_deno_linux() {
-    linux_cargo_build deno-tsp --release "${@}"
+    do_clean="${1:-}"
+    linux_cargo_build deno-tsp --release "$do_clean"
+    copy_deno_bins release
 }
 
 # Build deno-tsp for Linux (debug, auto sysroot)
 build_deno_linux_dev() {
-    linux_cargo_build deno-tsp "${@}"
+    do_clean="${1:-}"
+    linux_cargo_build deno-tsp "$do_clean"
+    copy_deno_bins debug
 }
 
 # Build deno-tsp for Linux (native, no sysroot)
 build_deno_linux_native() {
+    do_clean="${1:-}"
     cd "$PROJECT_ROOT/deno"
-    cargo build -p deno-tsp --release "${@}"
+    if [ "$do_clean" = "clean" ]; then
+        cargo clean -p deno-tsp
+    fi
+    cargo build -p deno-tsp --release
+    copy_deno_bins release
 }
 
 # Build deno-tsp for Linux (native, debug, no sysroot)
 build_deno_linux_native_dev() {
+    do_clean="${1:-}"
     cd "$PROJECT_ROOT/deno"
-    cargo build -p deno-tsp "${@}"
+    if [ "$do_clean" = "clean" ]; then
+        cargo clean -p deno-tsp
+    fi
+    cargo build -p deno-tsp
+    copy_deno_bins debug
 }
 
 # Run development server
@@ -257,7 +376,7 @@ get_os_type() {
     case "$(uname -s)" in
         Linux*)     echo "linux";;
         Darwin*)    echo "macos";;
-        CYGWIN*|MINGW*|MSYS*) echo "windows";;
+        CYGWIN*|MINGW*|MSYS*) echo "win";;
         *)          echo "unknown";;
     esac
 }
@@ -285,35 +404,51 @@ get_version() {
 # Build TSP server
 build_tspserver() {
     build_type="${1:-release}"
-    os_type
-    arch
-    output_dir
-    tspserver_bin
+    target_os="${2:-}"  # Target OS: win, linux, or empty for current OS
+
+    current_os="$(get_os_type)"
+    arch="$(get_arch)"
     dist_base="$PROJECT_ROOT/dist"
-    version
     version="$(get_version)"
 
-    os_type="$(get_os_type)"
-    arch="$(get_arch)"
+    # If target_os is not specified, use current OS
+    if [ -z "$target_os" ]; then
+        target_os="$current_os"
+    fi
 
-    # Determine output directory (combined os-arch-version - suitable for GitHub releases)
+    # Determine output directory (target OS - suitable for GitHub releases)
     if [ "$build_type" = "release" ]; then
-        output_dir="$dist_base/${os_type}-${arch}-v${version}"
+        output_dir="$dist_base/${target_os}-${arch}-v${version}"
     else
-        output_dir="$dist_base/${os_type}-${arch}-v${version}-dev"
+        output_dir="$dist_base/${target_os}-${arch}-v${version}-dev"
     fi
 
     # Determine deno-tsp path to use
-    deno_bin
+    # Always use current OS deno-tsp for compilation
     if [ "$build_type" = "release" ]; then
         deno_bin="$(get_deno_bin release)"
     else
         deno_bin="$(get_deno_bin debug)"
     fi
 
-    ensure_deno_bin "$deno_bin"
+    # Determine denort-bin: use target OS version
+    if [ "$build_type" = "release" ]; then
+        denort_bin="$PROJECT_ROOT/deno-tsp/release/$target_os/denort-tsp"
+    else
+        denort_bin="$PROJECT_ROOT/deno-tsp/debug/$target_os/denort-tsp"
+    fi
 
-    echo "=== Building TSP server ($build_type) ==="
+    # Handle target OS denort-bin extension
+    case "$target_os" in
+        win)
+            denort_bin="$denort_bin.exe"
+            ;;
+    esac
+
+    ensure_deno_bin "$deno_bin"
+    ensure_denort_bin "$denort_bin"
+
+    echo "=== Building TSP server ($build_type for $target_os) ==="
     echo "Output directory: $output_dir"
     echo ""
 
@@ -322,12 +457,24 @@ build_tspserver() {
 
     # Compile tspserver
     tspserver_name="tspserver"
-    if [ "$os_type" = "windows" ]; then
-        tspserver_name="tspserver.exe"
-    fi
+
+    # Determine target flag for cross-compilation
+    target_flag=""
+    case "$target_os" in
+        win)
+            tspserver_name="tspserver.exe"
+            target_flag="--target x86_64-pc-windows-msvc"
+            ;;
+        linux)
+            target_flag="--target x86_64-unknown-linux-gnu"
+            ;;
+        macos)
+            target_flag="--target x86_64-apple-darwin"
+            ;;
+    esac
 
     echo "Compiling tspserver..."
-    "$deno_bin" compile --allow-all --dynamic-import-no-cache --output "$output_dir/$tspserver_name" "$PROJECT_ROOT/src/main.ts"
+    DENORT_BIN="$denort_bin" "$deno_bin" compile $target_flag --allow-all --dynamic-import-no-cache --output "$output_dir/$tspserver_name" "$PROJECT_ROOT/src/main.ts"
 
     # Copy config file
     echo "Copying config file..."
@@ -431,7 +578,7 @@ package() {
     echo ""
 
     # Create archive based on OS
-    if [ "$os_type" = "windows" ]; then
+    if [ "$os_type" = "win" ]; then
         # Windows: try multiple methods
         if command -v powershell &> /dev/null; then
             # Use PowerShell's Compress-Archive (convert path to Windows style)
@@ -470,21 +617,25 @@ show_help() {
     echo "Usage: ./tsp.sh <command> [args]"
     echo ""
     echo "Commands:"
-    echo "  build:denort:win      Build denort-tsp for Windows"
-    echo "  build:denort:win:dev Build denort-tsp for Windows (debug)"
-    echo "  build:denort:linux      Build denort-tsp for Linux (auto sysroot download/extract)"
-    echo "  build:denort:linux:dev Build denort-tsp for Linux (auto sysroot, debug)"
-    echo "  build:denort:linux:native  Build denort-tsp for Linux (native, no sysroot)"
+    echo "  build:denort:win           Build denort-tsp for Windows"
+    echo "  build:denort:win:dev      Build denort-tsp for Windows (debug)"
+    echo "  build:denort:linux        Build denort-tsp for Linux (auto sysroot)"
+    echo "  build:denort:linux:dev    Build denort-tsp for Linux (auto sysroot, debug)"
+    echo "  build:denort:linux:native Build denort-tsp for Linux (native, no sysroot)"
     echo "  build:denort:linux:native:dev Build denort-tsp for Linux (native, debug)"
-    echo "  build:deno:win        Build deno-tsp for Windows"
-    echo "  build:deno:win:dev    Build deno-tsp for Windows (debug)"
-    echo "  build:deno:linux      Build deno-tsp for Linux (auto sysroot download/extract)"
-    echo "  build:deno:linux:dev  Build deno-tsp for Linux (auto sysroot, debug)"
-    echo "  build:deno:linux:native  Build deno-tsp for Linux (native, no sysroot)"
+    echo "  build:deno:win            Build deno-tsp for Windows"
+    echo "  build:deno:win:dev        Build deno-tsp for Windows (debug)"
+    echo "  build:deno:linux          Build deno-tsp for Linux (auto sysroot)"
+    echo "  build:deno:linux:dev     Build deno-tsp for Linux (auto sysroot, debug)"
+    echo "  build:deno:linux:native   Build deno-tsp for Linux (native, no sysroot)"
     echo "  build:deno:linux:native:dev Build deno-tsp for Linux (native, debug)"
-    echo "  build:tspserver            Build TSP server (release) -> dist/<os>-<arch>-v<version>/"
-    echo "  build:tspserver:dev       Build TSP server (debug) -> dist/<os>-<arch>-v<version>-dev/"
-    echo "  build:tspserver:rel       Build TSP server (release, alias) -> dist/<os>-<arch>-v<version>/"
+    echo "  build:tspserver           Build TSP server for current OS (release)"
+    echo "  build:tspserver:dev      Build TSP server for current OS (debug)"
+    echo "  build:tspserver:rel      Build TSP server for current OS (release)"
+    echo "  build:tspserver:win      Build TSP server for Windows (release)"
+    echo "  build:tspserver:win:dev  Build TSP server for Windows (debug)"
+    echo "  build:tspserver:linux    Build TSP server for Linux (release)"
+    echo "  build:tspserver:linux:dev Build TSP server for Linux (debug)"
     echo "  package                   Package build output to zip/tar.gz"
     echo "  dev                       Run development server (hot reload)"
     echo "  start                     Run production server"
@@ -495,10 +646,14 @@ show_help() {
     echo "  fmt                       Format code"
     echo "  lint                      Lint code"
     echo ""
+    echo "Options:"
+    echo "  clean                     Clean cargo cache before build"
+    echo ""
     echo "Examples:"
     echo "  ./tsp.sh build:denort:win"
+    echo "  ./tsp.sh build:denort:linux:native clean"
     echo "  ./tsp.sh build:deno:linux"
-    echo "  ./tsp.sh build:tspserver"
+    echo "  ./tsp.sh build:tspserver:linux"
     echo "  ./tsp.sh dev"
 }
 
@@ -547,13 +702,29 @@ case "$COMMAND" in
         run_start
         ;;
     build:tspserver)
-        build_tspserver release
+        # Default: build for current OS
+        os_type="$(get_os_type)"
+        build_tspserver release "$os_type"
         ;;
     build:tspserver:dev)
-        build_tspserver debug
+        os_type="$(get_os_type)"
+        build_tspserver debug "$os_type"
         ;;
     build:tspserver:rel)
-        build_tspserver release
+        os_type="$(get_os_type)"
+        build_tspserver release "$os_type"
+        ;;
+    build:tspserver:win)
+        build_tspserver release win
+        ;;
+    build:tspserver:win:dev)
+        build_tspserver debug win
+        ;;
+    build:tspserver:linux)
+        build_tspserver release linux
+        ;;
+    build:tspserver:linux:dev)
+        build_tspserver debug linux
         ;;
     test)
         run_test
