@@ -236,6 +236,13 @@ linux_cargo_build() {
     package_name="$1"
     shift
 
+    # Get build type (release or debug)
+    build_type=""
+    if [ "$1" = "release" ] || [ "$1" = "debug" ]; then
+        build_type="$1"
+        shift
+    fi
+
     # Check for clean parameter
     do_clean=""
     if [ "$1" = "clean" ]; then
@@ -256,20 +263,25 @@ linux_cargo_build() {
     if [ -n "$do_clean" ]; then
         cargo clean -p "$package_name"
     fi
-    cargo build -p "$package_name" "${@}"
+
+    if [ "$build_type" = "release" ]; then
+        cargo build -p "$package_name" --release
+    else
+        cargo build -p "$package_name"
+    fi
 }
 
 # Build denort-tsp for Linux (auto sysroot)
 build_denort_linux() {
     do_clean="${1:-}"
-    linux_cargo_build denort-tsp --release "$do_clean"
+    linux_cargo_build denort-tsp release "$do_clean"
     copy_deno_bins release
 }
 
 # Build denort-tsp for Linux (debug, auto sysroot)
 build_denort_linux_dev() {
     do_clean="${1:-}"
-    linux_cargo_build denort-tsp "$do_clean"
+    linux_cargo_build denort-tsp debug "$do_clean"
     copy_deno_bins debug
 }
 
@@ -320,14 +332,14 @@ build_deno_win_dev() {
 # Build deno-tsp for Linux (auto sysroot)
 build_deno_linux() {
     do_clean="${1:-}"
-    linux_cargo_build deno-tsp --release "$do_clean"
+    linux_cargo_build deno-tsp release "$do_clean"
     copy_deno_bins release
 }
 
 # Build deno-tsp for Linux (debug, auto sysroot)
 build_deno_linux_dev() {
     do_clean="${1:-}"
-    linux_cargo_build deno-tsp "$do_clean"
+    linux_cargo_build deno-tsp debug "$do_clean"
     copy_deno_bins debug
 }
 
