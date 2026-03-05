@@ -1,13 +1,13 @@
-import { Sidebar } from "../components/Sidebar.tsx";
-import { Footer } from "../components/Footer.tsx";
+import { Sidebar } from "./components/Sidebar.tsx";
+import { Footer } from "./components/Footer.tsx";
 
 export default Page(async function(ctx) {
   return (
-    <html lang="zh-CN">
+    <html lang="en">
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>代码示例 - TSP</title>
+        <title>Examples - TSP</title>
         <style dangerouslySetInnerHTML={{ __html: `
           * { margin: 0; padding: 0; box-sizing: border-box; }
           :root {
@@ -82,44 +82,44 @@ export default Page(async function(ctx) {
               <div class="header-content">
                 <a href="/" class="logo">TSP</a>
                 <nav class="nav-links">
-                  <a href="/getting-started">快速开始</a>
-                  <a href="/features">功能</a>
-                  <a href="/examples">示例</a>
+                  <a href="/getting-started">Getting Started</a>
+                  <a href="/features">Features</a>
+                  <a href="/examples">Examples</a>
                 </nav>
               </div>
             </header>
 
             <div class="content">
-              <h1>代码示例</h1>
-              <p>以下示例展示 TSP 作为 Deno + TypeScript 全栈框架在常见业务场景中的写法。</p>
+              <h1>Examples</h1>
+              <p>Code examples showing TSP usage in common scenarios.</p>
 
               <div class="toc">
-                <strong>目录</strong>
+                <strong>Table of Contents</strong>
                 <ul>
-                  <li><a href="#basic" style={{ color: "#3178c6" }}>基础示例</a></li>
-                  <li><a href="#database" style={{ color: "#3178c6" }}>数据库操作</a></li>
-                  <li><a href="#session" style={{ color: "#3178c6" }}>Session 管理</a></li>
+                  <li><a href="#basic" style={{ color: "#3178c6" }}>Basic Examples</a></li>
+                  <li><a href="#database" style={{ color: "#3178c6" }}>Database</a></li>
+                  <li><a href="#session" style={{ color: "#3178c6" }}>Session</a></li>
                   <li><a href="#api" style={{ color: "#3178c6" }}>RESTful API</a></li>
-                  <li><a href="#upload" style={{ color: "#3178c6" }}>文件上传</a></li>
+                  <li><a href="#upload" style={{ color: "#3178c6" }}>File Upload</a></li>
                 </ul>
               </div>
 
-              <h2 id="basic">基础示例</h2>
+              <h2 id="basic">Basic Examples</h2>
 
               <div class="example-card">
                 <div class="example-body">
-                  <h3>返回 HTML</h3>
+                  <h3>Return HTML</h3>
                   <div class="code-block">
                     <span class="lang">tsx</span>
                     <pre><code>{`export default Page(async function(ctx) {
   return (
     <html>
       <head>
-        <title>我的页面</title>
+        <title>My Page</title>
       </head>
       <body>
         <h1>Hello World!</h1>
-        <p>当前时间: {new Date().toLocaleString()}</p>
+        <p>Current time: {new Date().toLocaleString()}</p>
       </body>
     </html>
   );
@@ -130,14 +130,14 @@ export default Page(async function(ctx) {
 
               <div class="example-card">
                 <div class="example-body">
-                  <h3>返回 JSON</h3>
+                  <h3>Return JSON</h3>
                   <div class="code-block">
                     <span class="lang">tsx</span>
                     <pre><code>{`export default Page(async function(ctx, { response }) {
   return response.json({
     success: true,
     data: {
-      name: "张三",
+      name: "John",
       age: 25
     }
   });
@@ -148,7 +148,7 @@ export default Page(async function(ctx) {
 
               <div class="example-card">
                 <div class="example-body">
-                  <h3>重定向</h3>
+                  <h3>Redirect</h3>
                   <div class="code-block">
                     <span class="lang">tsx</span>
                     <pre><code>{`export default Page(async function(ctx, { response }) {
@@ -158,15 +158,15 @@ export default Page(async function(ctx) {
                 </div>
               </div>
 
-              <h2 id="database">数据库操作</h2>
+              <h2 id="database">Database</h2>
 
               <div class="example-card">
                 <div class="example-body">
-                  <h3>MySQL 查询</h3>
+                  <h3>MySQL Query</h3>
                   <div class="code-block">
                     <span class="lang">tsx</span>
                     <pre><code>{`export default Page(async function(ctx, { createMySQL, z, response }) {
-  // 创建数据库连接
+  // Create database connection
   const db = await createMySQL({
     host: '127.0.0.1',
     port: 3306,
@@ -175,18 +175,15 @@ export default Page(async function(ctx) {
     database: 'test_db'
   }, z);
 
-  // 定义返回数据的 Schema
+  // Define return schema
   const UserSchema = z.object({
     id: z.number(),
     name: z.string(),
     email: z.string()
   });
 
-  // 查询用户列表
+  // Query users
   const users = await db.query(UserSchema, 'SELECT * FROM users');
-
-  // 关闭连接
-  await db.close();
 
   return response.json({ users });
 });`}</code></pre>
@@ -196,7 +193,7 @@ export default Page(async function(ctx) {
 
               <div class="example-card">
                 <div class="example-body">
-                  <h3>事务操作</h3>
+                  <h3>Transaction</h3>
                   <div class="code-block">
                     <span class="lang">tsx</span>
                     <pre><code>{`export default Page(async function(ctx, { createMySQL, z, response }) {
@@ -206,13 +203,13 @@ export default Page(async function(ctx) {
 
   try {
     const result = await db.tx(async (tx) => {
-      // 扣除转出账户
+      // Deduct from sender
       await tx.execute(ResultSchema,
         'UPDATE accounts SET balance = balance - ? WHERE id = ?',
         [amount, fromId]
       );
 
-      // 转入目标账户
+      // Add to receiver
       await tx.execute(ResultSchema,
         'UPDATE accounts SET balance = balance + ? WHERE id = ?',
         [amount, toId]
@@ -230,20 +227,20 @@ export default Page(async function(ctx) {
                 </div>
               </div>
 
-              <h2 id="session">Session 管理</h2>
+              <h2 id="session">Session</h2>
 
               <div class="example-card">
                 <div class="example-body">
-                  <h3>用户登录</h3>
+                  <h3>User Login</h3>
                   <div class="code-block">
                     <span class="lang">tsx</span>
                     <pre><code>{`export default Page(async function(ctx, { session, response }) {
   if (ctx.method === 'POST') {
     const { email, password } = ctx.body as { email: string; password: string };
 
-    // 验证用户（实际项目中应查询数据库）
+    // Validate user (should query DB in production)
     if (email === 'test@example.com' && password === '123456') {
-      // 初始化 session
+      // Initialize session
       await session.init();
       await session.set('userId', '1');
       await session.set('userName', 'Test User');
@@ -251,17 +248,17 @@ export default Page(async function(ctx) {
       return response.redirect('/dashboard');
     }
 
-    return response.error('邮箱或密码错误', 401);
+    return response.error('Invalid email or password', 401);
   }
 
-  // 显示登录表单
+  // Show login form
   return (
     <html>
       <body>
         <form method="POST">
-          <input type="email" name="email" placeholder="邮箱"<input type="password required />
-          " name="password" placeholder="密码" required />
-          <button type="submit">登录</button>
+          <input type="email" name="email" placeholder="Email" required />
+          <input type="password" name="password" placeholder="Password" required />
+          <button type="submit">Login</button>
         </form>
       </body>
     </html>
@@ -275,7 +272,7 @@ export default Page(async function(ctx) {
 
               <div class="example-card">
                 <div class="example-body">
-                  <h3>用户管理 API</h3>
+                  <h3>User Management API</h3>
                   <div class="code-block">
                     <span class="lang">tsx</span>
                     <pre><code>{`// www/api/users.tsp
@@ -283,13 +280,13 @@ export default Page(async function(ctx, { createMySQL, response, z }) {
   const db = await createMySQL({ host: '127.0.0.1', user: 'root', password: 'pass', database: 'test' }, z);
   const UserSchema = z.object({ id: z.number(), name: z.string(), email: z.string() });
 
-  // GET /api/users - 获取用户列表
+  // GET /api/users - List users
   if (ctx.method === 'GET') {
     const users = await db.query(UserSchema, 'SELECT * FROM users');
     return response.json({ data: users });
   }
 
-  // POST /api/users - 创建用户
+  // POST /api/users - Create user
   if (ctx.method === 'POST') {
     const { name, email } = ctx.body as { name: string; email: string };
     const ResultSchema = z.object({ affectedRows: z.number(), insertId: z.number() });
@@ -309,11 +306,11 @@ export default Page(async function(ctx, { createMySQL, response, z }) {
                 </div>
               </div>
 
-              <h2 id="upload">文件上传</h2>
+              <h2 id="upload">File Upload</h2>
 
               <div class="example-card">
                 <div class="example-body">
-                  <h3>处理文件上传</h3>
+                  <h3>Handle File Upload</h3>
                   <div class="code-block">
                     <span class="lang">tsx</span>
                     <pre><code>{`export default Page(async function(ctx, { response }) {
@@ -321,7 +318,7 @@ export default Page(async function(ctx, { createMySQL, response, z }) {
     const file = ctx.files.avatar as UploadedFile;
 
     if (file) {
-      // 保存文件
+      // Save file
       await file.save(\`./uploads/\${file.name}\`);
 
       return response.json({
@@ -331,16 +328,16 @@ export default Page(async function(ctx, { createMySQL, response, z }) {
       });
     }
 
-    return response.error('没有上传文件', 400);
+    return response.error('No file uploaded', 400);
   }
 
-  // 显示上传表单
+  // Show upload form
   return (
     <html>
       <body>
         <form method="POST" enctype="multipart/form-data">
           <input type="file" name="avatar" />
-          <button type="submit">上传</button>
+          <button type="submit">Upload</button>
         </form>
       </body>
     </html>
@@ -350,10 +347,10 @@ export default Page(async function(ctx, { createMySQL, response, z }) {
                 </div>
               </div>
 
-              <h2>了解更多</h2>
+              <h2>Learn More</h2>
               <ul>
-                <li><a href="/features" style={{ color: "#3178c6" }}>功能详情</a> - 了解更多特性</li>
-                <li><a href="/getting-started" style={{ color: "#3178c6" }}>快速开始</a> - 完整入门指南</li>
+                <li><a href="/features" style={{ color: "#3178c6" }}>Features</a> - Learn about all TSP features</li>
+                <li><a href="/getting-started" style={{ color: "#3178c6" }}>Getting Started</a> - Complete setup guide</li>
               </ul>
             </div>
 

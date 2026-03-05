@@ -3,11 +3,11 @@ import { Footer } from "./components/Footer.tsx";
 
 export default Page(async function(ctx) {
   return (
-    <html lang="zh-CN">
+    <html lang="en">
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>快速开始 - TSP</title>
+        <title>Getting Started - TSP</title>
         <style dangerouslySetInnerHTML={{ __html: `
           * { margin: 0; padding: 0; box-sizing: border-box; }
           :root {
@@ -75,20 +75,29 @@ export default Page(async function(ctx) {
               <div class="header-content">
                 <a href="/" class="logo">TSP</a>
                 <nav class="nav-links">
-                  <a href="/getting-started">快速开始</a>
-                  <a href="/features">功能</a>
-                  <a href="/examples">示例</a>
+                  <a href="/getting-started">Getting Started</a>
+                  <a href="/features">Features</a>
+                  <a href="/examples">Examples</a>
                 </nav>
               </div>
             </header>
 
             <div class="content">
-              <h1>快速开始</h1>
-              <p>本指南将帮助你快速搭建 TSP 开发环境并创建第一个页面。</p>
+              <h1>Getting Started</h1>
+              <p>This guide will help you quickly set up TSP and create your first page.</p>
 
               <div class="step">
-                <h2><span class="step-number">1</span>编译 deno-tsp</h2>
-                <p>先编译项目内置的 deno-tsp（无需依赖官方 Deno 可执行文件）：</p>
+                <h2><span class="step-number">1</span>Clone the Project</h2>
+                <div class="code-block">
+                  <span class="lang">bash</span>
+                  <pre><code>git clone https://github.com/risol/tsp.git
+cd tsp</code></pre>
+                </div>
+              </div>
+
+              <div class="step">
+                <h2><span class="step-number">2</span>Build deno-tsp</h2>
+                <p>Build the built-in deno-tsp runtime (no official Deno required):</p>
                 <div class="code-block">
                   <span class="lang">bash</span>
                   <pre><code>sh ./tsp.sh build:denort
@@ -97,30 +106,21 @@ sh ./tsp.sh build:deno</code></pre>
               </div>
 
               <div class="step">
-                <h2><span class="step-number">2</span>克隆项目</h2>
-                <div class="code-block">
-                  <span class="lang">bash</span>
-                  <pre><code>git clone https://github.com/your-repo/tsp.git
-cd tsp</code></pre>
-                </div>
-              </div>
-
-              <div class="step">
-                <h2><span class="step-number">3</span>启动服务器</h2>
-                <p>使用 sh 脚本启动开发服务器：</p>
+                <h2><span class="step-number">3</span>Start the Server</h2>
+                <p>Start the development server:</p>
                 <div class="code-block">
                   <span class="lang">bash</span>
                   <pre><code>sh ./tsp.sh dev</code></pre>
                 </div>
-                <p>服务器将在 <code>http://localhost:9000</code> 启动。</p>
+                <p>Server will start at <code>http://localhost:9000</code>.</p>
                 <div class="note">
-                  <strong>提示：</strong>开发模式下启用热重载，修改文件后会自动重新加载。
+                  <strong>Note:</strong> Hot reload is enabled in dev mode. Changes to files will automatically reload.
                 </div>
               </div>
 
               <div class="step">
-                <h2><span class="step-number">4</span>创建第一个页面</h2>
-                <p>在 <code>www/</code> 目录下创建 <code>hello.tsp</code>：</p>
+                <h2><span class="step-number">4</span>Create Your First Page</h2>
+                <p>Create <code>www/hello.tsp</code> in the www directory:</p>
                 <div class="code-block">
                   <span class="lang">tsx</span>
                   <pre><code>{`export default Page(async function(ctx, { logger }) {
@@ -130,19 +130,19 @@ cd tsp</code></pre>
         <title>Hello TSP</title>
       </head>
       <body>
-        <h1>你好，TSP!</h1>
-        <p>这是我的第一个页面。</p>
+        <h1>Hello, TSP!</h1>
+        <p>This is my first page.</p>
       </body>
     </html>
   );
 });`}</code></pre>
                 </div>
-                <p>访问 <code>http://localhost:9000/hello</code> 即可看到页面。</p>
+                <p>Visit <code>http://localhost:9000/hello</code> to see your page.</p>
               </div>
 
               <div class="step">
-                <h2><span class="step-number">5</span>使用组件</h2>
-                <p>创建可复用的布局组件 <code>www/components/Layout.tsx</code>：</p>
+                <h2><span class="step-number">5</span>Using Components</h2>
+                <p>Create a reusable layout component at <code>www/components/Layout.tsx</code>:</p>
                 <div class="code-block">
                   <span class="lang">tsx</span>
                   <pre><code>{`export function Layout({ title, children }: {
@@ -157,8 +157,8 @@ cd tsp</code></pre>
       </head>
       <body>
         <nav style={{ padding: "16px", background: "#f6f8fa" }}>
-          <a href="/" style={{ marginRight: "16px" }}>首页</a>
-          <a href="/about">关于</a>
+          <a href="/" style={{ marginRight: "16px" }}>Home</a>
+          <a href="/about">About</a>
         </nav>
         <main style={{ padding: "24px" }}>
           {children}
@@ -168,27 +168,27 @@ cd tsp</code></pre>
   );
 }`}</code></pre>
                 </div>
-                <p>在页面中导入使用：</p>
+                <p>Import and use in your page:</p>
                 <div class="code-block">
                   <span class="lang">tsx</span>
                   <pre><code>{`import { Layout } from "./components/Layout.tsx";
 
 export default Page(async function(ctx) {
   return (
-    <Layout title="关于">
-      <h1>关于 TSP</h1>
-      <p>这是一个基于 Deno 的 TypeScript 全栈框架。</p>
+    <Layout title="About">
+      <h1>About TSP</h1>
+      <p>This is a Deno-based TypeScript full-stack framework.</p>
     </Layout>
   );
 });`}</code></pre>
                 </div>
               </div>
 
-              <h2>下一步</h2>
+              <h2>Next Steps</h2>
               <ul>
-                <li><a href="/features" style={{ color: "#3178c6" }}>了解完整功能</a> - 查看所有功能特性</li>
-                <li><a href="/examples" style={{ color: "#3178c6" }}>代码示例</a> - 学习常见场景的实现</li>
-                <li><a href="https://github.com/your-repo/tsp" style={{ color: "#3178c6" }}>GitHub</a> - 查看源码和文档</li>
+                <li><a href="/features" style={{ color: "#3178c6" }}>Features</a> - Learn about all TSP features</li>
+                <li><a href="/examples" style={{ color: "#3178c6" }}>Examples</a> - Code examples for common scenarios</li>
+                <li><a href="https://github.com/risol/tsp" style={{ color: "#3178c6" }}>GitHub</a> - View source code and documentation</li>
               </ul>
             </div>
 
@@ -199,4 +199,3 @@ export default Page(async function(ctx) {
     </html>
   );
 });
-

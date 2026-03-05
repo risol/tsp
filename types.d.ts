@@ -12,6 +12,12 @@ declare global {
   const React: typeof import("react");
 
   /**
+   * Script component - preserves script content without escaping
+   * Use this instead of <script> to avoid React escaping </script> tags
+   */
+  function Script(props: { children?: string } & React.HTMLAttributes<HTMLScriptElement>): JSX.Element;
+
+  /**
    * Zod 类型别名（全局可用）
    * 用于 Schema-first API 的类型定义
    */

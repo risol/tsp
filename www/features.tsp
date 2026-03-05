@@ -1,13 +1,13 @@
-import { Sidebar } from "../components/Sidebar.tsx";
-import { Footer } from "../components/Footer.tsx";
+import { Sidebar } from "./components/Sidebar.tsx";
+import { Footer } from "./components/Footer.tsx";
 
 export default Page(async function(ctx) {
   return (
-    <html lang="zh-CN">
+    <html lang="en">
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>功能特性 - TSP</title>
+        <title>Features - TSP</title>
         <style dangerouslySetInnerHTML={{ __html: `
           * { margin: 0; padding: 0; box-sizing: border-box; }
           :root {
@@ -40,7 +40,7 @@ export default Page(async function(ctx) {
           .main { margin-left: var(--sidebar-width); flex: 1; }
           .header { border-bottom: 1px solid var(--border); padding: 16px 32px; background: var(--bg); }
           .header-content { max-width: 1200px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; }
-          .logo { font-size: 20px; font-weight: 600; color: var(--primary); text-decoration: none; }
+          .logo { font-size: 20px; fontWeight: 600; color: var(--primary); text-decoration: none; }
           .nav-links { display: flex; gap: 24px; }
           .nav-links a { color: var(--text); text-decoration: none; font-size: 14px; }
           .nav-links a:hover { color: var(--primary); }
@@ -81,145 +81,145 @@ export default Page(async function(ctx) {
               <div class="header-content">
                 <a href="/" class="logo">TSP</a>
                 <nav class="nav-links">
-                  <a href="/getting-started">快速开始</a>
-                  <a href="/features">功能</a>
-                  <a href="/examples">示例</a>
+                  <a href="/getting-started">Getting Started</a>
+                  <a href="/features">Features</a>
+                  <a href="/examples">Examples</a>
                 </nav>
               </div>
             </header>
 
             <div class="content">
-              <h1>功能特性</h1>
-              <p>TSP 是基于 Deno 的 TypeScript 全栈框架，提供同进程热更新、类型安全依赖注入与工程化部署能力。</p>
+              <h1>Features</h1>
+              <p>TSP is a Deno-based TypeScript full-stack framework with hot reload, type-safe dependency injection, and production deployment support.</p>
 
               <div class="feature-section">
-                <h2><span class="feature-icon">🔥</span>热重载</h2>
-                <p>修改文件后立即生效，无需手动重启服务器。</p>
+                <h2><span class="feature-icon">Hot Reload</h2>
+                <p>Changes take effect immediately without manual server restart.</p>
                 <ul>
-                  <li>支持任意层级的嵌套依赖</li>
-                  <li>智能缓存，只重新编译修改的文件</li>
-                  <li>并发请求下保证缓存一致性</li>
+                  <li>Supports nested dependencies at any depth</li>
+                  <li>Smart caching - only recompiles modified files</li>
+                  <li>Cache consistency under concurrent requests</li>
                 </ul>
                 <div class="feature-card">
-                  <h3>工作原理</h3>
-                  <p>TSP 使用基于文件修改时间 (mtime) 的缓存机制。当文件发生变化时，会自动清除缓存并重新编译。所有依赖该文件的模块也会被递归清除缓存。</p>
+                  <h3>How It Works</h3>
+                  <p>TSP uses mtime-based caching. When a file changes, it automatically clears the cache and recompiles. All modules depending on that file are recursively cleared.</p>
                 </div>
               </div>
 
               <div class="feature-section">
-                <h2><span class="feature-icon">💎</span>类型安全</h2>
-                <p>完整的 TypeScript 支持，从数据验证到数据库查询，全程类型安全。</p>
+                <h2><span class="feature-icon">Type Safety</h2>
+                <p>Full TypeScript support, from data validation to database queries.</p>
                 <ul>
-                  <li>全局类型声明，无需手动导入</li>
-                  <li>依赖注入系统提供完整的类型推断</li>
-                  <li>Schema-first 数据验证</li>
+                  <li>Global type declarations - no manual imports needed</li>
+                  <li>Dependency injection provides complete type inference</li>
+                  <li>Schema-first data validation</li>
                 </ul>
               </div>
 
               <div class="feature-section">
-                <h2><span class="feature-icon">🗄️</span>数据库集成</h2>
-                <p>内置 MySQL、Redis、LDAP 支持，所有 API 都是类型安全的。</p>
+                <h2><span class="feature-icon">Database Integration</h2>
+                <p>Built-in MySQL, Redis, LDAP support, all with type-safe APIs.</p>
 
                 <h3>MySQL Schema-first API</h3>
                 <table>
                   <tr>
-                    <th>方法</th>
-                    <th>说明</th>
+                    <th>Method</th>
+                    <th>Description</th>
                   </tr>
                   <tr>
                     <td><code>query</code></td>
-                    <td>多行查询</td>
+                    <td>Multi-row query</td>
                   </tr>
                   <tr>
                     <td><code>queryOne</code></td>
-                    <td>严格单行（0行或多行报错）</td>
+                    <td>Single row (throws if 0 or multiple rows)</td>
                   </tr>
                   <tr>
                     <td><code>queryMaybe</code></td>
-                    <td>可选单行（0行返回 null）</td>
+                    <td>Optional single row (returns null if 0 rows)</td>
                   </tr>
                   <tr>
                     <td><code>scalar</code></td>
-                    <td>单值查询</td>
+                    <td>Single value query</td>
                   </tr>
                   <tr>
                     <td><code>execute</code></td>
-                    <td>写操作（INSERT/UPDATE/DELETE）</td>
+                    <td>Write operations (INSERT/UPDATE/DELETE)</td>
                   </tr>
                   <tr>
                     <td><code>tx</code></td>
-                    <td>事务操作</td>
+                    <td>Transaction</td>
                   </tr>
                   <tr>
                     <td><code>queryPage</code></td>
-                    <td>分页查询</td>
+                    <td>Paginated query</td>
                   </tr>
                 </table>
               </div>
 
               <div class="feature-section">
-                <h2><span class="feature-icon">⚙️</span>依赖注入</h2>
-                <p>类型安全的依赖注入系统，按需加载，提升性能。</p>
+                <h2><span class="feature-icon">Dependency Injection</h2>
+                <p>Type-safe dependency injection system with on-demand loading.</p>
                 <div class="code-block">
                   <span class="lang">tsx</span>
-                  <pre><code>{`// 在页面函数中直接使用依赖
+                  <pre><code>{`// Use dependencies directly in page function
 export default Page(async function(ctx, { session, createMySQL, logger }) {
-  // logger - 日志记录
-  logger.info('页面加载');
+  // logger - logging
+  logger.info('Page loaded');
 
-  // session - 会话管理
+  // session - session management
   await session.init();
   await session.set('userId', '123');
 
-  // createMySQL - 数据库连接
+  // createMySQL - database connection
   const db = await createMySQL({ host: 'localhost', user: 'root', password: '123456', database: 'test' });
 
   const users = await db.query('SELECT * FROM users');
-  return <div>用户数: {users.length}</div>;
+  return <div>User count: {users.length}</div>;
 });`}</code></pre>
                 </div>
               </div>
 
               <div class="feature-section">
-                <h2><span class="feature-icon">📦</span>开箱即用</h2>
-                <p>内置多种功能，无需额外安装：</p>
+                <h2><span class="feature-icon">Out of the Box</h2>
+                <p>Built-in features, no extra installation needed:</p>
                 <ul>
-                  <li><strong>Session 管理</strong> - 安全可靠的会话存储</li>
-                  <li><strong>Cookies</strong> - 便捷的 Cookie 操作</li>
-                  <li><strong>文件上传</strong> - 支持多文件、大文件</li>
-                  <li><strong>静态文件</strong> - HTML、CSS、JS、图片等</li>
-                  <li><strong>文件管理器</strong> <span class="badge new">NEW</span> - Web 界面的文件管理</li>
-                  <li><strong>访问日志</strong> - 可配置的访问日志</li>
+                  <li><strong>Session</strong> - Secure and reliable session storage</li>
+                  <li><strong>Cookies</strong> - Easy cookie operations</li>
+                  <li><strong>File Upload</strong> - Multi-file, large file support</li>
+                  <li><strong>Static Files</strong> - HTML, CSS, JS, images, etc.</li>
+                  <li><strong>File Manager</strong> <span class="badge new">NEW</span> - Web-based file management</li>
+                  <li><strong>Access Log</strong> - Configurable access logging</li>
                 </ul>
               </div>
 
               <div class="feature-section">
-                <h2><span class="feature-icon">🔧</span>配置灵活</h2>
-                <p>支持 JSON/JSONC 配置文件，修改后自动生效。</p>
+                <h2><span class="feature-icon">Flexible Configuration</h2>
+                <p>JSON/JSONC config support. Changes take effect automatically.</p>
                 <div class="code-block">
                   <span class="lang">jsonc</span>
                   <pre><code>{`{
-  // 基础配置
+  // Basic config
   "root": "./www",
   "port": 9000,
 
-  // 热重载配置
+  // Hot reload
   "hotReload": true,
 
-  // Session 配置
+  // Session config
   "session": {
     "secure": false,
     "maxAge": 86400,
     "sameSite": "Strict"
   },
 
-  // 日志配置
+  // Logger config
   "logger": {
     "level": "INFO",
     "file": ".logs/app.log"
   },
 
-  // 文件管理器
+  // File manager
   "fileManager": {
     "enabled": true,
     "path": "/__filemanager",
@@ -230,23 +230,23 @@ export default Page(async function(ctx, { session, createMySQL, logger }) {
               </div>
 
               <div class="feature-section">
-                <h2><span class="feature-icon">🌐</span>跨平台编译</h2>
-                <p>支持编译为独立的可执行文件，可在 Windows、Linux、macOS 上运行。</p>
+                <h2><span class="feature-icon">Cross-Platform Build</h2>
+                <p>Compile to standalone executables for Windows, Linux, and macOS.</p>
                 <div class="code-block">
                   <span class="lang">bash</span>
-                  <pre><code># 构建发布包（支持多平台）
-deno task build
+                  <pre><code># Build release package (cross-platform)
+sh ./tsp.sh build:tspserver:rel
 
-# 构建产物在 release/ 目录
+# Output in release/ directory
 cd release
 ./tspserver --root ./www --port 9000</code></pre>
                 </div>
               </div>
 
-              <h2>更多功能</h2>
+              <h2>More</h2>
               <ul>
-                <li><a href="/examples" style={{ color: "#3178c6" }}>代码示例</a> - 查看更多使用场景</li>
-                <li><a href="https://github.com/your-repo/tsp" style={{ color: "#3178c6" }}>GitHub</a> - 查看完整文档</li>
+                <li><a href="/examples" style={{ color: "#3178c6" }}>Examples</a> - More usage scenarios</li>
+                <li><a href="https://github.com/risol/tsp" style={{ color: "#3178c6" }}>GitHub</a> - Full documentation</li>
               </ul>
             </div>
 

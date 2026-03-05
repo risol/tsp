@@ -690,24 +690,9 @@ async function handleRequest(
     try {
       pageModule = await import(fileUrl);
     } catch (importError) {
-      // Get original error message
-      const err = importError instanceof Error ? importError : new Error(String(importError));
-      const errMsg = err.message;
-      const stack = err.stack || "";
-
-      // Build detailed error message
-      const detail = `Module load failed
-
-Request URL: ${req.url}
-Main file: ${filepath}
-
-Deno original error:
-${errMsg}
-
-Full stack:
-${stack}`;
-
-      throw new Error(detail);
+      // Re-throw with simplified message, detailed info will be in catch block
+      const errMsg = importError instanceof Error ? importError.message : String(importError);
+      throw new Error(`Module load failed: ${errMsg}`);
     }
 
     pageFn = pageModule.default;
@@ -814,6 +799,7 @@ ${stack}`;
 
     if (config.dev) {
       // Development mode: show detailed error
+      const errorType = error instanceof Error ? error.name : "Error";
       const html = `
 <!DOCTYPE html>
 <html>
@@ -821,28 +807,88 @@ ${stack}`;
   <meta charset="utf-8">
   <title>500 - Server Error</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 900px; margin: 50px auto; padding: 20px; }
-    h1 { color: #d32f2f; }
-    h3 { color: #666; margin-top: 20px; }
-    pre { background: #f5f5f5; padding: 12px; border-radius: 4px; overflow-x: auto; font-size: 13px; white-space: pre-wrap; word-break: break-all; }
-    code { background: #eee; padding: 2px 6px; border-radius: 3px; }
-    .info { background: #e3f2fd; padding: 12px; border-radius: 4px; margin-bottom: 16px; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'SF Mono', Consolas, 'Courier New', monospace;
+      background: #fff;
+      color: #333;
+      font-size: 13px;
+      line-height: 1.5;
+      padding: 24px;
+    }
+    .error-header {
+      margin-bottom: 20px;
+    }
+    .error-title {
+      color: #d32f2f;
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .error-type {
+      color: #888;
+      font-size: 12px;
+    }
+    .info-row {
+      display: flex;
+      margin-bottom: 8px;
+    }
+    .info-label {
+      color: #666;
+      width: 80px;
+      flex-shrink: 0;
+    }
+    .info-value {
+      color: #333;
+      word-break: break-all;
+    }
+    .error-msg {
+      color: #d32f2f;
+      margin: 16px 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .stack {
+      color: #666;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 300px;
+      overflow-y: auto;
+      background: #f5f5f5;
+      padding: 12px;
+    }
   </style>
 </head>
 <body>
-  <h1>500 Internal Server Error</h1>
-
-  <div class="info">
-    <strong>Request URL:</strong> ${req.url}<br/>
-    <strong>Request Method:</strong> ${req.method}<br/>
-    <strong>Main File:</strong> <code>${filepath}</code>
+  <div class="error-header">
+    <div class="error-title">500 Internal Server Error</div>
+    <div class="error-type">${errorType}</div>
   </div>
 
-  <h3>Deno Error:</h3>
-  <pre>${errorMessage}</pre>
+  <div class="info-row">
+    <span class="info-label">Time:</span>
+    <span class="info-value">${new Date().toISOString()}</span>
+  </div>
+  <div class="info-row">
+    <span class="info-label">URL:</span>
+    <span class="info-value">${req.url}</span>
+  </div>
+  <div class="info-row">
+    <span class="info-label">Method:</span>
+    <span class="info-value">${req.method}</span>
+  </div>
+  <div class="info-row">
+    <span class="info-label">Referer:</span>
+    <span class="info-value">${req.headers.get('referer') || '-'}</span>
+  </div>
+  <div class="info-row">
+    <span class="info-label">File:</span>
+    <span class="info-value">${filepath}</span>
+  </div>
 
-  <h3>Full Stack:</h3>
-  <pre>${stackTrace}</pre>
+  <div class="error-msg">${errorMessage}</div>
+
+  <div class="stack">${stackTrace}</div>
 </body>
 </html>
       `.trim();
@@ -851,15 +897,14 @@ ${stack}`;
         headers: { "Content-Type": "text/html; charset=utf-8" },
       });
     } else {
-      // Production mode: show brief error message
+      // Production mode: show generic error message
       const html = `
 <!DOCTYPE html>
 <html>
 <head><title>Error</title></head>
 <body>
   <h1>500 Internal Server Error</h1>
-  <p>Request processing failed: ${errorMessage.split('\n')[0]}</p>
-  <p>File: ${filepath}</p>
+  <p>An internal server error occurred.</p>
 </body>
 </html>
       `.trim();
@@ -1050,6 +1095,11 @@ Starting server...
       path: config.fileManager.path || "/__filemanager",
       note: "Config file changes will auto-reload",
     });
+  }
+
+  // Print config file info
+  if (configFilepath) {
+    console.log(`✓ Using config file: ${configFilepath}`);
   }
 
   // Start HTTP server

@@ -4,7 +4,7 @@ import { Footer } from "./components/Footer.tsx";
 
 export default Page(async function(ctx) {
   return (
-    <html lang="zh-CN">
+    <html lang="en">
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -86,9 +86,9 @@ export default Page(async function(ctx) {
               <div class="header-content">
                 <a href="/" class="logo">TSP</a>
                 <nav class="nav-links">
-                  <a href="/getting-started">快速开始</a>
-                  <a href="/features">功能</a>
-                  <a href="/examples">示例</a>
+                  <a href="/getting-started">Getting Started</a>
+                  <a href="/features">Features</a>
+                  <a href="/examples">Examples</a>
                 </nav>
               </div>
             </header>
@@ -96,100 +96,100 @@ export default Page(async function(ctx) {
             <div class="content">
               <h1>TSP: TypeScript Full-Stack Framework</h1>
               <p style={{ fontSize: "18px" }}>
-                基于 Deno 的 TypeScript 全栈框架，使用 .tsp/.tsx 文件路由构建现代 Web 应用
+                A Deno-based TypeScript full-stack framework. Write .tsp/.tsx files as routes to build modern web applications.
               </p>
 
               <div class="cta">
-                <a href="/getting-started" class="btn">快速开始</a>
-                <a href="/features" class="btn btn-secondary">了解更多</a>
+                <a href="/getting-started" class="btn">Get Started</a>
+                <a href="/features" class="btn btn-secondary">Learn More</a>
               </div>
 
-              <h2>为什么选择 TSP?</h2>
+              <h2>Why TSP?</h2>
 
               <div class="feature-grid">
                 <div class="feature-card">
-                  <h3>🚀 简单易用</h3>
-                  <p>像 PHP 一样直接执行 .tsp 文件，无需复杂的构建配置，写完即可运行。</p>
+                  <h3>Simple</h3>
+                  <p>Execute .tsp files directly like PHP. No complex build config needed. Write and run.</p>
                 </div>
                 <div class="feature-card">
-                  <h3>🔥 热重载</h3>
-                  <p>修改文件后立即生效，支持任意层级的嵌套依赖，开发体验极佳。</p>
+                  <h3>Hot Reload</h3>
+                  <p>Changes take effect immediately. Supports nested dependencies at any depth.</p>
                 </div>
                 <div class="feature-card">
-                  <h3>💎 类型安全</h3>
-                  <p>完整的 TypeScript 支持，依赖注入系统提供完整的类型推断。</p>
+                  <h3>Type Safe</h3>
+                  <p>Full TypeScript support with complete type inference through dependency injection.</p>
                 </div>
                 <div class="feature-card">
-                  <h3>🗄️ 数据库集成</h3>
-                  <p>Schema-first MySQL/Redis/LDAP 支持，类型安全的数据库查询 API。</p>
+                  <h3>Database</h3>
+                  <p>Schema-first MySQL/Redis/LDAP support with type-safe database query APIs.</p>
                 </div>
                 <div class="feature-card">
-                  <h3>📦 功能完整</h3>
-                  <p>Session、Cookies、文件上传、静态文件服务等，开箱即用。</p>
+                  <h3>Full-Featured</h3>
+                  <p>Built-in Session, Cookies, File Upload, Static Files, and more. Ready to use.</p>
                 </div>
                 <div class="feature-card">
-                  <h3>🔧 配置灵活</h3>
-                  <p>配置文件支持 JSON/JSONC，修改后自动生效，无需重启服务器。</p>
+                  <h3>Flexible Config</h3>
+                  <p>JSON/JSONC config support. Changes take effect automatically without server restart.</p>
                 </div>
               </div>
 
-              <h2>安装使用</h2>
+              <h2>Installation</h2>
 
-              <p>使用项目内置的 deno-tsp 运行时，无需依赖官方 Deno 可执行文件：</p>
+              <p>Use the built-in deno-tsp runtime (no official Deno required):</p>
 
               <div class="code-block">
                 <span class="lang">bash</span>
-                <pre><code># 编译 deno-tsp
+                <pre><code># Build deno-tsp
 sh ./tsp.sh build:denort
 sh ./tsp.sh build:deno
 
-# 启动开发服务器
+# Start dev server
 sh ./tsp.sh dev</code></pre>
               </div>
 
-              <p>常用命令：</p>
+              <p>Common commands:</p>
 
               <div class="code-block">
                 <span class="lang">bash</span>
-                <pre><code># 生产模式
+                <pre><code># Production mode
 sh ./tsp.sh start
 
-# 编译二进制
+# Build binary
 sh ./tsp.sh build:tspserver
 sh ./tsp.sh build:tspserver:rel</code></pre>
               </div>
 
-              <h2>创建你的第一个页面</h2>
+              <h2>Create Your First Page</h2>
 
-              <p>在 <code>www/</code> 目录下创建 <code>index.tsp</code>：</p>
+              <p>Create <code>www/hello.tsp</code> in the www directory:</p>
 
               <div class="code-block">
                 <span class="lang">tsx</span>
                 <pre><code>{`export default Page(async function(ctx, { logger }) {
-  logger.info('首页被访问');
+  logger.info('Home page visited');
 
   return (
     <html>
       <head>
-        <title>我的 TSP 网站</title>
+        <title>My TSP Website</title>
       </head>
       <body>
-        <h1>欢迎来到 TSP!</h1>
-        <p>当前时间: {new Date().toLocaleString()}</p>
+        <h1>Welcome to TSP!</h1>
+        <p>Current time: {new Date().toLocaleString()}</p>
       </body>
     </html>
   );
 });`}</code></pre>
               </div>
 
-              <p>然后访问 <code>http://localhost:9000</code> 即可看到页面。</p>
+              <p>Then visit <code>http://localhost:9000/hello</code> to see your page.</p>
 
-              <h2>下一步</h2>
+              <h2>Next Steps</h2>
 
               <ul>
-                <li><a href="/getting-started">快速开始</a> - 完整的安装和配置指南</li>
-                <li><a href="/features">功能详情</a> - 了解更多特性</li>
-                <li><a href="/examples">代码示例</a> - 常见场景的代码示例</li>
+                <li><a href="/getting-started">Getting Started</a> - Complete installation and setup guide</li>
+                <li><a href="/features">Features</a> - Learn more about TSP features</li>
+                <li><a href="/examples">Examples</a> - Code examples for common scenarios</li>
               </ul>
             </div>
 
@@ -200,4 +200,3 @@ sh ./tsp.sh build:tspserver:rel</code></pre>
     </html>
   );
 });
-

@@ -396,16 +396,14 @@ build_deno_linux_native_dev() {
 
 # Run development server
 run_dev() {
-    deno_bin
     deno_bin="$(get_deno_bin debug)"
     ensure_deno_bin "$deno_bin"
 
-    "$deno_bin" run --watch --dynamic-import-no-cache --allow-all "$PROJECT_ROOT/src/main.ts" --dev
+    "$deno_bin" run --watch --allow-all "$PROJECT_ROOT/src/main.ts" --dev
 }
 
 # Run production server
 run_start() {
-    deno_bin
     deno_bin="$(get_deno_bin debug)"
     ensure_deno_bin "$deno_bin"
 
@@ -527,15 +525,12 @@ build_tspserver() {
         cp "$PROJECT_ROOT/config.example.json" "$output_dir/"
     fi
 
-    # Copy types.d.ts
-    if [ -f "$PROJECT_ROOT/types.d.ts" ]; then
-        cp "$PROJECT_ROOT/types.d.ts" "$output_dir/"
-    fi
+    # Copy www directory
+    cp -r "$PROJECT_ROOT/www" "$output_dir/"
 
-    # Create www directory and copy CLAUDE_GUIDE_README.md
-    mkdir -p "$output_dir/www"
-    if [ -f "$PROJECT_ROOT/www/CLAUDE_GUIDE_README.md" ]; then
-        cp "$PROJECT_ROOT/www/CLAUDE_GUIDE_README.md" "$output_dir/www/"
+    # Copy types.d.ts to www directory (overwrite if exists)
+    if [ -f "$PROJECT_ROOT/types.d.ts" ]; then
+        cp "$PROJECT_ROOT/types.d.ts" "$output_dir/www/"
     fi
 
     echo ""
