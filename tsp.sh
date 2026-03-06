@@ -1,6 +1,5 @@
-#!/bin/sh
+#!/bin/bash
 # TSP development script - unified entry point
-# POSIX-compliant: works with sh, dash, bash, etc.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
@@ -578,9 +577,6 @@ run_e2e() {
 package() {
     build_type="${1:-release}"  # release or debug
     target_os="${2:-}"  # win, linux, or empty for auto-detect
-    os_type
-    arch
-    version
     dist_base="$PROJECT_ROOT/dist"
 
     # Auto-detect OS if not specified
@@ -779,11 +775,11 @@ case "$COMMAND" in
     test:e2e)
         run_e2e
         ;;
-    package)
+    package|package:win|package:linux|package:release|package:debug)
         # Support: package, package:win, package:linux (with optional :debug or :release)
-        if [[ "$1" == package:* ]]; then
+        if [[ "$COMMAND" == package:* ]]; then
             # Extract os type from command (e.g., package:win:release -> win, release)
-            cmd="${1#package:}"
+            cmd="${COMMAND#package:}"
             os_type="${cmd%%:*}"  # win or linux
             rest="${cmd#*:}"       # release or debug
             if [ "$rest" = "$os_type" ] || [ -z "$rest" ]; then
@@ -794,8 +790,13 @@ case "$COMMAND" in
             fi
             package "$build_type" "$os_type"
         else
-            package "${2:-release}" ""
+            package "release" ""
         fi
+        ;;
+    package:win:debug|package:linux:debug)
+        cmd="${COMMAND#package:}"
+        os_type="${cmd%%:*}"
+        package "debug" "$os_type"
         ;;
     check)
         run_check
