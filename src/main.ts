@@ -286,6 +286,17 @@ async function reloadConfigIfNeeded(logger?: Logger): Promise<Config> {
       currentConfig = loadedConfig;
       configMtime = newMtime;
 
+      // Resolve root directory to absolute path
+      // Use config file directory as base path (important for binary mode)
+      const configDir = dirname(configFilepath);
+      const rootPath = currentConfig.root;
+      // If root is relative path, resolve relative to config file directory
+      if (!rootPath.startsWith("/") && !rootPath.match(/^[a-zA-Z]:/)) {
+        currentConfig.root = resolve(configDir, rootPath);
+      } else {
+        currentConfig.root = resolve(rootPath);
+      }
+
       // Validate file manager config
       if (currentConfig.fileManager) {
         const validated = validateFileManagerConfig(currentConfig.fileManager);
@@ -923,8 +934,19 @@ async function main(): Promise<void> {
 
   const config = await parseArgs(tempLogger);
 
-  // Resolve root directory to absolute path
-  config.root = resolve(config.root);
+  // Resolve root directory to absolute path (same logic as config reload)
+  const rootPath = config.root;
+  if (configFilepath) {
+    const configDir = dirname(configFilepath);
+    // If root is relative path, resolve relative to config file directory
+    if (!rootPath.startsWith("/") && !rootPath.match(/^[a-zA-Z]:/)) {
+      config.root = resolve(configDir, rootPath);
+    } else {
+      config.root = resolve(rootPath);
+    }
+  } else {
+    config.root = resolve(rootPath);
+  }
 
   // Register dependency injection function (type-safe version)
   registerDep("testFunc", () => {

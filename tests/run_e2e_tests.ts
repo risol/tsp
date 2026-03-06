@@ -71,14 +71,18 @@ function getVersion(): string {
  * Get OS type (same as tsp.sh)
  */
 function getOsType(): string {
+  // Match the behavior of tsp.sh get_os_type function
+  // Windows: CYGWIN*|MINGW*|MSYS* -> "win"
+  // Linux: Linux -> "linux"
+  // macOS: Darwin -> "macos"
   const platform = Deno.build.os;
   switch (platform) {
     case "windows":
-      return "windows";
+      return "win";
     case "linux":
       return "linux";
     case "darwin":
-      return "darwin";
+      return "macos";
     default:
       return platform;
   }
@@ -3531,7 +3535,7 @@ export default Page(async function(ctx) {
     },
   });
 
-  // Test 14: Dependency missing Fallback test
+  // Test 15: Dependency missing Fallback test
   tests.push({
     name: "cache - Dependency missing auto-recompile",
     fn: async () => {
@@ -3686,7 +3690,236 @@ export default Page(async function(ctx) {
     },
   });
 
-  // Test 12: Hot reload config test
+  // Test 13: Config reload with relative root path test
+  // This test specifically tests the issue where routes fail but __filemanager
+  // still works after modifying config.jsonc with relative root paths
+  tests.push({
+    name: "config reload - Relative root path reload test",
+    fn: async () => {
+      const startTime = Date.now();
+
+      printSubsection("Config Reload - Relative Root Path Test");
+
+      // Use independent port and config file
+      const RELOAD_TEST_PORT = 9101;
+
+      // Determine paths based on current directory
+      const cwd = Deno.cwd();
+      let projectRoot: string;
+      let testRoot: string;
+
+      if (cwd.endsWith("tests")) {
+        projectRoot = "..";
+        testRoot = "./test_www";
+      } else if (cwd.endsWith("tsp")) {
+        projectRoot = ".";
+        testRoot = "./tests/test_www";
+      } else {
+        throw new Error(`Cannot determine project root. Current directory: ${cwd}`);
+      }
+
+      // Create a relative root path (simulating "./www" in config.jsonc)
+      // Use relative path from project root
+      const relativeRoot = "./tests/test_www";
+
+      const testConfigFile = "test_relative_root.jsonc";
+      const testConfigPath = `${projectRoot}/${testConfigFile}`;
+
+      // Get binary path - prefer dev build, fallback to release
+      let binaryPath: string;
+      try {
+        binaryPath = getBinaryPath();
+        // Verify binary exists
+        await Deno.stat(binaryPath);
+      } catch {
+        // Fallback to release binary if dev not available
+        binaryPath = `${projectRoot}/dist/win-x64-v0.1.0/tspserver.exe`;
+      }
+
+      // Create test page for verification
+      const testPageContent = `
+export default function() {
+  return <div>Config reload test - relative root path works!</div>;
+}
+`;
+      const testPagePath = `${testRoot}/config_reload_test.tsp`;
+      await Deno.writeTextFile(testPagePath, testPageContent);
+
+      const initialPassword = "test123456";
+
+      // Cleanup any existing test config
+      try {
+        await Deno.remove(testConfigPath);
+      } catch {
+        // Ignore
+      }
+
+      let testServer: Deno.ChildProcess | null = null;
+
+      try {
+        // Step 1: Create initial config with relative root path
+        console.log(`  ${COLORS.dim}Step 1: Create config with relative root path${COLORS.reset}`);
+        const initialConfig = {
+          root: relativeRoot,
+          port: RELOAD_TEST_PORT,
+          dev: true,
+          fileManager: {
+            enabled: true,
+            path: "/__filemanager",
+            password: initialPassword,
+            allowOutsideRoot: false,
+            deniedPaths: [".git", ".deno", "node_modules", ".cache"],
+            maxUploadSize: 104857600,
+          },
+        };
+
+        await Deno.writeTextFile(
+          testConfigPath,
+          JSON.stringify(initialConfig, null, 2),
+        );
+
+        console.log(`  ${COLORS.dim}Config file: ${testConfigPath}${COLORS.reset}`);
+        console.log(`  ${COLORS.dim}Relative root: ${relativeRoot}${COLORS.reset}`);
+        printTestResult("Create initial config", true);
+
+        // Step 2: Start server from project root directory
+        console.log(`  ${COLORS.dim}Step 2: Start server from project root${COLORS.reset}`);
+
+        console.log(`  ${COLORS.dim}Binary path: ${binaryPath}${COLORS.reset}`);
+
+        // Start server WITHOUT specifying --root (let config file provide it)
+        testServer = new Deno.Command(binaryPath, {
+          args: [
+            "--config",
+            testConfigPath,
+            "--port",
+            RELOAD_TEST_PORT.toString(),
+            "--dev",
+          ],
+          cwd: projectRoot === "." ? Deno.cwd() : undefined,
+          stdout: "piped",
+          stderr: "piped",
+        }).spawn();
+
+        // Wait for server to start
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        printTestResult("Server started", true);
+
+        // Step 3: Verify initial access works (route and filemanager)
+        console.log(`  ${COLORS.dim}Step 3: Verify initial access works${COLORS.reset}`);
+
+        // Test route access
+        const initialResponse = await fetch(
+          `http://localhost:${RELOAD_TEST_PORT}/config_reload_test.tsp`,
+        );
+        const initialText = await initialResponse.text();
+
+        if (!initialText.includes("Config reload test")) {
+          throw new Error(
+            `Initial route access failed. Status: ${initialResponse.status}, Body: ${initialText.substring(0, 200)}`,
+          );
+        }
+        printTestResult("Initial route access works", true);
+
+        // Test filemanager access
+        const fmInitialResponse = await fetch(
+          `http://localhost:${RELOAD_TEST_PORT}/__filemanager/api/login`,
+          { method: "POST", body: JSON.stringify({ password: initialPassword }) },
+        );
+        if (fmInitialResponse.status !== 200) {
+          throw new Error(
+            `Initial filemanager access failed. Status: ${fmInitialResponse.status}`,
+          );
+        }
+        printTestResult("Initial filemanager access works", true);
+
+        // Step 4: Modify config file (change password to trigger reload)
+        console.log(`  ${COLORS.dim}Step 4: Modify config file to trigger reload${COLORS.reset}`);
+        const newPassword = "newpassword789";
+
+        const modifiedConfig = {
+          ...initialConfig,
+          fileManager: {
+            ...initialConfig.fileManager,
+            password: newPassword,
+          },
+        };
+
+        await Deno.writeTextFile(
+          testConfigPath,
+          JSON.stringify(modifiedConfig, null, 2),
+        );
+
+        // Wait for config reload to happen
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        printTestResult("Config file modified", true);
+
+        // Step 5: Verify route still works after config reload
+        console.log(`  ${COLORS.dim}Step 5: Verify route works after config reload${COLORS.reset}`);
+
+        const afterReloadResponse = await fetch(
+          `http://localhost:${RELOAD_TEST_PORT}/config_reload_test.tsp`,
+        );
+        const afterReloadText = await afterReloadResponse.text();
+
+        if (!afterReloadText.includes("Config reload test")) {
+          throw new Error(
+            `Route failed after config reload! Status: ${afterReloadResponse.status}, Body: ${afterReloadText.substring(0, 200)}`,
+          );
+        }
+        printTestResult("Route works after config reload", true);
+
+        // Step 6: Verify filemanager uses new password (confirms reload happened)
+        console.log(`  ${COLORS.dim}Step 6: Verify config reload was applied${COLORS.reset}`);
+
+        // Try old password - should fail
+        const oldPwdResponse = await fetch(
+          `http://localhost:${RELOAD_TEST_PORT}/__filemanager/api/login`,
+          { method: "POST", body: JSON.stringify({ password: initialPassword }) },
+        );
+        const oldPwdText = await oldPwdResponse.json();
+
+        if (oldPwdResponse.status === 200 && oldPwdText.success) {
+          throw new Error(
+            "Old password still works - config reload did not happen!",
+          );
+        }
+        printTestResult("Old password no longer works (config reloaded)", true);
+
+        // Try new password - should work
+        const newPwdResponse = await fetch(
+          `http://localhost:${RELOAD_TEST_PORT}/__filemanager/api/login`,
+          { method: "POST", body: JSON.stringify({ password: newPassword }) },
+        );
+        const newPwdText = await newPwdResponse.json();
+
+        if (newPwdResponse.status !== 200 || !newPwdText.success) {
+          throw new Error(
+            `New password doesn't work! Status: ${newPwdResponse.status}, Response: ${JSON.stringify(newPwdText)}`,
+          );
+        }
+        printTestResult("New password works (config reloaded)", true);
+
+        const duration = Date.now() - startTime;
+        console.log(`  ${COLORS.dim}${duration}ms${COLORS.reset}`);
+      } finally {
+        // Cleanup
+        if (testServer) {
+          testServer.kill();
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+
+        try {
+          await Deno.remove(testConfigPath);
+          await Deno.remove(testPagePath);
+        } catch {
+          // Ignore
+        }
+      }
+    },
+  });
+
+  // Test 14: Hot reload config test
   // Test hotReload configuration item behavior
   tests.push({
     name: "config reload - Hot reload config change test",
@@ -3935,7 +4168,7 @@ export default Page(async function(ctx) {
     },
   });
 
-  // Test 14: Cleanup resources
+  // Test 16: Cleanup resources
   tests.push({
     name: "binary build - Stop server",
     fn: async () => {

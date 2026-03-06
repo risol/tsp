@@ -6,16 +6,23 @@
 
 declare global {
   /**
-   * React 全局变量
-   * 用于 JSX 转换（经典 React 运行时）
+   * HTML 元素属性接口（兼容 React HTMLAttributes）
    */
-  const React: typeof import("react");
+  interface HTMLAttributesBase {
+    class?: string;
+    className?: string;
+    style?: string | Record<string, string>;
+    id?: string;
+    key?: string | number;
+    ref?: any;
+    [key: string]: any;
+  }
 
   /**
    * Script component - preserves script content without escaping
    * Use this instead of <script> to avoid React escaping </script> tags
    */
-  function Script(props: { children?: string } & React.HTMLAttributes<HTMLScriptElement>): JSX.Element;
+  function Script(props: { children?: string } & HTMLAttributesBase): any;
 
   /**
    * Zod 类型别名（全局可用）
