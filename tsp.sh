@@ -577,12 +577,18 @@ run_e2e() {
 # Package build output
 package() {
     build_type="${1:-release}"  # release or debug
+    target_os="${2:-}"  # win, linux, or empty for auto-detect
     os_type
     arch
     version
     dist_base="$PROJECT_ROOT/dist"
 
-    os_type="$(get_os_type)"
+    # Auto-detect OS if not specified
+    if [ -z "$target_os" ]; then
+        os_type="$(get_os_type)"
+    else
+        os_type="$target_os"
+    fi
     arch="$(get_arch)"
     version="$(get_version)"
 
@@ -672,7 +678,9 @@ show_help() {
     echo "  build:tspserver:win:dev  Build TSP server for Windows (debug)"
     echo "  build:tspserver:linux    Build TSP server for Linux (release)"
     echo "  build:tspserver:linux:dev Build TSP server for Linux (debug)"
-    echo "  package                   Package build output to zip/tar.gz"
+    echo "  package                   Package build output to zip/tar.gz (auto-detect OS)"
+    echo "  package:win               Package for Windows"
+    echo "  package:linux             Package for Linux"
     echo "  dev                       Run development server (hot reload)"
     echo "  start                     Run production server"
     echo "  test                      Run all tests"
@@ -772,7 +780,22 @@ case "$COMMAND" in
         run_e2e
         ;;
     package)
-        package "${2:-release}"
+        # Support: package, package:win, package:linux (with optional :debug or :release)
+        if [[ "$1" == package:* ]]; then
+            # Extract os type from command (e.g., package:win:release -> win, release)
+            cmd="${1#package:}"
+            os_type="${cmd%%:*}"  # win or linux
+            rest="${cmd#*:}"       # release or debug
+            if [ "$rest" = "$os_type" ] || [ -z "$rest" ]; then
+                # No :release or :debug suffix, default to release
+                build_type="release"
+            else
+                build_type="$rest"
+            fi
+            package "$build_type" "$os_type"
+        else
+            package "${2:-release}" ""
+        fi
         ;;
     check)
         run_check
