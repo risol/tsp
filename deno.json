@@ -1,5 +1,5 @@
 {
-  "version": "0.1.0",
+  "version": "0.1.1",
   "tasks": {
     "dev": "sh ./tsp.sh dev",
     "start": "sh ./tsp.sh start",
