@@ -24,10 +24,10 @@ usage() {
     echo ""
     echo "Options:"
     echo "  --install-dir DIR    Installation directory (default: /opt/tsp)"
-    echo "  --config-dir DIR     Config directory (default: /etc/tsp)"
+    echo "  --config-dir DIR    Config directory (default: /etc/tsp)"
     echo "  --service-name NAME  Service name (default: tsp)"
-    echo "  --uninstall          Uninstall the service"
-    echo "  -h, --help          Show this help message"
+    echo "  --uninstall         Uninstall the service"
+    echo "  -h, --help         Show this help message"
     echo ""
     exit 0
 }
@@ -133,13 +133,14 @@ sudo mkdir -p "$CONFIG_DIR"
 if [ ! -f "$CONFIG_DIR/config.jsonc" ]; then
     echo "Creating default config file..."
     if [ -f "$SCRIPT_DIR/config.example.jsonc" ]; then
-        sudo cp "$SCRIPT_DIR/config.example.jsonc" "$CONFIG_DIR/config.jsonc"
+        # Replace default root path "./www" with actual install path
+        sed "s|\"./www\"|\"$INSTALL_DIR/www\"|g" "$SCRIPT_DIR/config.example.jsonc" | sudo tee "$CONFIG_DIR/config.jsonc" > /dev/null
         echo -e "${GREEN}Config file created at $CONFIG_DIR/config.jsonc${NC}"
     else
         echo -e "${YELLOW}Warning: config.example.jsonc not found, creating empty config...${NC}"
-        sudo tee "$CONFIG_DIR/config.jsonc" > /dev/null << 'EOF'
+        sudo tee "$CONFIG_DIR/config.jsonc" > /dev/null << EOF
 {
-  "root": "./www",
+  "root": "$INSTALL_DIR/www",
   "port": 9000,
   "dev": false,
   "hotReload": true
@@ -169,7 +170,7 @@ After=network.target
 Type=simple
 User=$USER
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/$BINARY_NAME --root $INSTALL_DIR/www --config $CONFIG_DIR/config.jsonc
+ExecStart=$INSTALL_DIR/$BINARY_NAME --config $CONFIG_DIR/config.jsonc
 Restart=always
 RestartSec=10
 
