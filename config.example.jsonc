@@ -1,36 +1,167 @@
 {
-  // TSP server basic config
+  // ====================
+  // Basic Configuration
+  // ====================
+
+  // Document root directory (required)
+  // Path to the directory containing .tsp files
   "root": "./www",
+
+  // Server port (default: 9000)
   "port": 9000,
+
+  // Development mode (default: false)
+  // When true, enables hot reload and shows detailed error pages
   "dev": false,
+
+  // Hot reload enabled (default: true)
+  // Automatically reload modules when files change
+  "hotReload": true,
+
+  // ====================
+  // Logging Configuration
+  // ====================
+
+  // Access log file path (optional)
+  // Logs all HTTP requests
   "accessLogPath": ".logs/access.log",
 
-  "session": {
-    "secure": false
+  // Logger configuration
+  "logger": {
+    // Minimum log level: DEBUG, INFO, WARN, ERROR (default: INFO)
+    "level": "INFO",
+
+    // Log file path (optional)
+    // If not set, logs only to stdout
+    "file": ".logs/app.log",
+
+    // Enable colored output (default: true in dev mode)
+    "colorize": true,
+
+    // Log format: "text" or "json" (default: text)
+    "format": "text",
+
+    // Log rotation configuration (optional)
+    "rotation": {
+      // Maximum size of single log file in bytes (default: 10485760 = 10MB)
+      "maxSize": 10485760,
+
+      // Number of archived files to keep (default: 5)
+      "maxFiles": 5,
+
+      // Compress archived files with gzip (default: false)
+      "compress": false,
+
+      // Daily rotation: create new file each day (default: false)
+      "daily": false
+    }
   },
 
-  "logger": {
-    "level": "INFO",
-    "file": ".logs/app.log",
-    "colorize": true,
-    "format": "text"
+  // ====================
+  // Session Configuration
+  // ====================
+
+  "session": {
+    // Cookie name (default: "tsp_session")
+    "cookieName": "tsp_session",
+
+    // Session validity period in seconds (default: 86400 = 1 day)
+    "maxAge": 86400,
+
+    // Secure cookie (default: true in production)
+    // Set to false for HTTP, true for HTTPS
+    "secure": false,
+
+    // HttpOnly cookie (default: true)
+    // Prevents JavaScript access to session cookie
+    "httpOnly": true,
+
+    // SameSite attribute (default: "Strict")
+    // Options: "Strict", "Lax", "None"
+    "sameSite": "Strict",
+
+    // Cookie path (default: "/")
+    "path": "/",
+
+    // Rolling session (default: true)
+    // Refresh expiry time on each visit
+    "rolling": true
   },
+
+  // ====================
+  // Static File Configuration
+  // ====================
+
+  // Additional static file extensions to serve (optional)
+  // Default extensions are always served: .html, .htm, .css, .js, .json, .png, .jpg, .jpeg, .gif, .svg, .ico, .webp, .woff, .woff2, .ttf, .eot, .mp3, .mp4, .webm, .wasm, .zip
+  // "staticExtensions": [".pdf", ".doc", ".docx"],
+
+  // ====================
+  // File Manager Configuration
+  // ====================
 
   "fileManager": {
+    // Enable file manager (default: false)
     "enabled": false,
+
+    // Access path (default: "/__filemanager")
+    // URL path to access the file manager
     "path": "/__filemanager",
+
+    // Access password (required if enabled)
+    // CHANGE THIS to a secure password!
     "password": "CHANGE_ME_FILEMANAGER_PASSWORD",
+
+    // Allow access outside root directory (default: false)
+    "allowOutsideRoot": false,
+
+    // Allowed path whitelist (optional)
+    // If set, only these paths are accessible
+    // "allowedPaths": ["/public"],
+
+    // Denied path blacklist (optional)
+    // These paths are not accessible
     "deniedPaths": [".git", ".deno", "node_modules", ".cache"],
+
+    // Maximum upload size in bytes (default: 104857600 = 100MB)
     "maxUploadSize": 104857600,
+
+    // Allowed upload extensions (optional)
+    // If not set, all extensions are allowed
+    // "allowedExtensions": [".txt", ".pdf", ".jpg", ".png"],
+
+    // Denied upload extensions (optional)
+    // These extensions cannot be uploaded
+    // "deniedExtensions": [".exe", ".bat", ".sh"],
+
+    // Allow file deletion (default: false)
     "allowDelete": true,
+
+    // Allow file rename (default: false)
     "allowRename": true,
+
+    // Allow directory creation (default: false)
     "allowMkdir": true,
+
+    // Allow file move (default: false)
     "allowMove": true,
+
+    // Allow archive extraction (default: true)
     "allowExtract": true,
+
+    // Allow archive creation (default: true)
     "allowCompress": true,
+
+    // Allowed archive formats (default: ["zip", "tar", "tgz"])
     "allowedArchiveExtensions": ["zip", "tar", "tgz"],
+
+    // Maximum extracted file size in bytes (default: 1073741824 = 1GB)
     "maxExtractSize": 1073741824,
+
+    // Maximum compressed file size in bytes (default: 524288000 = 500MB)
     "maxCompressSize": 524288000,
+
+    // ZIP bomb protection: maximum file count (default: 10000)
     "maxExtractFileCount": 10000
   }
 }
