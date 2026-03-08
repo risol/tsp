@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # TSP Server Installation Script
 # This script installs tspserver as a systemd service
