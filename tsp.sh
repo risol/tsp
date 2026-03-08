@@ -616,7 +616,7 @@ package() {
 
     echo "=== Packaging TSP server ($build_type) ==="
     echo "Source: $source_dir"
-    echo "Output: $output_file"
+    echo "Output: ${output_file}.tar.gz"
     echo ""
 
     # Create archive based on OS
