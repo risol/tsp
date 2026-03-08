@@ -152,10 +152,9 @@ else
 fi
 
 # Create log directory
-LOG_DIR="/var/log/tsp"
+LOG_DIR="$INSTALL_DIR/logs"
 echo "Creating log directory: $LOG_DIR"
-sudo mkdir -p "$LOG_DIR"
-sudo chown "$USER" "$LOG_DIR" 2>/dev/null || true
+mkdir -p "$LOG_DIR"
 
 # Create systemd service file
 SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
