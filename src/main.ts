@@ -524,11 +524,6 @@ async function handleRequest(
 
     // File manager route interception
     if (config.fileManager?.enabled) {
-      serverLogger.debug("File manager enabled", {
-        path: config.fileManager.path,
-        enabled: config.fileManager.enabled,
-      });
-
       const fmPath = config.fileManager.path || "/__filemanager";
       // Ensure consistent format when comparing paths
       const normalizedFmPath = fmPath.endsWith("/")
@@ -538,18 +533,11 @@ async function handleRequest(
         ? pathname.slice(0, -1)
         : pathname;
 
-      serverLogger.debug("Path matching check", {
-        pathname,
-        normalizedPathname,
-        normalizedFmPath,
-        startsWith: normalizedPathname.startsWith(normalizedFmPath + "/"),
-      });
-
       if (
         normalizedPathname === normalizedFmPath ||
         normalizedPathname.startsWith(normalizedFmPath + "/")
       ) {
-        serverLogger.info("File manager route matched", { pathname });
+        serverLogger.debug("File manager route matched", { pathname });
         const { handleFileManagerRequest } = await import(
           "./filemanager/mod.ts"
         );
