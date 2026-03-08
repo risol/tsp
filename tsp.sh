@@ -524,6 +524,12 @@ build_tspserver() {
         cp "$PROJECT_ROOT/config.example.json" "$output_dir/"
     fi
 
+    # Copy install script for systemd service
+    if [ -f "$PROJECT_ROOT/scripts/install.sh" ]; then
+        cp "$PROJECT_ROOT/scripts/install.sh" "$output_dir/"
+        chmod +x "$output_dir/install.sh"
+    fi
+
     # Copy www directory
     cp -r "$PROJECT_ROOT/www" "$output_dir/"
 
