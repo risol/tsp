@@ -1,5 +1,4 @@
 {
-  "name": "tsp",
   "version": "0.1.2",
   "tasks": {
     "dev": "sh ./tsp.sh dev",
