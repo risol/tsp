@@ -1095,6 +1095,91 @@ interface PageContext {
     createExcelJS: ExcelJSFactory;
 
     /**
+     * Crypto 加密工具
+     * 基于 Deno 原生 Web Crypto API，提供常用的加密功能
+     *
+     * @example
+     * ```tsx
+     * export default Page(async function(ctx, { crypto, response }) {
+     *   // 生成随机数
+     *   const iv = crypto.getRandomValues(12);
+     *
+     *   // SHA-256 哈希
+     *   const hash = await crypto.digest('SHA-256', 'Hello World');
+     *
+     *   // 生成 AES-GCM 密钥
+     *   const key = await crypto.generateKey('AES-GCM', 256);
+     *
+     *   // 加密数据
+     *   const data = new TextEncoder().encode('secret message');
+     *   const encrypted = await crypto.encrypt(data, key, iv);
+     *
+     *   // 解密数据
+     *   const decrypted = await crypto.decrypt(encrypted, key, iv);
+     *
+     *   return response.json({
+     *     hash: Array.from(new Uint8Array(hash)),
+     *     decrypted: new TextDecoder().decode(decrypted)
+     *   });
+     * });
+     * ```
+     */
+    crypto: {
+      /** 生成随机数 */
+      getRandomValues(length: number): Uint8Array;
+      /** 计算哈希 (SHA-1, SHA-256, SHA-384, SHA-512, MD5 等) */
+      digest(algo: string, data: string | Uint8Array): Promise<ArrayBuffer>;
+      /** 生成加密密钥 (AES-GCM 或 HMAC) */
+      generateKey(
+        algo: "AES-GCM" | "HMAC",
+        length?: number,
+        extractable?: boolean,
+        usages?: ("encrypt" | "decrypt" | "sign" | "verify")[],
+      ): Promise<CryptoKey>;
+      /** 导入密钥 */
+      importKey(
+        algo: "AES-GCM" | "HMAC",
+        keyData: string | Uint8Array,
+        extractable?: boolean,
+        usages?: ("encrypt" | "decrypt" | "sign" | "verify")[],
+      ): Promise<CryptoKey>;
+      /** AES-GCM 加密 */
+      encrypt(data: Uint8Array, key: CryptoKey, iv: Uint8Array): Promise<ArrayBuffer>;
+      /** AES-GCM 解密 */
+      decrypt(data: Uint8Array, key: CryptoKey, iv: Uint8Array): Promise<ArrayBuffer>;
+      /** HMAC 签名 */
+      sign(algo: string, key: CryptoKey, data: Uint8Array): Promise<ArrayBuffer>;
+      /** HMAC 验证 */
+      verify(algo: string, key: CryptoKey, signature: Uint8Array, data: Uint8Array): Promise<boolean>;
+    };
+
+    /**
+     * Bcryptjs 密码哈希工具
+     * 用于密码的安全哈希和验证
+     *
+     * @example
+     * ```tsx
+     * export default Page(async function(ctx, { createBcryptjs, response }) {
+     *   const bcrypt = await createBcryptjs({ saltRounds: 10 });
+     *
+     *   // 哈希密码
+     *   const hash = bcrypt.hash('myPassword');
+     *
+     *   // 验证密码
+     *   const valid = bcrypt.compare('myPassword', hash);
+     *
+     *   return response.json({ hash, valid });
+     * });
+     * ```
+     */
+    createBcryptjs: (config?: { saltRounds?: number }) => Promise<{
+      /** 哈希密码 */
+      hash(password: string): string;
+      /** 验证密码 */
+      compare(password: string, hash: string): boolean;
+    }>;
+
+    /**
      * Session 管理
      * 通用的键值存储，用于管理会话数据
      *

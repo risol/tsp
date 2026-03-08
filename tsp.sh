@@ -540,7 +540,6 @@ build_tspserver() {
 
 # Run tests
 run_test() {
-    deno_bin
     test_file="${1:-run_all_tests.ts}"
     deno_bin="$(get_deno_bin debug)"
     ensure_deno_bin "$deno_bin"
@@ -549,21 +548,18 @@ run_test() {
 }
 
 run_check() {
-    deno_bin
     deno_bin="$(get_deno_bin debug)"
     ensure_deno_bin "$deno_bin"
     "$deno_bin" check "$PROJECT_ROOT/src/main.ts"
 }
 
 run_fmt() {
-    deno_bin
     deno_bin="$(get_deno_bin debug)"
     ensure_deno_bin "$deno_bin"
     "$deno_bin" fmt --allow-write "$PROJECT_ROOT/src" "$PROJECT_ROOT/www" "$PROJECT_ROOT/tests"
 }
 
 run_lint() {
-    deno_bin
     deno_bin="$(get_deno_bin debug)"
     ensure_deno_bin "$deno_bin"
     "$deno_bin" lint "$PROJECT_ROOT/src" "$PROJECT_ROOT/www" "$PROJECT_ROOT/tests"

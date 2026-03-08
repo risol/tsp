@@ -1,1 +1,0 @@
-export function getChild(): string { return "child_v1"; }

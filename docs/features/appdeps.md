@@ -224,6 +224,75 @@ interface CookieOptions {
 
 See: [Cookie Feature Documentation](./cookies.md)
 
+### Crypto
+
+Crypto provides encryption utilities based on Deno's native Web Crypto API:
+
+```tsx
+export default Page(async function(ctx, { crypto, response }) {
+  // Generate random values
+  const iv = crypto.getRandomValues(12);
+
+  // SHA-256 hash
+  const hash = await crypto.digest('SHA-256', 'Hello World');
+
+  // Generate AES-GCM key
+  const key = await crypto.generateKey('AES-GCM', 256);
+
+  // Encrypt data
+  const data = new TextEncoder().encode('secret message');
+  const encrypted = await crypto.encrypt(data, key, iv);
+
+  // Decrypt data
+  const decrypted = await crypto.decrypt(encrypted, key, iv);
+
+  return response.json({
+    hash: Array.from(new Uint8Array(hash)),
+    decrypted: new TextDecoder().decode(decrypted)
+  });
+});
+```
+
+**Complete API**:
+
+| Method | Parameters | Return | Description |
+|------|------|--------|------|
+| `getRandomValues(length)` | `length: number` | `Uint8Array` | Generate random values |
+| `digest(algo, data)` | `algo: string`, `data: string \| Uint8Array` | `Promise<ArrayBuffer>` | Hash data (SHA-1, SHA-256, SHA-384, SHA-512, MD5) |
+| `generateKey(algo, length?, extractable?, usages?)` | `algo: "AES-GCM" \| "HMAC"`, `length?: number` | `Promise<CryptoKey>` | Generate encryption key |
+| `importKey(algo, keyData, extractable?, usages?)` | `algo: "AES-GCM" \| "HMAC"`, `keyData: string \| Uint8Array` | `Promise<CryptoKey>` | Import key |
+| `encrypt(data, key, iv)` | `data: Uint8Array`, `key: CryptoKey`, `iv: Uint8Array` | `Promise<ArrayBuffer>` | AES-GCM encryption |
+| `decrypt(data, key, iv)` | `data: Uint8Array`, `key: CryptoKey`, `iv: Uint8Array` | `Promise<ArrayBuffer>` | AES-GCM decryption |
+| `sign(algo, key, data)` | `algo: string`, `key: CryptoKey`, `data: Uint8Array` | `Promise<ArrayBuffer>` | HMAC signature |
+| `verify(algo, key, signature, data)` | `algo: string`, `key: CryptoKey`, `signature: Uint8Array`, `data: Uint8Array` | `Promise<boolean>` | HMAC verification |
+
+### Bcryptjs (createBcryptjs)
+
+Bcryptjs provides password hashing and verification using bcryptjs library:
+
+```tsx
+export default Page(async function(ctx, { createBcryptjs, response }) {
+  const bcrypt = await createBcryptjs({ saltRounds: 10 });
+
+  // Hash password
+  const hash = bcrypt.hash('myPassword');
+
+  // Verify password
+  const valid = bcrypt.compare('myPassword', hash);
+
+  return response.json({ hash, valid });
+});
+```
+
+**API**:
+
+| Method | Parameters | Return | Description |
+|------|------|--------|------|
+| `hash(password)` | `password: string` | `string` | Hash password using bcryptjs |
+| `compare(password, hash)` | `password: string`, `hash: string` | `boolean` | Verify password |
+
+**Note**: `createBcryptjs` is a factory function that returns the bcryptjs object. It requires `await` to get the actual bcryptjs methods.
+
 ## Custom Dependencies
 
 ### Create Database Dependency

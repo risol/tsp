@@ -87,15 +87,57 @@ return new Response('custom', { status: 200 });
 Available in second parameter (auto-typed):
 
 ```tsx
-export default Page(async function(ctx, { logger, session, response, z }) {
+export default Page(async function(ctx, { logger, session, response, z, crypto, createBcryptjs }) {
   // logger - logging
   // session - cookie session management
   // response - helper methods (json, redirect, file)
   // z - Zod for validation
+  // crypto - encryption utilities (native Deno API)
+  // createBcryptjs - password hashing (factory function, requires await)
 });
 ```
 
-**Common dependencies:** `logger`, `session`, `response`, `z`, `createMySQL`, `createRedis`
+**Common dependencies:** `logger`, `session`, `response`, `z`, `createMySQL`, `createRedis`, `crypto`, `createBcryptjs`
+
+## Encryption
+
+### Crypto (Native Deno API)
+
+```tsx
+export default Page(async function(ctx, { crypto, response }) {
+  // Generate random values
+  const iv = crypto.getRandomValues(12);
+
+  // Hash data
+  const hash = await crypto.digest('SHA-256', 'Hello');
+
+  // Generate key
+  const key = await crypto.generateKey('AES-GCM', 256);
+
+  // Encrypt/Decrypt
+  const data = new TextEncoder().encode('secret');
+  const encrypted = await crypto.encrypt(data, key, iv);
+  const decrypted = await crypto.decrypt(encrypted, key, iv);
+
+  return response.json({ decrypted: new TextDecoder().decode(decrypted) });
+});
+```
+
+### Bcryptjs (Password Hashing)
+
+```tsx
+export default Page(async function(ctx, { createBcryptjs, response }) {
+  const bcrypt = await createBcryptjs({ saltRounds: 10 });
+
+  // Hash password
+  const hash = bcrypt.hash('myPassword');
+
+  // Verify password
+  const valid = bcrypt.compare('myPassword', hash);
+
+  return response.json({ hash, valid });
+});
+```
 
 ## Database (MySQL)
 

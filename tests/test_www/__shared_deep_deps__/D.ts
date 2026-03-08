@@ -1,1 +1,0 @@
-export function getD(): string { return "D_V1"; }
