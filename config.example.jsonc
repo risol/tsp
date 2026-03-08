@@ -14,10 +14,6 @@
   // When true, enables hot reload and shows detailed error pages
   "dev": false,
 
-  // Hot reload enabled (default: true)
-  // Automatically reload modules when files change
-  "hotReload": true,
-
   // ====================
   // Logging Configuration
   // ====================

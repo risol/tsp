@@ -87,8 +87,6 @@ export interface Config {
   logger?: LoggerConfig;
   /** File manager config */
   fileManager?: FileManagerConfig;
-  /** Whether to enable hot reload, default true */
-  hotReload?: boolean;
 }
 
 // Default supported static file extensions
@@ -123,7 +121,6 @@ const DEFAULT_CONFIG: Config = {
   port: 9000,
   dev: false,
   staticExtensions: DEFAULT_STATIC_EXTENSIONS,
-  hotReload: true, // Hot reload enabled by default
 };
 
 // Config file interface (same as Config, but all fields are optional)
@@ -139,8 +136,6 @@ interface ConfigFile {
   logger?: LoggerConfig;
   /** File manager config */
   fileManager?: FileManagerConfig;
-  /** Whether to enable hot reload, default true */
-  hotReload?: boolean;
 }
 
 /**
