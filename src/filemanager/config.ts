@@ -23,7 +23,7 @@ export const DEFAULT_FILE_MANAGER_CONFIG: Required<Omit<
   password: "",
   allowOutsideRoot: false,
   allowedPaths: [],
-  deniedPaths: [".git", ".deno", "node_modules", ".cache"],
+  deniedPaths: [".git", ".deno", "node_modules"],
   maxUploadSize: 100 * 1024 * 1024, // 100MB
   allowedExtensions: [],
   deniedExtensions: [".exe", ".sh", ".bat", ".cmd", ".scr", ".pif"],

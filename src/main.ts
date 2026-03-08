@@ -574,7 +574,8 @@ async function handleRequest(
         status = 404;
       } else if (
         error.includes("Access denied") ||
-        error.includes("File type not allowed")
+        error.includes("File type not allowed") ||
+        error.includes("Internal file")
       ) {
         status = 403;
       }
@@ -1054,6 +1055,90 @@ async function main(): Promise<void> {
   // Register createExcelJS factory function
   registerDep("createExcelJS", () => {
     return createExcelJSImport;
+  });
+
+  // Register Crypto helper (native Deno API)
+  registerDep("crypto", () => {
+    const subtle = crypto.subtle as any;
+    return {
+      // Generate random values
+      getRandomValues: (length: number) => crypto.getRandomValues(new Uint8Array(length)),
+
+      // Hash data
+      digest: (algo: string, data: string | Uint8Array) => {
+        const encoded = typeof data === "string" ? new TextEncoder().encode(data) : data;
+        return subtle.digest(algo, encoded);
+      },
+
+      // Generate key
+      generateKey: (
+        algo: "AES-GCM" | "HMAC",
+        length?: number,
+        extractable = false,
+        usages?: ("encrypt" | "decrypt" | "sign" | "verify")[],
+      ) => {
+        if (algo === "AES-GCM") {
+          return subtle.generateKey(
+            { name: "AES-GCM", length: length || 256 },
+            extractable,
+            usages?.length ? usages : ["encrypt", "decrypt"],
+          );
+        } else if (algo === "HMAC") {
+          return subtle.generateKey(
+            { name: "HMAC", hash: "SHA-256" },
+            extractable,
+            usages?.length ? usages : ["sign", "verify"],
+          );
+        }
+        throw new Error(`Unsupported algorithm: ${algo}`);
+      },
+
+      // Import key
+      importKey: (
+        algo: "AES-GCM" | "HMAC",
+        keyData: string | Uint8Array,
+        extractable = false,
+        usages?: ("encrypt" | "decrypt" | "sign" | "verify")[],
+      ) => {
+        const encoded = typeof keyData === "string" ? new TextEncoder().encode(keyData) : keyData;
+
+        if (algo === "AES-GCM") {
+          return subtle.importKey("raw", encoded, { name: "AES-GCM" }, extractable, usages?.length ? usages : ["encrypt", "decrypt"]);
+        } else if (algo === "HMAC") {
+          return subtle.importKey("raw", encoded, { name: "HMAC", hash: "SHA-256" }, extractable, usages?.length ? usages : ["sign", "verify"]);
+        }
+        throw new Error(`Unsupported algorithm: ${algo}`);
+      },
+
+      // AES-GCM encrypt
+      encrypt: (data: Uint8Array, key: CryptoKey, iv: Uint8Array) => subtle.encrypt({ name: "AES-GCM", iv }, key, data),
+
+      // AES-GCM decrypt
+      decrypt: (data: Uint8Array, key: CryptoKey, iv: Uint8Array) => subtle.decrypt({ name: "AES-GCM", iv }, key, data),
+
+      // HMAC sign
+      sign: (algo: string, key: CryptoKey, data: Uint8Array) => subtle.sign({ name: algo }, key, data),
+
+      // HMAC verify
+      verify: (algo: string, key: CryptoKey, signature: Uint8Array, data: Uint8Array) =>
+        subtle.verify({ name: algo }, key, signature, data),
+    };
+  });
+
+  // Register createBcryptjs factory function
+  registerDep("createBcryptjs", () => {
+    return async (config?: { saltRounds?: number }) => {
+      const saltRounds = config?.saltRounds || 10;
+
+      // Load bcryptjs from esm.sh
+      const mod = await import("https://esm.sh/bcryptjs@3.0.3");
+      const bcryptjs = mod.default || mod;
+
+      return {
+        hash: (password: string) => bcryptjs.hashSync(password, saltRounds),
+        compare: (password: string, hash: string) => bcryptjs.compareSync(password, hash),
+      };
+    };
   });
 
   // Register TSP Info

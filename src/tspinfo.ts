@@ -72,13 +72,6 @@ export interface TspInfoData {
   };
   /** Environment variables (only show non-sensitive) */
   envVars: Array<{ key: string; value: string }>;
-  /** Cache statistics */
-  cache: {
-    size: number;
-    baseDir: string;
-    cacheDir: string;
-    compiledFiles?: string[];
-  };
   /** Registered dependencies */
   dependencies: string[];
   /** Loaded modules */
@@ -145,9 +138,6 @@ export class TspInfo {
    * Get full TSP information (internal method)
    */
   private async getInfo(): Promise<TspInfoData> {
-    // Get number of files in cache directory
-    const cacheSize = await this.getCacheFileCount();
-
     // Get memory usage
     const memoryUsage = this.getMemoryUsage();
 
@@ -195,11 +185,6 @@ export class TspInfo {
       },
       system: systemInfo,
       envVars,
-      cache: {
-        size: cacheSize,
-        baseDir: ".cache/tsp",
-        cacheDir: this.getCacheDir(),
-      },
       dependencies: getRegisteredDeps(),
     };
   }
@@ -507,25 +492,6 @@ export class TspInfo {
       </table>
     </div>
 
-    <!-- Cache Statistics -->
-    <div class="section">
-      <div class="section-title">Cache Statistics</div>
-      <table class="info-table">
-        <tr>
-          <td>Cached Files</td>
-          <td><span class="value">${info.cache.size}</span></td>
-        </tr>
-        <tr>
-          <td>Cache Base Directory</td>
-          <td><span class="value">${info.cache.baseDir}</span></td>
-        </tr>
-        <tr>
-          <td>Cache Actual Path</td>
-          <td><span class="value">${this.escapeHtml(info.cache.cacheDir)}</span></td>
-        </tr>
-      </table>
-    </div>
-
     <!-- Environment Variables -->
     <div class="section">
       <div class="section-title">Environment Variables (Top 20)</div>
@@ -588,35 +554,6 @@ export class TspInfo {
       return `${minutes} minutes ${secs} seconds`;
     } else {
       return `${secs} seconds`;
-    }
-  }
-
-  /**
-   * Get cache directory path
-   */
-  private getCacheDir(): string {
-    try {
-      return join(Deno.cwd(), ".cache", "tsp");
-    } catch {
-      return ".cache/tsp";
-    }
-  }
-
-  /**
-   * Get cache file count
-   */
-  private async getCacheFileCount(): Promise<number> {
-    const cacheDir = this.getCacheDir();
-    try {
-      let count = 0;
-      for await (const entry of Deno.readDir(cacheDir)) {
-        if (entry.isFile && entry.name.endsWith(".js")) {
-          count++;
-        }
-      }
-      return count;
-    } catch {
-      return 0;
     }
   }
 

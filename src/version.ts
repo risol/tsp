@@ -3,4 +3,4 @@
  * Single source of truth for version number
  */
 
-export const TSP_VERSION = "0.1.1";
+export const TSP_VERSION = "0.1.2";
