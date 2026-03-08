@@ -439,6 +439,17 @@ get_version() {
     fi
 }
 
+# Get package name from deno.json
+get_name() {
+    deno_json="$PROJECT_ROOT/deno.json"
+    if [ -f "$deno_json" ]; then
+        # Extract name using grep and sed
+        grep -m1 '"name"' "$deno_json" | sed 's/.*"name": *"\([^"]*\)".*/\1/'
+    else
+        echo "tsp"
+    fi
+}
+
 # Build TSP server
 build_tspserver() {
     build_type="${1:-release}"
@@ -448,6 +459,7 @@ build_tspserver() {
     arch="$(get_arch)"
     dist_base="$PROJECT_ROOT/dist"
     version="$(get_version)"
+    name="$(get_name)"
 
     # If target_os is not specified, use current OS
     if [ -z "$target_os" ]; then
@@ -456,9 +468,9 @@ build_tspserver() {
 
     # Determine output directory (target OS - suitable for GitHub releases)
     if [ "$build_type" = "release" ]; then
-        output_dir="$dist_base/${target_os}-${arch}-v${version}"
+        output_dir="$dist_base/${name}-${target_os}-${arch}-v${version}"
     else
-        output_dir="$dist_base/${target_os}-${arch}-v${version}-dev"
+        output_dir="$dist_base/${name}-${target_os}-${arch}-v${version}-dev"
     fi
 
     # Determine deno-tsp path to use
