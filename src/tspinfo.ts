@@ -22,7 +22,15 @@ export interface TspInfoData {
     root: string;
     port: number;
     mode: string;
-    accessLog?: string;
+    accessLog?: {
+      file?: string;
+      rotation?: {
+        maxSize?: number;
+        maxFiles?: number;
+        compress?: boolean;
+        daily?: boolean;
+      };
+    };
   };
   /** Logging configuration */
   logging: {
@@ -91,7 +99,15 @@ export class TspInfo {
     root: string;
     port: number;
     dev: boolean;
-    accessLogPath?: string;
+    accessLog?: {
+      file?: string;
+      rotation?: {
+        maxSize?: number;
+        maxFiles?: number;
+        compress?: boolean;
+        daily?: boolean;
+      };
+    };
     logger?: {
       level?: string;
       file?: string;
@@ -112,7 +128,15 @@ export class TspInfo {
       root: string;
       port: number;
       dev: boolean;
-      accessLogPath?: string;
+      accessLog?: {
+        file?: string;
+        rotation?: {
+          maxSize?: number;
+          maxFiles?: number;
+          compress?: boolean;
+          daily?: boolean;
+        };
+      };
       logger?: {
         level?: string;
         file?: string;
@@ -157,7 +181,7 @@ export class TspInfo {
         root: this.config.root,
         port: this.config.port,
         mode: this.config.dev ? "Development" : "Production",
-        accessLog: this.config.accessLogPath,
+        accessLog: this.config.accessLog,
       },
       logging: {
         level: this.config.logger?.level || "INFO",
@@ -364,7 +388,7 @@ export class TspInfo {
         </tr>
         <tr>
           <td>Access Log</td>
-          <td><span class="value">${info.config.accessLog || "Not configured (console output)"}</span></td>
+          <td><span class="value">${info.config.accessLog?.file ? info.config.accessLog.file + (info.config.accessLog.rotation ? ` (rotation: ${info.config.accessLog.rotation.maxSize ? Math.round(info.config.accessLog.rotation.maxSize/1024/1024) + 'MB' : '10MB'}, maxFiles: ${info.config.accessLog.rotation.maxFiles || 5})` : '') : "Console output"}</span></td>
         </tr>
       </table>
     </div>

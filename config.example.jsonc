@@ -18,9 +18,27 @@
   // Logging Configuration
   // ====================
 
-  // Access log file path (optional)
-  // Logs all HTTP requests
-  "accessLogPath": ".logs/access.log",
+  // Access log configuration
+  "accessLog": {
+    // Log file path (optional)
+    // If not set, logs to stdout
+    "file": ".logs/access.log",
+
+    // Log rotation configuration (optional)
+    "rotation": {
+      // Maximum size of single log file in bytes (default: 10485760 = 10MB)
+      "maxSize": 10485760,
+
+      // Number of archived files to keep (default: 5)
+      "maxFiles": 5,
+
+      // Compress archived files with gzip (default: false)
+      "compress": false,
+
+      // Daily rotation: create new file each day (default: false)
+      "daily": false
+    }
+  },
 
   // Logger configuration
   "logger": {

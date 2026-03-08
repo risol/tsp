@@ -32,6 +32,7 @@ import {
 import type { FileManagerConfig } from "./filemanager/types.ts";
 import { validateFileManagerConfig } from "./filemanager/config.ts";
 import { TSP_VERSION } from "./version.ts";
+import { LogRotator } from "./logger-rotation.ts";
 
 // Session config interface
 export interface SessionConfig {
@@ -74,12 +75,30 @@ export interface LoggerConfig {
   };
 }
 
+// Access log config interface
+export interface AccessLogConfig {
+  /** Log file path (optional, if not set logs to stdout) */
+  file?: string;
+  /** Log rotation configuration */
+  rotation?: {
+    /** Maximum size of single log file (bytes), default 10MB */
+    maxSize?: number;
+    /** Number of archived files to keep, default 5 */
+    maxFiles?: number;
+    /** Whether to compress archived files (gzip), default false */
+    compress?: boolean;
+    /** Daily rotation: create new file each day */
+    daily?: boolean;
+  };
+}
+
 // Config interface
 export interface Config {
   root: string;
   port: number;
   dev: boolean;
-  accessLogPath?: string;
+  /** Access log config */
+  accessLog?: AccessLogConfig;
   staticExtensions?: string[];
   /** Session config */
   session?: SessionConfig;
@@ -120,6 +139,9 @@ const DEFAULT_CONFIG: Config = {
   root: "./www",
   port: 9000,
   dev: false,
+  accessLog: {
+    file: ".logs/access.log",
+  },
   staticExtensions: DEFAULT_STATIC_EXTENSIONS,
 };
 
@@ -128,7 +150,8 @@ interface ConfigFile {
   root?: string;
   port?: number;
   dev?: boolean;
-  accessLogPath?: string;
+  /** Access log config */
+  accessLog?: AccessLogConfig;
   staticExtensions?: string[];
   /** Session config */
   session?: SessionConfig;
@@ -162,23 +185,27 @@ export async function logAccess(
   // Get response time (can add timing logic here if needed)
   const logLine = `${timestamp} ${method} ${pathname} ${status} "${userAgent}"`;
 
-  if (config.accessLogPath) {
-    // Write to file
-    try {
-      // Ensure log directory exists
-      const logDir = dirname(config.accessLogPath);
-      await Deno.mkdir(logDir, { recursive: true });
+  const accessLogConfig = config.accessLog;
 
-      await Deno.writeTextFile(
-        config.accessLogPath,
-        logLine + "\n",
-        { append: true, create: true },
-      );
+  if (accessLogConfig?.file) {
+    // Initialize or update rotator if config changed
+    const rotationConfig = accessLogConfig.rotation;
+    const rotatorKey = `${accessLogConfig.file}-${JSON.stringify(rotationConfig)}`;
+
+    if (!accessLogRotator) {
+      accessLogRotator = new LogRotator(accessLogConfig.file, rotationConfig);
+    }
+
+    try {
+      await accessLogRotator.write(logLine);
     } catch (error) {
       logger?.error("Failed to write access log", error);
     }
+  } else if (!accessLogConfig?.file && accessLogConfig) {
+    // Access log is configured but no file path, output to console
+    console.log(logLine);
   } else {
-    // Output to console
+    // No access log config, output to console (default behavior)
     console.log(logLine);
   }
 }
@@ -251,6 +278,7 @@ async function loadConfigFile(
 let currentConfig: Config | null = null;
 let configFilepath: string | null = null;
 let configMtime: number | null = null; // Config file modification time
+let accessLogRotator: LogRotator | null = null; // Access log rotator instance
 
 /**
  * Reload config file if it has been modified
@@ -394,7 +422,10 @@ async function parseArgs(logger?: Logger): Promise<Config> {
         break;
       case "--access-log":
       case "-a":
-        config.accessLogPath = args[++i];
+        if (!config.accessLog) {
+          config.accessLog = {};
+        }
+        config.accessLog.file = args[++i];
         break;
       case "--help":
       case "-h":
@@ -449,7 +480,7 @@ Config file:
     "root": "./www",
     "port": 9000,
     "dev": false,
-    "accessLogPath": "./access.log",
+    "accessLog": { "file": "./logs/access.log", "rotation": { "maxSize": 10485760, "maxFiles": 5 } },
     "staticExtensions": [".css", ".js", ".png", ".jpg"]
   }
 
@@ -1145,7 +1176,7 @@ async function main(): Promise<void> {
         root: config.root,
         port: config.port,
         dev: config.dev,
-        accessLogPath: config.accessLogPath,
+        accessLog: config.accessLog,
         logger: config.logger,
       },
       serverLogger,
