@@ -590,16 +590,17 @@ package() {
     fi
     arch="$(get_arch)"
     version="$(get_version)"
+    name="tsp"
 
-    # Determine directory name
+    # Determine directory name (must match build_tspserver)
     if [ "$build_type" = "debug" ]; then
-        dir_name="${os_type}-${arch}-v${version}-dev"
+        dir_name="${name}-${os_type}-${arch}-v${version}-dev"
     else
-        dir_name="${os_type}-${arch}-v${version}"
+        dir_name="${name}-${os_type}-${arch}-v${version}"
     fi
 
     source_dir="$dist_base/$dir_name"
-    output_file="$dist_base/tsp-${dir_name}"
+    output_file="$dist_base/${name}-${os_type}-${arch}-v${version}"
 
     # Check if directory exists
     if [ ! -d "$source_dir" ]; then
