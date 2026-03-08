@@ -133,8 +133,9 @@ sudo mkdir -p "$CONFIG_DIR"
 if [ ! -f "$CONFIG_DIR/config.jsonc" ]; then
     echo "Creating default config file..."
     if [ -f "$SCRIPT_DIR/config.example.jsonc" ]; then
-        # Replace default root path "./www" with actual install path
-        sed "s|\"./www\"|\"$INSTALL_DIR/www\"|g" "$SCRIPT_DIR/config.example.jsonc" | sudo tee "$CONFIG_DIR/config.jsonc" > /dev/null
+        # Replace default paths with actual install path
+        sed "s|\./www|$INSTALL_DIR/www|g; s|\.logs/|$INSTALL_DIR/logs/|g" \
+            "$SCRIPT_DIR/config.example.jsonc" | sudo tee "$CONFIG_DIR/config.jsonc" > /dev/null
         echo -e "${GREEN}Config file created at $CONFIG_DIR/config.jsonc${NC}"
     else
         echo -e "${YELLOW}Warning: config.example.jsonc not found, creating empty config...${NC}"
