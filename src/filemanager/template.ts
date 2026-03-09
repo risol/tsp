@@ -850,20 +850,20 @@ export function generateFileManagerPage(rootPath: string): string {
         html += '<div class="file-size">' + size + '</div>';
         html += '<div class="file-date">' + date + '</div>';
         html += '<div class="file-actions">';
-        html += '<button class="icon-btn download-btn" title="Download" data-path="' + filePath + '"></button>';
+        html += '<button class="icon-btn download-btn" title="Download" data-path="' + filePath + '">⬇</button>';
 
         // If archive file, add extract button
         if (isArchive) {
-          html += '<button class="icon-btn extract-btn" title="Extract" data-path="' + filePath + '" data-name="' + file.name + '"></button>';
+          html += '<button class="icon-btn extract-btn" title="Extract" data-path="' + filePath + '" data-name="' + file.name + '">📂</button>';
         }
 
         // Rename button (files only)
         if (!file.isDirectory) {
-          html += '<button class="icon-btn rename-btn" title="Rename" data-path="' + filePath + '" data-name="' + file.name + '"></button>';
+          html += '<button class="icon-btn rename-btn" title="Rename" data-path="' + filePath + '" data-name="' + file.name + '">✎</button>';
         }
 
         // Delete button (both files and directories can be deleted)
-        html += '<button class="icon-btn delete-btn" title="Delete" data-path="' + filePath + '" data-is-directory="' + file.isDirectory + '"></button>';
+        html += '<button class="icon-btn delete-btn" title="Delete" data-path="' + filePath + '" data-is-directory="' + file.isDirectory + '">✕</button>';
 
         html += '</div>';
         html += '</div>';
