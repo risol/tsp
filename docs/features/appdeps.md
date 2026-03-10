@@ -266,6 +266,84 @@ export default Page(async function(ctx, { crypto, response }) {
 | `sign(algo, key, data)` | `algo: string`, `key: CryptoKey`, `data: Uint8Array` | `Promise<ArrayBuffer>` | HMAC signature |
 | `verify(algo, key, signature, data)` | `algo: string`, `key: CryptoKey`, `signature: Uint8Array`, `data: Uint8Array` | `Promise<boolean>` | HMAC verification |
 
+### Zod (createZod)
+
+Zod provides schema validation and type inference:
+
+```tsx
+export default Page(async function(ctx, { createZod, body, formatZodError, response }) {
+  const z = await createZod();
+
+  // Define schema
+  const UserSchema = z.object({
+    name: z.string().min(2).max(50),
+    email: z.string().email(),
+    age: z.coerce.number().min(1).max(150).optional(),
+    password: z.string().min(8),
+    tags: z.array(z.string()).default([]),
+    metadata: z.record(z.string(), z.any()).nullable()
+  });
+
+  // Validate request body
+  try {
+    const userData = body(UserSchema);
+    return response.json({ success: true, data: userData });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      // Format error
+      const formatted = formatZodError(error);
+      return response.json(formatted, 400);
+    }
+    throw error;
+  }
+});
+```
+
+**Complete API**:
+
+| Category | Methods | Description |
+|----------|---------|-------------|
+| Primitives | `string()`, `number()`, `boolean()`, `bigint()`, `date()`, `enum()`, `literal()` | Basic types |
+| Objects | `.object({})`, `.pick()`, `.omit()`, `.partial()` | Object schemas |
+| Arrays | `.array()`, `.min()`, `.max()`, `.length()` | Array schemas |
+| Validation | `.email()`, `.url()`, `.min()`, `.max()`, `.regex()`, `.refine()` | String/number validation |
+| Transform | `.transform()`, `.default()`, `.optional()`, `.nullable()` | Value transformation |
+| Coercion | `.coerce.string()`, `.coerce.number()`, `.coerce.boolean()` | Auto-coerce types |
+| Inference | `z.infer<typeof Schema>` | Get TypeScript type |
+
+**Note**: Use `body(schema)` to validate request body, `query(schema)` to validate query parameters.
+
+### Nanoid (createNanoid)
+
+Nanoid generates unique URL-friendly IDs:
+
+```tsx
+export default Page(async function(ctx, { createNanoid, response }) {
+  const nanoid = await createNanoid();
+
+  // Default (21 characters)
+  const id = nanoid();
+
+  // Custom length
+  const shortId = nanoid(10);
+  const longId = nanoid(32);
+
+  // Batch generate
+  const ids = Array.from({ length: 5 }, () => nanoid());
+
+  return response.json({ id, shortId, longId, ids });
+});
+```
+
+**API**:
+
+| Method | Parameters | Return | Description |
+|--------|------------|--------|-------------|
+| `nanoid()` | - | `string` | Generate 21-char URL-safe ID |
+| `nanoid(size)` | `size: number` | `string` | Generate custom-length ID |
+
+**Note**: IDs are URL-safe, using alphabet `A-Za-z0-9_-`.
+
 ### Bcryptjs (createBcryptjs)
 
 Bcryptjs provides password hashing and verification using bcryptjs library:
@@ -292,6 +370,350 @@ export default Page(async function(ctx, { createBcryptjs, response }) {
 | `compare(password, hash)` | `password: string`, `hash: string` | `boolean` | Verify password |
 
 **Note**: `createBcryptjs` is a factory function that returns the bcryptjs object. It requires `await` to get the actual bcryptjs methods.
+
+### MySQL (createMySQL)
+
+MySQL provides schema-first database query functionality using mysql2 library:
+
+```tsx
+export default Page(async function(ctx, { createMySQL, createZod, response }) {
+  // Create Zod instance (factory function, requires await)
+  const z = await createZod();
+
+  // Create MySQL client
+  const db = await createMySQL({
+    host: '127.0.0.1',
+    port: 3306,
+    user: 'test_user',
+    password: 'test123456',
+    database: 'test_db'
+  }, z);
+
+  // Define schema with Zod
+  const UserSchema = z.object({
+    id: z.number(),
+    username: z.string(),
+    email: z.string()
+  });
+
+  // Query with schema validation
+  const users = await db.query(UserSchema, 'SELECT * FROM users WHERE age > ?', [18]);
+
+  // Query single row
+  const user = await db.queryOne(UserSchema, 'SELECT * FROM users WHERE id = ?', [1]);
+
+  // Query optional row (returns null if not found)
+  const maybeUser = await db.queryMaybe(UserSchema, 'SELECT * FROM users WHERE email = ?', ['test@example.com']);
+
+  // Get scalar value
+  const count = await db.scalar(z.number(), 'SELECT COUNT(*) as value FROM users');
+
+  // Execute INSERT/UPDATE/DELETE
+  const result = await db.execute(
+    z.object({ affectedRows: z.number() }),
+    'INSERT INTO users (name, email) VALUES (?, ?)',
+    ['John', 'john@example.com']
+  );
+
+  // Transaction
+  await db.tx(async (tx) => {
+    await tx.execute(z.object({ affectedRows: z.number() }), 'INSERT INTO orders (user_id) VALUES (?)', [user.id]);
+    await tx.execute(z.object({ affectedRows: z.number() }), 'UPDATE users SET orders_count = orders_count + 1 WHERE id = ?', [user.id]);
+  });
+
+  return response.json({ users });
+});
+```
+
+**Complete API**:
+
+| Method | Parameters | Return | Description |
+|--------|------------|--------|-------------|
+| `query(schema, sql, params?)` | `schema: ZodSchema`, `sql: string`, `params?: unknown[]` | `Promise<T[]>` | Query multiple rows with schema validation |
+| `queryOne(schema, sql, params?)` | `schema: ZodSchema`, `sql: string`, `params?: unknown[]` | `Promise<T \| null>` | Query single row |
+| `queryMaybe(schema, sql, params?)` | `schema: ZodSchema`, `sql: string`, `params?: unknown[]` | `Promise<T \| null>` | Query optional row (null if not found) |
+| `scalar(schema, sql, params?)` | `schema: ZodSchema`, `sql: string`, `params?: unknown[]` | `Promise<T>` | Get single scalar value |
+| `execute(schema, sql, params?)` | `schema: ZodSchema`, `sql: string`, `params?: unknown[]` | `Promise<T>` | Execute INSERT/UPDATE/DELETE |
+| `tx(fn)` | `fn: (tx) => Promise<void>` | `Promise<void>` | Execute in transaction |
+| `queryPage(schema, sql, params?, page?, limit?)` | `schema: ZodSchema`, `sql: string`, `params?`, `page?`, `limit?` | `Promise<{ data: T[], total: number }>` | Paginated query |
+
+**Config Interface**:
+
+```typescript
+interface MySQLConfig {
+  host: string;
+  port?: number;
+  user: string;
+  password: string;
+  database: string;
+  charset?: string;
+  pool?: {
+    max?: number;
+    min?: number;
+  };
+}
+```
+
+### Redis (createRedis)
+
+Redis provides key-value cache and session storage:
+
+```tsx
+export default Page(async function(ctx, { createRedis, response }) {
+  const redis = await createRedis({
+    host: '127.0.0.1',
+    port: 6379,
+    password: 'your_password',
+    database: 0
+  });
+
+  // String operations
+  await redis.set('key', 'value');
+  await redis.set('key', 'value', 3600); // With TTL (seconds)
+  const value = await redis.get('key');
+
+  // Check existence
+  const exists = await redis.exists('key');
+
+  // Set expiration
+  await redis.expire('key', 3600);
+  const ttl = await redis.ttl('key');
+
+  // Delete
+  await redis.del('key');
+
+  // List operations
+  await redis.lpush('mylist', 'item1', 'item2');
+  await redis.rpush('mylist', 'item3');
+  const list = await redis.lrange('mylist', 0, -1);
+  const item = await redis.lpop('mylist');
+
+  // Set operations
+  await redis.sadd('myset', 'member1', 'member2');
+  const members = await redis.smembers('myset');
+  const isMember = await redis.sismember('myset', 'member1');
+
+  // Hash operations
+  await redis.hset('myhash', 'field1', 'value1');
+  const hashValue = await redis.hget('myhash', 'field1');
+  const hashAll = await redis.hgetall('myhash');
+  await redis.hdel('myhash', 'field1');
+
+  return response.json({ value, exists, ttl, list, members, isMember, hashValue, hashAll });
+});
+```
+
+**Complete API**:
+
+| Method | Parameters | Return | Description |
+|--------|------------|--------|-------------|
+| `set(key, value, ttl?)` | `key: string`, `value: string`, `ttl?: number` | `Promise<void>` | Set string value with optional TTL |
+| `get(key)` | `key: string` | `Promise<string \| null>` | Get string value |
+| `del(...keys)` | `keys: string[]` | `Promise<number>` | Delete keys |
+| `exists(key)` | `key: string` | `Promise<boolean>` | Check if key exists |
+| `expire(key, seconds)` | `key: string`, `seconds: number` | `Promise<boolean>` | Set expiration |
+| `ttl(key)` | `key: string` | `Promise<number>` | Get remaining TTL |
+| `lpush(key, ...values)` | `key: string`, `...values: string[]` | `Promise<number>` | Push to list left |
+| `rpush(key, ...values)` | `key: string`, `...values: string[]` | `Promise<number>` | Push to list right |
+| `lpop(key)` | `key: string` | `Promise<string \| null>` | Pop from list left |
+| `rpop(key)` | `key: string` | `Promise<string \| null>` | Pop from list right |
+| `lrange(key, start, stop)` | `key: string`, `start: number`, `stop: number` | `Promise<string[]>` | Get list range |
+| `sadd(key, ...members)` | `key: string`, `...members: string[]` | `Promise<number>` | Add to set |
+| `smembers(key)` | `key: string` | `Promise<string[]>` | Get set members |
+| `sismember(key, member)` | `key: string`, `member: string` | `Promise<boolean>` | Check membership |
+| `hset(key, field, value)` | `key: string`, `field: string`, `value: string` | `Promise<number>` | Set hash field |
+| `hget(key, field)` | `key: string`, `field: string` | `Promise<string \| null>` | Get hash field |
+| `hgetall(key)` | `key: string` | `Promise<Record<string, string>>` | Get all hash fields |
+| `hdel(key, ...fields)` | `key: string`, `...fields: string[]` | `Promise<number>` | Delete hash fields |
+
+### LDAP (createLdap)
+
+LDAP provides directory service operations for user authentication and management:
+
+```tsx
+export default Page(async function(ctx, { createLdap, response }) {
+  const ldap = await createLdap({
+    url: 'ldap://ldap.example.com:389',
+    bindDN: 'cn=admin,dc=example,dc=com',
+    bindCredentials: 'admin_password',
+    startTLS: false,
+    timeout: 10000
+  });
+
+  // Search for users
+  const users = await ldap.search('ou=users,dc=example,dc=com', {
+    scope: 'sub',
+    filter: '(objectClass=person)',
+    attributes: ['cn', 'mail', 'uid']
+  });
+
+  // Authenticate user
+  try {
+    await ldap.bind(`uid=${username},ou=users,dc=example,dc=com`, password);
+    const user = await ldap.search(`uid=${username},ou=users,dc=example,dc=com`, {
+      scope: 'base',
+      attributes: ['cn', 'mail']
+    });
+    return response.json({ success: true, user: user[0] });
+  } catch (error) {
+    return response.json({ success: false, error: 'Invalid credentials' }, 401);
+  }
+
+  // Add new user
+  await ldap.add('uid=newuser,ou=users,dc=example,dc=com', {
+    objectClass: ['inetOrgPerson', 'organizationalPerson', 'person', 'top'],
+    cn: ['New User'],
+    sn: ['User'],
+    mail: ['newuser@example.com'],
+    uid: ['newuser']
+  });
+
+  // Modify user
+  await ldap.modify('uid=user,ou=users,dc=example,dc=com', [
+    { operation: 'replace', modification: { mail: ['newemail@example.com'] } }
+  ]);
+
+  // Delete user
+  await ldap.del('uid=user,ou=users,dc=example,dc=com');
+
+  // Close connection
+  await ldap.close();
+});
+```
+
+**Complete API**:
+
+| Method | Parameters | Return | Description |
+|--------|------------|--------|-------------|
+| `bind(dn, password)` | `dn: string`, `password: string` | `Promise<void>` | Bind to LDAP server (authenticate) |
+| `anonymousBind()` | - | `Promise<void>` | Anonymous bind |
+| `search(baseDN, options?)` | `baseDN: string`, `options?` | `Promise<LdapEntry[]>` | Search directory |
+| `add(dn, entry)` | `dn: string`, `entry: Record<string, string[]>` | `Promise<void>` | Add new entry |
+| `modify(dn, changes)` | `dn: string`, `changes: []` | `Promise<void>` | Modify entry |
+| `del(dn)` | `dn: string` | `Promise<void>` | Delete entry |
+| `modifyDN(dn, newDN, oldRDN?)` | `dn: string`, `newDN: string`, `oldRDN?` | `Promise<void>` | Rename entry |
+| `compare(dn, attribute, value)` | `dn: string`, `attribute: string`, `value: string` | `Promise<boolean>` | Compare attribute value |
+| `close()` | - | `Promise<void>` | Close connection |
+| `isBound()` | - | `boolean` | Check if bound |
+
+**Config Interface**:
+
+```typescript
+interface LdapConfig {
+  url: string;
+  bindDN?: string;
+  bindCredentials?: string;
+  startTLS?: boolean;
+  timeout?: number;
+  baseDN?: string;
+  verbose?: boolean;
+}
+```
+
+### ExcelJS (createExcelJS)
+
+ExcelJS provides Excel file reading and writing capabilities:
+
+```tsx
+export default Page(async function(ctx, { createExcelJS, response }) {
+  const ExcelJS = await createExcelJS();
+
+  // Create new workbook
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'TSP';
+  workbook.created = new Date();
+
+  // Add worksheet
+  const worksheet = workbook.addWorksheet('Users');
+
+  // Define columns
+  worksheet.columns = [
+    { header: 'ID', key: 'id', width: 10 },
+    { header: 'Name', key: 'name', width: 30 },
+    { header: 'Email', key: 'email', width: 40 }
+  ];
+
+  // Add rows
+  worksheet.addRows([
+    { id: 1, name: 'John Doe', email: 'john@example.com' },
+    { id: 2, name: 'Jane Smith', email: 'jane@example.com' }
+  ]);
+
+  // Add single row
+  worksheet.addRow({ id: 3, name: 'Bob Wilson', email: 'bob@example.com' });
+
+  // Write to file
+  await workbook.xlsx.writeFile('./users.xlsx');
+
+  // Or write to buffer
+  const buffer = await workbook.xlsx.writeBuffer();
+
+  return response.json({
+    success: true,
+    filename: 'users.xlsx',
+    rowCount: worksheet.rowCount
+  });
+});
+```
+
+**Key Features**:
+
+- Read and write `.xlsx` files
+- Multiple worksheets per workbook
+- Cell formatting (bold, colors, borders, etc.)
+- Formulas and functions
+- Images support
+- Data validation
+- Freeze panes
+
+Reference: [ExcelJS Documentation](https://github.com/exceljs/exceljs)
+
+### Logger
+
+Logger provides structured logging with different levels:
+
+```tsx
+export default Page(async function(ctx, { logger }) {
+  // Debug level - detailed information for debugging
+  logger.debug('Debug info:', { key: 'value' });
+
+  // Info level - general information
+  logger.info('Request received:', ctx.method, ctx.url.pathname);
+
+  // Warn level - warning messages
+  logger.warn('Deprecated feature used:', ctx.query);
+
+  // Error level - error messages
+  try {
+    // Some operation that might fail
+    throw new Error('Something went wrong');
+  } catch (error) {
+    logger.error('Operation failed:', error);
+  }
+
+  return <div>Check logs for output</div>;
+});
+```
+
+**API**:
+
+| Method | Parameters | Return | Description |
+|--------|------------|--------|-------------|
+| `debug(...args)` | `...args: unknown[]` | `void` | Debug level logging |
+| `info(...args)` | `...args: unknown[]` | `void` | Info level logging |
+| `warn(...args)` | `...args: unknown[]` | `void` | Warning level logging |
+| `error(...args)` | `...args: unknown[]` | `void` | Error level logging |
+
+**Note**: Logger output is controlled by the log level configuration in `config.json`:
+
+```jsonc
+{
+  "logger": {
+    "level": "INFO",  // DEBUG, INFO, WARN, ERROR
+    "file": ".logs/app.log"
+  }
+}
+```
 
 ## Custom Dependencies
 

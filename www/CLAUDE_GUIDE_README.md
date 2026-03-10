@@ -82,22 +82,40 @@ return response.json({ success: true });
 return new Response('custom', { status: 200 });
 ```
 
+## Logging (logger)
+
+```tsx
+export default Page(async function(ctx, { logger }) {
+  logger.debug('Debug info:', { key: 'value' });
+  logger.info('Request:', ctx.method, ctx.url.pathname);
+  logger.warn('Warning:', 'deprecated feature');
+  logger.error('Error:', new Error('failed'));
+
+  return <div>Check logs for output</div>;
+});
+```
+
+**Methods:** `debug()`, `info()`, `warn()`, `error()`
+
 ## Dependency Injection
 
 Available in second parameter (auto-typed):
 
 ```tsx
-export default Page(async function(ctx, { logger, session, response, z, crypto, createBcryptjs }) {
-  // logger - logging
+export default Page(async function(ctx, { logger, session, response, createZod, crypto, createBcryptjs, createMySQL, createRedis, createExcelJS }) {
+  // logger - structured logging (debug, info, warn, error)
   // session - cookie session management
   // response - helper methods (json, redirect, file)
-  // z - Zod for validation
+  // createZod - Zod validation library (factory, requires await)
   // crypto - encryption utilities (native Deno API)
-  // createBcryptjs - password hashing (factory function, requires await)
+  // createBcryptjs - password hashing (factory, requires await)
+  // createMySQL - MySQL database (factory, requires await)
+  // createRedis - Redis cache (factory, requires await)
+  // createExcelJS - Excel file handling (factory, requires await)
 });
 ```
 
-**Common dependencies:** `logger`, `session`, `response`, `z`, `createMySQL`, `createRedis`, `crypto`, `createBcryptjs`
+**Common dependencies:** `logger`, `session`, `response`, `createZod`, `crypto`, `createBcryptjs`, `createMySQL`, `createRedis`, `createLdap`, `createExcelJS`
 
 ## Encryption
 
@@ -123,6 +141,47 @@ export default Page(async function(ctx, { crypto, response }) {
 });
 ```
 
+## Validation (Zod)
+
+```tsx
+export default Page(async function(ctx, { createZod, body, formatZodError, response }) {
+  const z = await createZod();
+
+  // Define schema
+  const UserSchema = z.object({
+    name: z.string().min(2).max(50),
+    email: z.string().email(),
+    age: z.coerce.number().min(1).max(150).optional()
+  });
+
+  // Validate request body
+  try {
+    const userData = body(UserSchema);
+    return response.json({ success: true, data: userData });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return response.json(formatZodError(error), 400);
+    }
+    throw error;
+  }
+});
+```
+
+**Schema methods:** `string()`, `number()`, `boolean()`, `object()`, `array()`, `email()`, `min()`, `max()`, `optional()`, `nullable()`, `default()`
+
+## Nanoid (Unique IDs)
+
+```tsx
+export default Page(async function(ctx, { createNanoid, response }) {
+  const nanoid = await createNanoid();
+
+  const id = nanoid(); // "V1StGXR8_Z5jdHi6B-myT"
+  const shortId = nanoid(10); // Custom length
+
+  return response.json({ id, shortId });
+});
+```
+
 ### Bcryptjs (Password Hashing)
 
 ```tsx
@@ -142,7 +201,8 @@ export default Page(async function(ctx, { createBcryptjs, response }) {
 ## Database (MySQL)
 
 ```tsx
-export default Page(async function(ctx, { createMySQL, z, response }) {
+export default Page(async function(ctx, { createMySQL, createZod, response }) {
+  const z = await createZod();
   const db = await createMySQL({
     host: '127.0.0.1',
     port: 3306,
@@ -160,6 +220,90 @@ export default Page(async function(ctx, { createMySQL, z, response }) {
 ```
 
 **Query methods:** `query()`, `queryOne()`, `queryMaybe()`, `scalar()`, `execute()`, `tx()`, `queryPage()`
+
+## Cache (Redis)
+
+```tsx
+export default Page(async function(ctx, { createRedis, response }) {
+  const redis = await createRedis({
+    host: '127.0.0.1',
+    port: 6379,
+    password: 'pass',
+    database: 0
+  });
+
+  // String
+  await redis.set('key', 'value', 3600); // TTL in seconds
+  const value = await redis.get('key');
+
+  // List
+  await redis.lpush('list', 'item1');
+  const list = await redis.lrange('list', 0, -1);
+
+  // Hash
+  await redis.hset('hash', 'field', 'value');
+  const hash = await redis.hgetall('hash');
+
+  return response.json({ value, list, hash });
+});
+```
+
+**Methods:** `set`, `get`, `del`, `exists`, `expire`, `ttl`, `lpush`, `rpush`, `lpop`, `rpop`, `lrange`, `sadd`, `smembers`, `sismember`, `hset`, `hget`, `hgetall`, `hdel`
+
+## LDAP (Directory)
+
+```tsx
+export default Page(async function(ctx, { createLdap, response }) {
+  const ldap = await createLdap({
+    url: 'ldap://ldap.example.com:389',
+    bindDN: 'cn=admin,dc=example,dc=com',
+    bindCredentials: 'password'
+  });
+
+  // Search
+  const users = await ldap.search('ou=users,dc=example,dc=com', {
+    scope: 'sub',
+    filter: '(objectClass=person)',
+    attributes: ['cn', 'mail']
+  });
+
+  // Authenticate
+  try {
+    await ldap.bind(`uid=user,ou=users,dc=example,dc=com`, 'userpass');
+    return response.json({ success: true });
+  } catch {
+    return response.json({ success: false }, 401);
+  }
+
+  await ldap.close();
+});
+```
+
+**Methods:** `bind`, `anonymousBind`, `search`, `add`, `modify`, `del`, `modifyDN`, `compare`, `close`
+
+## Excel Files
+
+```tsx
+export default Page(async function(ctx, { createExcelJS, response }) {
+  const ExcelJS = await createExcelJS();
+
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Users');
+
+  sheet.columns = [
+    { header: 'ID', key: 'id' },
+    { header: 'Name', key: 'name' }
+  ];
+
+  sheet.addRows([
+    { id: 1, name: 'John' },
+    { id: 2, name: 'Jane' }
+  ]);
+
+  await workbook.xlsx.writeFile('./users.xlsx');
+  return response.json({ success: true });
+});
+```
 
 ## Configuration
 
