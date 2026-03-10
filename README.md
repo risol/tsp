@@ -158,6 +158,8 @@ Open browser and visit `http://localhost:9000`
 
 ## Example
 
+For more examples, see [tsp-examples](https://github.com/risol/tsp-examples).
+
 A simple `.tsp` file looks like this:
 
 ```tsx
