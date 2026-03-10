@@ -158,7 +158,7 @@ Open browser and visit `http://localhost:9000`
 
 ## Example
 
-For more examples, see [tsp-examples](https://github.com/risol/tsp-examples).
+For more examples, see [tsp-examples](https://github.com/risol/tsp-examples). This repository includes built-in Claude Code skills for generating TSP pages - simply describe what you want and Claude Code will generate the code for you.
 
 A simple `.tsp` file looks like this:
 
