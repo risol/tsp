@@ -13,7 +13,6 @@ TSP (TypeScript Server Page) is a TypeScript server that executes `.tsp` files d
 ## Core Features
 
 - Direct TSP Execution - execute `.tsp` files without build
-- Intelligent Module Caching - automatic cache invalidation by mtime
 - Hot Reload - via Deno's watch mode
 - Type Safety - global type declarations, no imports needed
 - Data Validation - schema-first with Zod
@@ -52,7 +51,7 @@ TSP (TypeScript Server Page) is a TypeScript server that executes `.tsp` files d
 ## Version Locations
 
 Version is defined in:
-- `src/main.ts:36` - `TSP_VERSION`
+- `src/version.ts` - `TSP_VERSION`
 - `deno.json:2` - version field
 - `CHANGELOG.md` - changelog
 
@@ -67,7 +66,7 @@ Types (`PageContext`, `RedirectResult`, `AppDeps`) and the `Page` function are d
 ### TSP File Suffix Rules
 
 - `.tsp` files are route files accessible via URL
-- `.tsp` files can only import `.ts` and `.tsx` files, not other `.tsp` files
+- `.tsp` files can import `.ts`, `.tsx`, and other `.tsp` files
 - `.ts` and `.tsx` files cannot be accessed directly via HTTP (return 404)
 - Files starting with `__` cannot be accessed directly but can be imported
 
@@ -173,8 +172,7 @@ Priority: CLI args > config file > defaults
   "root": "./www",
   "port": 9000,
   "dev": false,
-  "hotReload": true,
-  "accessLogPath": ".logs/access.log",
+  "accessLog": { "file": ".logs/access.log", "rotation": { "maxSize": 10485760, "maxFiles": 5 } },
   "session": { "secure": false, "maxAge": 86400 },
   "logger": { "level": "INFO", "file": ".logs/app.log" },
   "fileManager": { "enabled": true, "path": "/__filemanager", "password": "xxx" }
@@ -210,15 +208,14 @@ bash ./kill-port.sh   # Cleanup port from config
 | Issue | Solution |
 |-------|----------|
 | Port in use | `bash ./kill-port.sh` |
-| Cache issue | Delete `.cache/tsp/` directory |
 | Config not found | Use absolute path: `./tspserver --config /path/to/config.jsonc` |
 
 ## Compilation
 
 ```bash
 # Build output
-dist/debug/windows-x64/tspserver.exe
-dist/release/windows-x64/tspserver.exe
+dist/tsp-win-x64-v0.1.3/tspserver.exe
+dist/tsp-linux-x64-v0.1.3/tspserver
 ```
 
 For full changelog, see [CHANGELOG.md](./docs/changelog.md)
