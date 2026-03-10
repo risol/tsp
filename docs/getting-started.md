@@ -116,7 +116,8 @@ TSP provides a type-safe MySQL Schema-first API using Zod for runtime data valid
 
 ```tsx
 // www/users.tsx
-export default Page(async function(ctx, { createMySQL, z, response }) {
+export default Page(async function(ctx, { createMySQL, createZod, response }) {
+  const z = await createZod();
   const db = await createMySQL({
     host: "127.0.0.1",
     port: 3306,

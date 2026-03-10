@@ -15,7 +15,8 @@ TSP provides a type-safe MySQL database access API using Zod schema for runtime 
 ### 1. Create Database Connection
 
 ```tsx
-export default Page(async function(ctx, { createMySQL, z, response }) {
+export default Page(async function(ctx, { createMySQL, createZod, response }) {
+  const z = await createZod();
   // Create database connection
   const db = await createMySQL({
     host: "127.0.0.1",
@@ -213,7 +214,8 @@ const UserSchema = z.object({
 ## Complete Example
 
 ```tsx
-export default Page(async function(ctx, { createMySQL, z, response }) {
+export default Page(async function(ctx, { createMySQL, createZod, response }) {
+  const z = await createZod();
   const db = await createMySQL({
     host: Deno.env.get("MYSQL_HOST") || "127.0.0.1",
     port: Number(Deno.env.get("MYSQL_PORT")) || 3306,

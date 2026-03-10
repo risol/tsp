@@ -41,7 +41,8 @@ This constrains AI to a tiny, predictable pattern—**no choice paralysis**, **n
 All dependencies must be obtained through **function factories**:
 
 ```tsx
-export default Page(async function(ctx, { createMySQL, createRedis, z, response }) {
+export default Page(async function(ctx, { createMySQL, createRedis, createZod, response }) {
+  const z = await createZod();
   const db = await createMySQL(config, z);
   const redis = await createRedis(config);
   // ...

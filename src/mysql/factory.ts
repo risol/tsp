@@ -10,7 +10,8 @@ import { MySQLClientImpl } from "./client.ts";
  *
  * @example
  * ```tsx
- * export default Page(async function(ctx, { createMySQL, z, response }) {
+ * export default Page(async function(ctx, { createMySQL, createZod, response }) {
+ *   const z = await createZod();
  *   const db = await createMySQL({
  *     host: '127.0.0.1',
  *     port: 3306,

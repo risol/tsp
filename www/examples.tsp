@@ -165,7 +165,8 @@ export default Page(async function(ctx) {
                   <h3>MySQL Query</h3>
                   <div class="code-block">
                     <span class="lang">tsx</span>
-                    <pre><code>{`export default Page(async function(ctx, { createMySQL, z, response }) {
+                    <pre><code>{`export default Page(async function(ctx, { createMySQL, createZod, response }) {
+  const z = await createZod();
   // Create database connection
   const db = await createMySQL({
     host: '127.0.0.1',
@@ -196,7 +197,8 @@ export default Page(async function(ctx) {
                   <h3>Transaction</h3>
                   <div class="code-block">
                     <span class="lang">tsx</span>
-                    <pre><code>{`export default Page(async function(ctx, { createMySQL, z, response }) {
+                    <pre><code>{`export default Page(async function(ctx, { createMySQL, createZod, response }) {
+  const z = await createZod();
   const db = await createMySQL({ host: '127.0.0.1', user: 'root', password: 'pass', database: 'test' }, z);
 
   const ResultSchema = z.object({ affectedRows: z.number() });
@@ -276,7 +278,8 @@ export default Page(async function(ctx) {
                   <div class="code-block">
                     <span class="lang">tsx</span>
                     <pre><code>{`// www/api/users.tsp
-export default Page(async function(ctx, { createMySQL, response, z }) {
+export default Page(async function(ctx, { createMySQL, createZod, response }) {
+  const z = await createZod();
   const db = await createMySQL({ host: '127.0.0.1', user: 'root', password: 'pass', database: 'test' }, z);
   const UserSchema = z.object({ id: z.number(), name: z.string(), email: z.string() });
 

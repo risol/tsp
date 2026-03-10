@@ -997,16 +997,18 @@ interface PageContext {
      *
      * @example
      * ```tsx
-     * export default Page(async function(ctx, { createMySQL, response }) {
+     * export default Page(async function(ctx, { createMySQL, createZod, response }) {
+     *   const z = await createZod();
      *   const db = await createMySQL({
      *     host: '127.0.0.1',
      *     port: 3306,
      *     user: 'test_user',
      *     password: 'test123456',
      *     database: 'test_db'
-     *   });
+     *   }, z);
      *
-     *   const users = await db.query('SELECT * FROM users');
+     *   const UserSchema = z.object({ id: z.number(), name: z.string() });
+     *   const users = await db.query(UserSchema, 'SELECT * FROM users');
      *   return response.json(users);
      * });
      * ```
