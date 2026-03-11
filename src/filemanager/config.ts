@@ -34,7 +34,7 @@ export const DEFAULT_FILE_MANAGER_CONFIG: Required<Omit<
   // Extract/compress related configuration
   allowExtract: true,
   allowCompress: true,
-  allowedArchiveExtensions: ["zip", "tar", "tgz"],
+  allowedArchiveExtensions: ["tar", "tgz"], // zip disabled due to binary compatibility issues
   maxExtractSize: 1024 * 1024 * 1024, // 1GB
   maxCompressSize: 500 * 1024 * 1024, // 500MB
   maxExtractFileCount: 10000,

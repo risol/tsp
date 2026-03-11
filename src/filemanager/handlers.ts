@@ -600,7 +600,12 @@ export async function handleExtractAPI(
     }
 
     if (!config.allowedArchiveExtensions?.includes(archiveType)) {
-      return createErrorResponse(`Not allowed to extract ${archiveType.toUpperCase()} format files`, 403);
+      return createErrorResponse(
+        archiveType === "zip"
+          ? "ZIP format is not supported in binary version. Please use .tar.gz or .tgz format instead."
+          : `Not allowed to extract ${archiveType.toUpperCase()} format files`,
+        403
+      );
     }
 
     // Determine target directory (if user didn't specify or it's empty, use the directory where the archive is located)

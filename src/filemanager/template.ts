@@ -1239,11 +1239,11 @@ export function generateFileManagerPage(rootPath: string): string {
       }
     }
 
-    // Check if it's an archive file
+    // Check if it's an extractable archive file (zip is disabled in binary)
     function isArchiveFile(filename) {
       const lowerName = filename.toLowerCase();
-      return lowerName.endsWith('.zip') ||
-             lowerName.endsWith('.tar') ||
+      // zip is disabled due to binary compatibility issues
+      return lowerName.endsWith('.tar') ||
              lowerName.endsWith('.tar.gz') ||
              lowerName.endsWith('.tgz');
     }

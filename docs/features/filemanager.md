@@ -99,8 +99,8 @@ Complete configuration options:
     // Optional: Allow compress (default: true)
     "allowCompress": true,
 
-    // Optional: Allowed archive formats (default: ["zip", "tar", "tgz"])
-    "allowedArchiveExtensions": ["zip", "tar", "tgz"],
+    // Optional: Allowed archive formats (default: ["tar", "tgz"], zip is disabled due to binary compatibility)
+    "allowedArchiveExtensions": ["tar", "tgz"],
 
     // Optional: Max extract size (default: 1GB)
     "maxExtractSize": 1073741824,
@@ -199,9 +199,9 @@ Complete configuration options:
 
 #### allowedArchiveExtensions
 - Type: `ArchiveType[]`
-- Default: `["zip", "tar", "tgz"]`
-- Description: Allowed extract archive formats
-- Optional values: `"zip"`, `"tar"`, `"tgz"`
+- Default: `["tar", "tgz"]`
+- Description: Allowed extract archive formats (zip is disabled by default due to binary compatibility issues)
+- Optional values: `"tar"`, `"tgz"`
 
 #### maxExtractSize
 - Type: `number`
