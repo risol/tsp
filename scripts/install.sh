@@ -157,6 +157,11 @@ LOG_DIR="$INSTALL_DIR/logs"
 echo "Creating log directory: $LOG_DIR"
 mkdir -p "$LOG_DIR"
 
+# Create system log directory for systemd output
+SYSTEM_LOG_DIR="/var/log/tsp"
+echo "Creating system log directory: $SYSTEM_LOG_DIR"
+sudo mkdir -p "$SYSTEM_LOG_DIR"
+
 # Create systemd service file
 SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
 echo "Creating systemd service file..."
@@ -178,9 +183,9 @@ RestartSec=10
 Environment="HOME=$HOME"
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 
-# Logging
-StandardOutput=append:$LOG_DIR/access.log
-StandardError=append:$LOG_DIR/error.log
+# Logging - capture all output to files
+StandardOutput=append:$SYSTEM_LOG_DIR/denort-tsp-output.log
+StandardError=append:$SYSTEM_LOG_DIR/denort-tsp-error.log
 
 [Install]
 WantedBy=multi-user.target
