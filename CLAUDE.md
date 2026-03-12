@@ -215,8 +215,8 @@ bash ./kill-port.sh   # Cleanup port from config
 
 ```bash
 # Build output
-dist/tsp-win-x64-v0.1.3/tspserver.exe
-dist/tsp-linux-x64-v0.1.3/tspserver
+dist/tsp-win-x64-v0.1.4/tspserver.exe
+dist/tsp-linux-x64-v0.1.4/tspserver
 ```
 
 For full changelog, see [CHANGELOG.md](./docs/changelog.md)
