@@ -979,6 +979,17 @@ async function main(): Promise<void> {
   // Global SessionStore singleton
   let sessionStore: SessionStore | null = null;
 
+  // Create logger for session cleanup (needs to be before session registration)
+  const loggerConfig = config.logger;
+  let loggerInstance: Logger | undefined;
+  if (loggerConfig) {
+    loggerInstance = createProductionLogger(loggerConfig);
+  } else if (config.dev) {
+    loggerInstance = createDefaultLogger();
+  } else {
+    loggerInstance = createProductionLogger();
+  }
+
   // Register session dependency (now synchronous!)
   registerDep("session", (ctx) => {
     // Initialize global store (only once)
@@ -1009,7 +1020,7 @@ async function main(): Promise<void> {
           { rolling: sessionConfig.rolling }),
       };
 
-      sessionStore = new SessionStore(options);
+      sessionStore = new SessionStore(options, loggerInstance);
     }
 
     // Get cookie manager for setting cookies
@@ -1024,22 +1035,7 @@ async function main(): Promise<void> {
     return createResponseHelper(ctx);
   });
 
-  // Register Logger (singleton)
-  let loggerInstance: Logger | null = null;
-
-  // Create logger instance (before registerDep to ensure serverLogger is available)
-  const loggerConfig = config.logger;
-  if (loggerConfig) {
-    // Create logger from config file (includes rotation config)
-    loggerInstance = createProductionLogger(loggerConfig);
-  } else if (config.dev) {
-    // Default dev mode logger
-    loggerInstance = createDefaultLogger();
-  } else {
-    // Default production mode logger (no file output)
-    loggerInstance = createProductionLogger();
-  }
-
+  // Register Logger (singleton) - reuse loggerInstance created earlier
   // serverLogger is a reference to loggerInstance for global logging
   const serverLogger = loggerInstance!;
 

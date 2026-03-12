@@ -6,6 +6,7 @@
  */
 
 import { nanoid } from "nanoid";
+import type { Logger } from "./logger.ts";
 
 // ============== Type Definitions ==============
 
@@ -98,8 +99,10 @@ class SessionStore {
   private options: Required<SessionOptions>;
   private cryptoKey: CryptoKey | null = null;
   private cleanupTimer: number | null = null;
+  private logger: Logger | undefined;
 
-  constructor(options: SessionOptions) {
+  constructor(options: SessionOptions, logger?: Logger) {
+    this.logger = logger;
     this.sessions = new Map();
     this.options = {
       cookieName: options.cookieName || "tsp_session",
@@ -346,7 +349,7 @@ class SessionStore {
     }
 
     if (cleanedCount > 0) {
-      console.log(`[Session] Cleaned up ${cleanedCount} expired session(s)`);
+      this.logger?.info(`Cleaned up ${cleanedCount} expired session(s)`);
     }
   }
 
