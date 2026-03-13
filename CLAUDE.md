@@ -46,6 +46,10 @@ TSP (TypeScript Server Page) is a TypeScript server that executes `.tsp` files d
 # Binary execution
 ./tspserver --root ./www --port 9000
 ./tspserver --root ./www --port 9000 --dev
+
+# Workers mode (Linux/macOS only - uses SO_REUSEPORT)
+./tspserver --workers 4          # 4 workers on port 9000
+./tspserver -w 4 -p 8080        # 4 workers on port 8080
 ```
 
 ## Version Locations
