@@ -105,9 +105,30 @@ interactive_install() {
     # Ask about multiple instances
     if ask_yes_no "Do you want to install multiple TSP instances?" "n"; then
         NUM_INSTANCES=$(read_with_default "Number of instances" "4")
-        PORT=$(read_with_default "Starting port" "9000")
         echo ""
-        echo -e "${GREEN}Will install $NUM_INSTANCES instances on ports $PORT to $((PORT + NUM_INSTANCES - 1))${NC}"
+
+        # Ask for ports one by one
+        PORTS=()
+        for i in $(seq 1 $NUM_INSTANCES); do
+            if [ $i -eq 1 ]; then
+                PORT=$(read_with_default "Port for instance 1" "9000")
+                PORTS+=("$PORT")
+            else
+                PREV_PORT=${PORTS[$((i-2))]}
+                NEXT_PORT=$((PREV_PORT + 1))
+                PORT=$(read_with_default "Port for instance $i" "$NEXT_PORT")
+                PORTS+=("$PORT")
+            fi
+        done
+
+        # Convert array to space-separated string
+        PORT="${PORTS[0]}"
+        for i in $(seq 1 $((NUM_INSTANCES - 1))); do
+            PORT="$PORT ${PORTS[$i]}"
+        done
+
+        echo ""
+        echo -e "${GREEN}Will install $NUM_INSTANCES instances on ports: $PORT${NC}"
     else
         NUM_INSTANCES=1
         PORT=$(read_with_default "Port number" "9000")
