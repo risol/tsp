@@ -153,35 +153,35 @@ uninstall() {
     # Ask for service name
     SERVICE_NAME=$(read_with_default "Service name to uninstall" "tsp")
 
-    # Find all services matching the name
-    echo "Finding services matching '$SERVICE_NAME'..."
-    SERVICES=$(systemctl list-units --type=service --all --no-legend | grep "$SERVICE_NAME" | awk '{print $1}' || true)
-
-    if [ -z "$SERVICES" ]; then
-        echo -e "${YELLOW}No services found matching '$SERVICE_NAME'${NC}"
+    # Check if service exists
+    SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+    if [ ! -f "$SERVICE_FILE" ]; then
+        echo -e "${YELLOW}Service $SERVICE_NAME not found${NC}"
         exit 0
     fi
 
-    echo "Found services:"
-    echo "$SERVICES"
+    echo "Found service: $SERVICE_NAME"
     echo ""
 
-    if ! ask_yes_no "Uninstall these services?" "y"; then
+    if ! ask_yes_no "Uninstall service $SERVICE_NAME?" "y"; then
         echo -e "${YELLOW}Uninstallation cancelled.${NC}"
         exit 0
     fi
 
-    for service in $SERVICES; do
-        echo "Stopping $service..."
-        sudo systemctl stop "$service" 2>/dev/null || true
-        sudo systemctl disable "$service" 2>/dev/null || true
-        echo "Removing service file..."
-        sudo rm -f "/etc/systemd/system/$service"
-    done
+    # Stop and disable service
+    echo "Stopping $SERVICE_NAME..."
+    sudo systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+    sudo systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+
+    # Remove service file
+    echo "Removing service file..."
+    sudo rm -f "$SERVICE_FILE"
 
     # Reload systemd
     echo "Reloading systemd..."
     sudo systemctl daemon-reload
+
+    echo -e "${GREEN}Service $SERVICE_NAME uninstalled!${NC}"
 
     echo -e "${GREEN}Uninstallation complete!${NC}"
 }
