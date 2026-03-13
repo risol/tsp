@@ -132,6 +132,8 @@ export interface WorkersConfig {
   enabled?: boolean;
   /** Number of workers (default: CPU cores) */
   num?: number;
+  /** Worker ID (internal use) */
+  id?: number;
 }
 
 // Default supported static file extensions
@@ -456,6 +458,10 @@ async function parseArgs(logger?: Logger): Promise<Config> {
           config.workers.num = parseInt(workersNum, 10);
         }
         config.workers.enabled = true;
+        break;
+      case "--worker-id":
+        // Internal flag: worker process ID (used by cluster mode)
+        config.workers = { enabled: true, id: parseInt(args[++i], 10) };
         break;
       case "--access-log":
       case "-a":
@@ -1239,19 +1245,27 @@ async function main(): Promise<void> {
     mode: config.dev ? "Development" : "Production",
   });
 
-  // Workers mode: disable file logging, use stdout only
+  // Workers mode: check platform compatibility
   if (config.workers?.enabled) {
-    // Default to 4 workers if not specified
-    const numWorkers = config.workers.num || 4;
-    console.log(`✓ Cluster mode enabled with ${numWorkers} workers`);
-    console.log("  (File logging disabled, all logs go to stdout)\n");
+    // Check if running on Windows
+    if (Deno.build.os === "windows") {
+      console.log("⚠ Workers mode is not supported on Windows.");
+      console.log("  Falling back to single-process mode.\n");
+      config.workers.enabled = false;
+    } else {
+      // Linux/macOS: enable SO_REUSEPORT
+      // Default to 4 workers if not specified
+      const numWorkers = config.workers.num || 4;
+      console.log(`✓ Cluster mode enabled with ${numWorkers} workers (SO_REUSEPORT)`);
+      console.log("  (File logging disabled, all logs go to stdout)\n");
 
-    // Disable file logging - output to stdout only
-    if (config.logger) {
-      config.logger.file = undefined;
-    }
-    if (config.accessLog) {
-      config.accessLog.file = undefined;
+      // Disable file logging - output to stdout only
+      if (config.logger) {
+        config.logger.file = undefined;
+      }
+      if (config.accessLog) {
+        config.accessLog.file = undefined;
+      }
     }
   }
 
@@ -1295,24 +1309,127 @@ Starting server...
   }
 
   // Start HTTP server
-  Deno.serve({
-    port: config.port,
-    onListen: ({ port, hostname }) => {
-      const serverUrl = `http://${hostname}:${port}/`;
-      console.log(`✓ Server running at ${serverUrl}`);
-      console.log("Press Ctrl+C to stop.\n");
-      serverLogger.info("Server started successfully", {
-        url: serverUrl,
-        port,
-        hostname,
-      });
-    },
-  }, async (req) => {
-    const resp = await handleRequest(req, config, serverLogger);
-    // Log access log
-    await logAccess(req, resp, config, serverLogger);
-    return resp;
+  const isWorker = config.workers !== undefined && config.workers.id !== undefined;
+
+  if (isWorker) {
+    // This is a worker process: use SO_REUSEPORT to bind to port
+    const workerId = config.workers!.id!;
+    await startWorkerWithReusePort(config, serverLogger, workerId);
+  } else if (config.workers?.enabled && Deno.build.os !== "windows") {
+    // Parent process: start multiple workers
+    const numWorkers = config.workers.num || 4;
+    await startWorkersWithReusePort(config, serverLogger, numWorkers);
+  } else {
+    // Normal mode: single server (or Windows without workers)
+    Deno.serve({
+      port: config.port,
+      onListen: ({ port, hostname }) => {
+        const serverUrl = `http://${hostname}:${port}/`;
+        console.log(`✓ Server running at ${serverUrl}`);
+        console.log("Press Ctrl+C to stop.\n");
+        serverLogger.info("Server started successfully", {
+          url: serverUrl,
+          port,
+          hostname,
+        });
+      },
+    }, async (req) => {
+      const resp = await handleRequest(req, config, serverLogger);
+      // Log access log
+      await logAccess(req, resp, config, serverLogger);
+      return resp;
+    });
+  }
+}
+
+// Start multiple workers with SO_REUSEPORT
+async function startWorkersWithReusePort(
+  config: Config,
+  serverLogger: Logger,
+  numWorkers: number,
+): Promise<void> {
+  const hostname = "0.0.0.0";
+  const port = config.port;
+
+  // Start worker processes
+  const workers: Deno.ChildProcess[] = [];
+
+  for (let i = 0; i < numWorkers; i++) {
+    const worker = new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "--unstable-net",
+        "--allow-all",
+        import.meta.url,
+        "--port",
+        port.toString(),
+        "--worker-id",
+        i.toString(),
+        "--root",
+        config.root,
+        config.dev ? "--dev" : "",
+      ].filter(Boolean),
+      stdout: "inherit",
+      stderr: "inherit",
+      stdin: "inherit",
+    });
+
+    const child = worker.spawn();
+    workers.push(child);
+
+    console.log(`✓ Worker ${i} started on port ${port}`);
+  }
+
+  console.log(`\n✓ All ${numWorkers} workers running on port ${port}`);
+  console.log("Press Ctrl+C to stop.\n");
+
+  serverLogger.info("Server started with workers", {
+    port,
+    numWorkers,
   });
+
+  // Wait for all workers to exit
+  await Promise.all(workers.map((w) => w.status));
+}
+
+// Start a single worker with SO_REUSEPORT
+async function startWorkerWithReusePort(
+  config: Config,
+  serverLogger: Logger,
+  workerId: number,
+): Promise<void> {
+  const port = config.port;
+
+  console.log(`✓ Worker ${workerId} starting on port ${port}`);
+
+  // Use Deno.serve with reusePort via unstable API
+  // Note: This requires --unstable-net flag
+  try {
+    // @ts-ignore - reusePort is unstable
+    const server = Deno.serve({
+      port,
+      // @ts-ignore - reusePort is unstable
+      reusePort: true,
+      onListen: ({ port: p, hostname }) => {
+        const serverUrl = `http://${hostname}:${p}/`;
+        console.log(`✓ Worker ${workerId} running at ${serverUrl}`);
+        serverLogger.info("Worker started", {
+          workerId,
+          port: p,
+          url: serverUrl,
+        });
+      },
+    }, async (req) => {
+      const resp = await handleRequest(req, config, serverLogger);
+      await logAccess(req, resp, config, serverLogger);
+      return resp;
+    });
+
+    await server.finished;
+  } catch (error) {
+    console.error(`✗ Worker ${workerId} failed to start:`, error);
+    serverLogger.error("Worker failed to start", { workerId, error });
+  }
 }
 
 // Start program
