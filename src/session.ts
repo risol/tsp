@@ -85,6 +85,19 @@ export interface SessionManager {
   all(): Promise<Record<string, unknown>>;
 }
 
+/**
+ * Session Store Interface
+ */
+export interface SessionStoreInterface {
+  create(): Promise<SessionData>;
+  get(signedId: string): Promise<SessionData | null>;
+  save(session: SessionData): Promise<void>;
+  destroy(signedId: string): Promise<void>;
+  touch(signedId: string): Promise<void>;
+  regenerateId(signedId: string): Promise<string>;
+  getOptions(): Required<SessionOptions>;
+}
+
 // ============== SessionStore Class ==============
 
 /**
@@ -408,7 +421,7 @@ export function createSessionManager(
     file: string;
     root: string;
   },
-  store: SessionStore,
+  store: SessionStoreInterface,
   cookieManager?: {
     set(name: string, value: string, options: unknown): void;
     delete(name: string, options?: unknown): void;
@@ -577,6 +590,350 @@ export function getDefaultOptions(): SessionOptions {
   };
 }
 
+// ============== Redis Session Store ==============
+
+interface RedisConfig {
+  host: string;
+  port: number;
+  password?: string;
+  db?: number;
+}
+
+/**
+ * Redis Session Store - Manages session storage in Redis
+ *
+ * Stores session data as JSON string with TTL for automatic expiration.
+ * Key format: tsp:session:<signed_id>
+ */
+class RedisSessionStore implements SessionStoreInterface {
+  private secret: Uint8Array;
+  private options: Required<SessionOptions>;
+  private cryptoKey: CryptoKey | null = null;
+  private logger: Logger | undefined;
+  private redis: globalThis.RedisClient | null = null;
+  private redisConfig: RedisConfig;
+  private prefix: string = "tsp:session:";
+
+  constructor(options: SessionOptions, redisConfig: RedisConfig, logger?: Logger) {
+    this.logger = logger;
+    this.redisConfig = redisConfig;
+    this.options = {
+      cookieName: options.cookieName || "tsp_session",
+      maxAge: options.maxAge || 86400,
+      cleanupInterval: options.cleanupInterval || 300000,
+      secret: options.secret || this.generateSecret(),
+      secure: options.secure !== false,
+      httpOnly: options.httpOnly !== false,
+      sameSite: options.sameSite || "Strict",
+      path: options.path || "/",
+      rolling: options.rolling !== false,
+      autoTouch: options.autoTouch !== false,
+    };
+
+    this.secret = this.options.secret;
+  }
+
+  /**
+   * Initialize Redis connection
+   */
+  private async getRedis(): Promise<globalThis.RedisClient> {
+    if (!this.redis) {
+      const { createRedis } = await import("./redis/factory.ts");
+      this.redis = await createRedis({
+        host: this.redisConfig.host,
+        port: this.redisConfig.port,
+        password: this.redisConfig.password,
+        database: this.redisConfig.db || 0,
+      });
+    }
+    return this.redis;
+  }
+
+  /**
+   * Create new session
+   */
+  async create(): Promise<SessionData> {
+    const rawId = nanoid();
+    const signedId = await this.signId(rawId);
+    const now = Date.now();
+    const ttl = this.options.maxAge;
+
+    const session: SessionData = {
+      id: signedId,
+      rawId,
+      data: new Map(),
+      createdAt: now,
+      lastTouched: now,
+      expiresAt: now + (ttl * 1000),
+      isDestroyed: false,
+    };
+
+    // Store in Redis using String with TTL
+    const redis = await this.getRedis();
+    const key = this.prefix + signedId;
+
+    const sessionJson = JSON.stringify({
+      id: signedId,
+      rawId,
+      createdAt: now,
+      lastTouched: now,
+      expiresAt: now + ttl * 1000,
+      isDestroyed: false,
+      data: {},
+    });
+
+    await redis.set(key, sessionJson, ttl);
+
+    return session;
+  }
+
+  /**
+   * Get session by signed ID
+   */
+  async get(signedId: string): Promise<SessionData | null> {
+    const rawId = await this.verifySignedId(signedId);
+    if (!rawId) {
+      return null;
+    }
+
+    const redis = await this.getRedis();
+    const key = this.prefix + signedId;
+    const jsonStr = await redis.get(key);
+
+    if (!jsonStr) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(jsonStr);
+
+      // Check expiration
+      if (Date.now() >= parsed.expiresAt) {
+        await this.destroy(signedId);
+        return null;
+      }
+
+      // Parse session data from JSON
+      const dataMap = new Map(Object.entries(parsed.data || {}));
+
+      const session: SessionData = {
+        id: signedId,
+        rawId: parsed.rawId,
+        data: dataMap,
+        createdAt: parsed.createdAt,
+        lastTouched: parsed.lastTouched,
+        expiresAt: parsed.expiresAt,
+        isDestroyed: parsed.isDestroyed,
+      };
+
+      // Auto-touch if enabled
+      if (this.options.autoTouch && this.options.rolling) {
+        await this.touch(signedId);
+      }
+
+      return session;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Save session (update existing)
+   */
+  async save(session: SessionData): Promise<void> {
+    if (session.isDestroyed) {
+      await this.destroy(session.id);
+    } else {
+      const redis = await this.getRedis();
+      const key = this.prefix + session.id;
+      const ttl = this.options.maxAge;
+
+      // Serialize full session to JSON string
+      const sessionJson = JSON.stringify({
+        id: session.id,
+        rawId: session.rawId,
+        createdAt: session.createdAt,
+        lastTouched: session.lastTouched,
+        expiresAt: session.expiresAt,
+        isDestroyed: session.isDestroyed,
+        data: Object.fromEntries(session.data),
+      });
+
+      await redis.set(key, sessionJson, ttl);
+    }
+  }
+
+  /**
+   * Destroy session
+   */
+  async destroy(signedId: string): Promise<void> {
+    const redis = await this.getRedis();
+    await redis.del(this.prefix + signedId);
+  }
+
+  /**
+   * Refresh session expiration time
+   */
+  async touch(signedId: string): Promise<void> {
+    const redis = await this.getRedis();
+    const key = this.prefix + signedId;
+    const now = Date.now();
+    const ttl = this.options.maxAge;
+
+    // Get current session, update timestamps, save back
+    const jsonStr = await redis.get(key);
+    if (jsonStr) {
+      const session = JSON.parse(jsonStr);
+      session.lastTouched = now;
+      session.expiresAt = now + ttl * 1000;
+      await redis.set(key, JSON.stringify(session), ttl);
+    }
+  }
+
+  /**
+   * Regenerate session ID
+   */
+  async regenerateId(signedId: string): Promise<string> {
+    const session = await this.get(signedId);
+    if (!session || session.isDestroyed) {
+      throw new Error("Session not found or destroyed");
+    }
+
+    // Destroy old session
+    await this.destroy(signedId);
+
+    // Create new session with same data
+    const newRawId = nanoid();
+    const newSignedId = await this.signId(newRawId);
+    const now = Date.now();
+    const ttl = this.options.maxAge;
+
+    const newSession: SessionData = {
+      id: newSignedId,
+      rawId: newRawId,
+      data: session.data,
+      createdAt: now,
+      lastTouched: now,
+      expiresAt: now + ttl * 1000,
+      isDestroyed: false,
+    };
+
+    // Save new session to Redis
+    const redis = await this.getRedis();
+    const key = this.prefix + newSignedId;
+
+    const sessionJson = JSON.stringify({
+      id: newSignedId,
+      rawId: newRawId,
+      createdAt: now,
+      lastTouched: now,
+      expiresAt: now + ttl * 1000,
+      isDestroyed: false,
+      data: Object.fromEntries(session.data),
+    });
+
+    await redis.set(key, sessionJson, ttl);
+
+    return newSignedId;
+  }
+
+  /**
+   * Get options
+   */
+  getOptions(): Required<SessionOptions> {
+    return this.options;
+  }
+
+  // ============== Signing Methods ==============
+
+  /**
+   * Sign session ID with HMAC-SHA256
+   */
+  private async signId(id: string): Promise<string> {
+    const key = await this.getCryptoKey();
+    const data = new TextEncoder().encode(id);
+    const signature = await crypto.subtle.sign("HMAC", key, data);
+    const signatureB64 = this.base64UrlEncode(new Uint8Array(signature));
+    return `${id}.${signatureB64}`;
+  }
+
+  /**
+   * Verify signed session ID
+   */
+  private async verifySignedId(signedId: string): Promise<string | null> {
+    const parts = signedId.split(".");
+    if (parts.length !== 2) {
+      return null;
+    }
+
+    const [rawId, sigB64] = parts;
+    const key = await this.getCryptoKey();
+    const data = new TextEncoder().encode(rawId);
+
+    try {
+      const signature = this.base64UrlDecode(sigB64);
+      const valid = await crypto.subtle.verify(
+        "HMAC",
+        key,
+        signature.buffer as ArrayBuffer,
+        data,
+      );
+      return valid ? rawId : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Get or create HMAC key
+   */
+  private async getCryptoKey(): Promise<CryptoKey> {
+    if (!this.cryptoKey) {
+      const secretBuffer = new ArrayBuffer(this.secret.length);
+      const secretView = new Uint8Array(secretBuffer);
+      secretView.set(this.secret);
+
+      this.cryptoKey = await crypto.subtle.importKey(
+        "raw",
+        secretBuffer,
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign", "verify"],
+      );
+    }
+    return this.cryptoKey;
+  }
+
+  /**
+   * Base64 URL encode
+   */
+  private base64UrlEncode(data: Uint8Array): string {
+    const base64 = btoa(String.fromCharCode(...data));
+    return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+  }
+
+  /**
+   * Base64 URL decode
+   */
+  private base64UrlDecode(base64: string): Uint8Array {
+    base64 = base64.replace(/-/g, "+").replace(/_/g, "/");
+    while (base64.length % 4) {
+      base64 += "=";
+    }
+    const binary = atob(base64);
+    return new Uint8Array([...binary].map((c) => c.charCodeAt(0)));
+  }
+
+  /**
+   * Generate random secret
+   */
+  private generateSecret(): Uint8Array {
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    return bytes;
+  }
+}
+
 // ============== Export SessionStore for main.ts ==============
 
-export { SessionStore };
+export { SessionStore, RedisSessionStore };

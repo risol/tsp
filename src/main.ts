@@ -19,7 +19,9 @@ import { parse as parseJsonc } from "jsr:/@std/jsonc";
 import {
   createSessionManager,
   getDefaultOptions,
+  RedisSessionStore,
   SessionStore,
+  type SessionStoreInterface,
 } from "./session.ts";
 import { createCookieManager } from "./cookies.ts";
 import { createResponseHelper } from "./response.ts";
@@ -50,6 +52,18 @@ export interface SessionConfig {
   path?: string;
   /** Whether to enable rolling session (refresh expiry on each visit, default: true) */
   rolling?: boolean;
+}
+
+// Redis config interface
+export interface RedisConfig {
+  /** Redis host (default: '127.0.0.1') */
+  host?: string;
+  /** Redis port (default: 6379) */
+  port?: number;
+  /** Redis password (optional) */
+  password?: string;
+  /** Redis database number (default: 0) */
+  db?: number;
 }
 
 // Logger config interface
@@ -106,6 +120,8 @@ export interface Config {
   logger?: LoggerConfig;
   /** File manager config */
   fileManager?: FileManagerConfig;
+  /** Redis config for session sharing */
+  redis?: RedisConfig;
 }
 
 // Default supported static file extensions
@@ -977,7 +993,7 @@ async function main(): Promise<void> {
   });
 
   // Global SessionStore singleton
-  let sessionStore: SessionStore | null = null;
+  let sessionStore: SessionStoreInterface | null = null;
 
   // Create logger for session cleanup (needs to be before session registration)
   const loggerConfig = config.logger;
@@ -1020,7 +1036,28 @@ async function main(): Promise<void> {
           { rolling: sessionConfig.rolling }),
       };
 
-      sessionStore = new SessionStore(options, loggerInstance);
+      // Check if Redis is configured for session sharing
+      const redisConfig = config.redis;
+      if (redisConfig && redisConfig.host) {
+        sessionStore = new RedisSessionStore(
+          options,
+          {
+            host: redisConfig.host,
+            port: redisConfig.port || 6379,
+            password: redisConfig.password,
+            db: redisConfig.db,
+          },
+          loggerInstance,
+        );
+        console.log("✓ Using Redis session store");
+        loggerInstance?.info("Using Redis session store", {
+          host: redisConfig.host,
+          port: redisConfig.port,
+        });
+      } else {
+        // Use in-memory session store
+        sessionStore = new SessionStore(options, loggerInstance);
+      }
     }
 
     // Get cookie manager for setting cookies

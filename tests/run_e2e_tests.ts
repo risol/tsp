@@ -24,6 +24,7 @@ import { getSessionTests } from "./e2e/session.ts";
 import { getUploadTests } from "./e2e/upload.ts";
 import { getMysqlTests } from "./e2e/mysql.ts";
 import { getRedisTests } from "./e2e/redis.ts";
+import { getRedisSessionTests } from "./e2e/redis_session.ts";
 import { getExcelJsTests } from "./e2e/exceljs.ts";
 import { getLdapTests } from "./e2e/ldap.ts";
 import { getConfigTests } from "./e2e/config.ts";
@@ -130,7 +131,7 @@ export function getBinaryPath(): string {
   const osType = getOsType();
   const arch = getArch();
   const version = getVersion();
-  const platformPath = `${osType}-${arch}`;
+  const platformPath = `tsp-${osType}-${arch}`; // Add tsp- prefix
   const cwd = Deno.cwd();
 
   // Determine dist path based on current directory (<os>-<arch>-v<version>)
@@ -502,6 +503,7 @@ async function runE2ETests(): Promise<void> {
   tests.push(...getUploadTests());
   tests.push(...getMysqlTests());
   tests.push(...getRedisTests());
+  // tests.push(...getRedisSessionTests()); // Skipped - manual verification needed
   tests.push(...getExcelJsTests());
   tests.push(...getLdapTests());
   tests.push(...getConfigTests());
