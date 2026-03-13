@@ -10,6 +10,7 @@ set -e
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Default values
@@ -20,25 +21,169 @@ BINARY_NAME="tspserver"
 PORT=9000
 NUM_INSTANCES=1
 
-# Usage function
-usage() {
-    echo "Usage: $0 [OPTIONS]"
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BINARY_PATH="$SCRIPT_DIR/$BINARY_NAME"
+
+# Read input with default
+read_with_default() {
+    local prompt="$1"
+    local default="$2"
+    local value
+
+    if [ -n "$default" ]; then
+        read -p "$prompt [$default]: " value
+        echo "${value:-$default}"
+    else
+        read -p "$prompt: " value
+        echo "$value"
+    fi
+}
+
+# Yes/No question
+ask_yes_no() {
+    local prompt="$1"
+    local default="$2"
+    local yn
+
+    while true; do
+        if [ -n "$default" ]; then
+            read -p "$prompt [$default]: " yn
+            yn="${yn:-$default}"
+        else
+            read -p "$prompt [y/n]: " yn
+        fi
+
+        case "$yn" in
+            [Yy]|[Yy][Ee][Ss]) return 0 ;;
+            [Nn]|[Nn][Oo]) return 1 ;;
+            *) echo "Please answer yes or no" ;;
+        esac
+    done
+}
+
+# Interactive mode
+interactive_install() {
     echo ""
-    echo "Options:"
-    echo "  --install-dir DIR    Installation directory (default: /opt/tsp)"
-    echo "  --config-dir DIR    Config directory (default: /etc/tsp)"
-    echo "  --service-name NAME  Service name (default: tsp)"
-    echo "  --port PORT          Port for this instance (default: 9000)"
-    echo "  --workers NUM        Number of instances to install (default: 1)"
-    echo "                       Installs instances on ports: PORT, PORT+1, ..."
-    echo "  --uninstall         Uninstall the service(s)"
-    echo "  -h, --help          Show this help message"
+    echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}         TSP Server Interactive Installation${NC}"
+    echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
     echo ""
-    exit 0
+
+    # Welcome
+    echo -e "${GREEN}Welcome to TSP Server installation!${NC}"
+    echo ""
+    echo "This script will install TSP as a systemd service."
+    echo ""
+
+    # Check if running as root
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${YELLOW}Note: Installation requires root privileges.${NC}"
+        echo "You'll be prompted for sudo password when needed."
+        echo ""
+    fi
+
+    # Installation directory
+    echo -e "${BLUE}─────────────────────────────────────────────────────────${NC}"
+    echo -e "${BLUE}Step 1: Installation Directory${NC}"
+    echo ""
+    INSTALL_DIR=$(read_with_default "Installation directory" "$INSTALL_DIR")
+    echo ""
+
+    # Service name
+    echo -e "${BLUE}─────────────────────────────────────────────────────────${NC}"
+    echo -e "${BLUE}Step 2: Service Configuration${NC}"
+    echo ""
+    SERVICE_NAME=$(read_with_default "Service name" "$SERVICE_NAME")
+    echo ""
+
+    # Port configuration
+    echo -e "${BLUE}─────────────────────────────────────────────────────────${NC}"
+    echo -e "${BLUE}Step 3: Port Configuration${NC}"
+    echo ""
+
+    # Ask about multiple instances
+    if ask_yes_no "Do you want to install multiple TSP instances?" "n"; then
+        NUM_INSTANCES=$(read_with_default "Number of instances" "4")
+        PORT=$(read_with_default "Starting port" "9000")
+        echo ""
+        echo -e "${GREEN}Will install $NUM_INSTANCES instances on ports $PORT to $((PORT + NUM_INSTANCES - 1))${NC}"
+    else
+        NUM_INSTANCES=1
+        PORT=$(read_with_default "Port number" "9000")
+        echo ""
+        echo -e "${GREEN}Will install 1 instance on port $PORT${NC}"
+    fi
+
+    # Summary
+    echo ""
+    echo -e "${BLUE}─────────────────────────────────────────────────────────${NC}"
+    echo -e "${BLUE}Installation Summary${NC}"
+    echo ""
+    echo -e "  Installation directory: ${GREEN}$INSTALL_DIR${NC}"
+    echo -e "  Service name(s):        ${GREEN}$SERVICE_NAME${NC}"
+    echo -e "  Number of instances:     ${GREEN}$NUM_INSTANCES${NC}"
+    echo -e "  Port(s):                ${GREEN}$PORT${NC}"
+    echo ""
+
+    # Confirm
+    if ! ask_yes_no "Start installation?" "y"; then
+        echo ""
+        echo -e "${YELLOW}Installation cancelled.${NC}"
+        exit 0
+    fi
+
+    echo ""
+    echo -e "${GREEN}Starting installation...${NC}"
+    echo ""
+}
+
+# Uninstall function
+uninstall() {
+    echo ""
+    echo -e "${YELLOW}Uninstalling TSP services...${NC}"
+    echo ""
+
+    # Ask for service name
+    SERVICE_NAME=$(read_with_default "Service name to uninstall" "tsp")
+
+    # Find all services matching the name
+    echo "Finding services matching '$SERVICE_NAME'..."
+    SERVICES=$(systemctl list-units --type=service --all --no-legend | grep "$SERVICE_NAME" | awk '{print $1}' || true)
+
+    if [ -z "$SERVICES" ]; then
+        echo -e "${YELLOW}No services found matching '$SERVICE_NAME'${NC}"
+        exit 0
+    fi
+
+    echo "Found services:"
+    echo "$SERVICES"
+    echo ""
+
+    if ! ask_yes_no "Uninstall these services?" "y"; then
+        echo -e "${YELLOW}Uninstallation cancelled.${NC}"
+        exit 0
+    fi
+
+    for service in $SERVICES; do
+        echo "Stopping $service..."
+        sudo systemctl stop "$service" 2>/dev/null || true
+        sudo systemctl disable "$service" 2>/dev/null || true
+        echo "Removing service file..."
+        sudo rm -f "/etc/systemd/system/$service"
+    done
+
+    # Reload systemd
+    echo "Reloading systemd..."
+    sudo systemctl daemon-reload
+
+    echo -e "${GREEN}Uninstallation complete!${NC}"
 }
 
 # Parse arguments
 UNINSTALL=false
+INTERACTIVE=false
+
 while [[ $# -gt 0 ]]; do
     case $1 in
         --install-dir)
@@ -61,68 +206,52 @@ while [[ $# -gt 0 ]]; do
             NUM_INSTANCES="$2"
             shift 2
             ;;
+        -i|--interactive)
+            INTERACTIVE=true
+            shift
+            ;;
         --uninstall)
             UNINSTALL=true
             shift
             ;;
         -h|--help)
-            usage
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  --install-dir DIR    Installation directory (default: /opt/tsp)"
+            echo "  --config-dir DIR    Config directory (default: /etc/tsp)"
+            echo "  --service-name NAME  Service name (default: tsp)"
+            echo "  --port PORT         Port for this instance (default: 9000)"
+            echo "  --workers NUM        Number of instances (default: 1)"
+            echo "  -i, --interactive  Interactive installation mode"
+            echo "  --uninstall         Uninstall the service(s)"
+            echo "  -h, --help         Show this help message"
+            echo ""
+            exit 0
             ;;
         *)
             echo "Unknown option: $1"
-            usage
+            echo "Use -h or --help for usage information"
+            exit 1
             ;;
     esac
 done
 
-# Get the directory where this script is located
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BINARY_PATH="$SCRIPT_DIR/$BINARY_NAME"
-
-# Uninstall function
-uninstall() {
-    echo -e "${YELLOW}Uninstalling $SERVICE_NAME services...${NC}"
-
-    # Uninstall all instances
-    for i in $(seq 0 $((NUM_INSTANCES - 1))); do
-        INSTANCE_PORT=$((PORT + i))
-        INSTANCE_NAME="${SERVICE_NAME}-${INSTANCE_PORT}"
-
-        echo "Stopping $INSTANCE_NAME service..."
-        sudo systemctl stop "$INSTANCE_NAME" || true
-        sudo systemctl disable "$INSTANCE_NAME" || true
-
-        # Remove service file
-        if [ -f "/etc/systemd/system/$INSTANCE_NAME.service" ]; then
-            echo "Removing service file for port $INSTANCE_PORT..."
-            sudo rm -f /etc/systemd/system/$INSTANCE_NAME.service
-        fi
-    done
-
-    # Reload systemd
-    echo "Reloading systemd..."
-    sudo systemctl daemon-reload
-
-    echo -e "${GREEN}Uninstallation complete!${NC}"
-    exit 0
-}
-
-# Check if running as root for installation
-if [ "$UNINSTALL" = false ] && [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}Please run as root or with sudo for installation${NC}"
-    exit 1
-fi
-
-# Check if binary exists
-if [ "$UNINSTALL" = false ] && [ ! -f "$BINARY_PATH" ]; then
-    echo -e "${RED}Error: tspserver binary not found in $SCRIPT_DIR${NC}"
-    echo "Please run this script from the directory containing tspserver binary"
-    exit 1
+# Run in interactive mode if -i flag is passed
+if [ "$INTERACTIVE" = true ]; then
+    interactive_install
 fi
 
 # If uninstall, just run uninstall
 if [ "$UNINSTALL" = true ]; then
     uninstall
+fi
+
+# Check if binary exists
+if [ ! -f "$BINARY_PATH" ]; then
+    echo -e "${RED}Error: tspserver binary not found in $SCRIPT_DIR${NC}"
+    echo "Please run this script from the directory containing tspserver binary"
+    exit 1
 fi
 
 # Installation
