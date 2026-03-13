@@ -103,6 +103,26 @@
   },
 
   // ====================
+  // Redis Configuration (for session sharing)
+  // ====================
+  // When configured, sessions are stored in Redis instead of memory
+  // This enables session sharing across multiple TSP instances
+  "redis": {
+    // Redis server host (optional)
+    // If not set, uses in-memory session store
+    // "host": "127.0.0.1",
+
+    // Redis server port (default: 6379)
+    // "port": 6379,
+
+    // Redis password (optional)
+    // "password": "your_redis_password",
+
+    // Redis database number (default: 0)
+    // "db": 0
+  },
+
+  // ====================
   // Static File Configuration
   // ====================
 

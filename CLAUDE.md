@@ -176,7 +176,9 @@ Priority: CLI args > config file > defaults
   "accessLog": { "file": ".logs/access.log", "rotation": { "maxSize": 10485760, "maxFiles": 5 } },
   "session": { "secure": false, "maxAge": 86400 },
   "logger": { "level": "INFO", "file": ".logs/app.log" },
-  "fileManager": { "enabled": true, "path": "/__filemanager", "password": "xxx" }
+  "fileManager": { "enabled": true, "path": "/__filemanager", "password": "xxx" },
+  // Redis for session sharing (stateless sessions)
+  "redis": { "host": "127.0.0.1", "port": 6379, "db": 0 }
 }
 ```
 
