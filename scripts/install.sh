@@ -335,17 +335,29 @@ for i in $(seq 0 $((NUM_INSTANCES - 1))); do
     # Create instance config
     echo "Creating config for port $INSTANCE_PORT..."
     if [ -f "$SCRIPT_DIR/config.example.jsonc" ]; then
-        sed "s|\./www|$INSTALL_DIR/www|g; s|\.logs/|$INSTALL_DIR/logs/|g; s|\"port\": [0-9000]*|\"port\": $INSTANCE_PORT|g" \
+        # Use instance-specific log directory
+        sed "s|\./www|$INSTALL_DIR/www|g; s|\.logs/|$INSTALL_DIR/logs/$INSTANCE_PORT/|g; s|\"port\": [0-9000]*|\"port\": $INSTANCE_PORT|g" \
             "$SCRIPT_DIR/config.example.jsonc" | sudo tee "$INSTANCE_CONFIG" > /dev/null
     else
         sudo tee "$INSTANCE_CONFIG" > /dev/null << EOF
 {
   "root": "$INSTALL_DIR/www",
   "port": $INSTANCE_PORT,
-  "dev": false
+  "dev": false,
+  "logger": {
+    "file": "$INSTALL_DIR/logs/$INSTANCE_PORT/app.log"
+  },
+  "accessLog": {
+    "file": "$INSTALL_DIR/logs/$INSTANCE_PORT/access.log"
+  }
 }
 EOF
     fi
+
+    # Create instance-specific log directory
+    INSTANCE_LOG_DIR="$INSTALL_DIR/logs/$INSTANCE_PORT"
+    echo "Creating log directory: $INSTANCE_LOG_DIR"
+    sudo mkdir -p "$INSTANCE_LOG_DIR"
 
     # Create systemd service file
     SERVICE_FILE="/etc/systemd/system/$INSTANCE_NAME.service"
