@@ -17,6 +17,8 @@ INSTALL_DIR="/opt/tsp"
 CONFIG_DIR="/etc/tsp"
 SERVICE_NAME="tsp"
 BINARY_NAME="tspserver"
+PORT=9000
+NUM_INSTANCES=1
 
 # Usage function
 usage() {
@@ -26,8 +28,11 @@ usage() {
     echo "  --install-dir DIR    Installation directory (default: /opt/tsp)"
     echo "  --config-dir DIR    Config directory (default: /etc/tsp)"
     echo "  --service-name NAME  Service name (default: tsp)"
-    echo "  --uninstall         Uninstall the service"
-    echo "  -h, --help         Show this help message"
+    echo "  --port PORT          Port for this instance (default: 9000)"
+    echo "  --workers NUM        Number of instances to install (default: 1)"
+    echo "                       Installs instances on ports: PORT, PORT+1, ..."
+    echo "  --uninstall         Uninstall the service(s)"
+    echo "  -h, --help          Show this help message"
     echo ""
     exit 0
 }
@@ -46,6 +51,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --service-name)
             SERVICE_NAME="$2"
+            shift 2
+            ;;
+        --port)
+            PORT="$2"
+            shift 2
+            ;;
+        --workers)
+            NUM_INSTANCES="$2"
             shift 2
             ;;
         --uninstall)
@@ -68,24 +81,23 @@ BINARY_PATH="$SCRIPT_DIR/$BINARY_NAME"
 
 # Uninstall function
 uninstall() {
-    echo -e "${YELLOW}Uninstalling $SERVICE_NAME service...${NC}"
+    echo -e "${YELLOW}Uninstalling $SERVICE_NAME services...${NC}"
 
-    # Stop and disable service
-    if systemctl is-active --quiet "$SERVICE_NAME"; then
-        echo "Stopping $SERVICE_NAME service..."
-        sudo systemctl stop "$SERVICE_NAME" || true
-    fi
+    # Uninstall all instances
+    for i in $(seq 0 $((NUM_INSTANCES - 1))); do
+        INSTANCE_PORT=$((PORT + i))
+        INSTANCE_NAME="${SERVICE_NAME}-${INSTANCE_PORT}"
 
-    if systemctl is-enabled --quiet "$SERVICE_NAME"; then
-        echo "Disabling $SERVICE_NAME service..."
-        sudo systemctl disable "$SERVICE_NAME" || true
-    fi
+        echo "Stopping $INSTANCE_NAME service..."
+        sudo systemctl stop "$INSTANCE_NAME" || true
+        sudo systemctl disable "$INSTANCE_NAME" || true
 
-    # Remove service file
-    if [ -f "/etc/systemd/system/$SERVICE_NAME.service" ]; then
-        echo "Removing service file..."
-        sudo rm -f /etc/systemd/system/$SERVICE_NAME.service
-    fi
+        # Remove service file
+        if [ -f "/etc/systemd/system/$INSTANCE_NAME.service" ]; then
+            echo "Removing service file for port $INSTANCE_PORT..."
+            sudo rm -f /etc/systemd/system/$INSTANCE_NAME.service
+        fi
+    done
 
     # Reload systemd
     echo "Reloading systemd..."
@@ -114,7 +126,7 @@ if [ "$UNINSTALL" = true ]; then
 fi
 
 # Installation
-echo -e "${GREEN}Installing $SERVICE_NAME...${NC}"
+echo -e "${GREEN}Installing $SERVICE_NAME with $NUM_INSTANCES instance(s)...${NC}"
 
 # Create installation directory
 echo "Creating installation directory: $INSTALL_DIR"
@@ -129,7 +141,7 @@ sudo chmod +x "$INSTALL_DIR/$BINARY_NAME"
 echo "Creating config directory: $CONFIG_DIR"
 sudo mkdir -p "$CONFIG_DIR"
 
-# Copy config file if it doesn't exist
+# Copy config template if it doesn't exist
 if [ ! -f "$CONFIG_DIR/config.jsonc" ]; then
     echo "Creating default config file..."
     if [ -f "$SCRIPT_DIR/config.example.jsonc" ]; then
@@ -142,9 +154,8 @@ if [ ! -f "$CONFIG_DIR/config.jsonc" ]; then
         sudo tee "$CONFIG_DIR/config.jsonc" > /dev/null << EOF
 {
   "root": "$INSTALL_DIR/www",
-  "port": 9000,
-  "dev": false,
-  "hotReload": true
+  "port": $PORT,
+  "dev": false
 }
 EOF
     fi
@@ -162,20 +173,44 @@ SYSTEM_LOG_DIR="/var/log/tsp"
 echo "Creating system log directory: $SYSTEM_LOG_DIR"
 sudo mkdir -p "$SYSTEM_LOG_DIR"
 
-# Create systemd service file
-SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
-echo "Creating systemd service file..."
+# Install multiple instances
+for i in $(seq 0 $((NUM_INSTANCES - 1))); do
+    INSTANCE_PORT=$((PORT + i))
+    INSTANCE_NAME="${SERVICE_NAME}-${INSTANCE_PORT}"
+    INSTANCE_CONFIG="$CONFIG_DIR/config-${INSTANCE_PORT}.jsonc"
 
-sudo tee "$SERVICE_FILE" > /dev/null << EOF
+    echo ""
+    echo "--- Installing instance $INSTANCE_NAME on port $INSTANCE_PORT ---"
+
+    # Create instance config
+    echo "Creating config for port $INSTANCE_PORT..."
+    if [ -f "$SCRIPT_DIR/config.example.jsonc" ]; then
+        sed "s|\./www|$INSTALL_DIR/www|g; s|\.logs/|$INSTALL_DIR/logs/|g; s|\"port\": [0-9000]*|\"port\": $INSTANCE_PORT|g" \
+            "$SCRIPT_DIR/config.example.jsonc" | sudo tee "$INSTANCE_CONFIG" > /dev/null
+    else
+        sudo tee "$INSTANCE_CONFIG" > /dev/null << EOF
+{
+  "root": "$INSTALL_DIR/www",
+  "port": $INSTANCE_PORT,
+  "dev": false
+}
+EOF
+    fi
+
+    # Create systemd service file
+    SERVICE_FILE="/etc/systemd/system/$INSTANCE_NAME.service"
+    echo "Creating systemd service file for port $INSTANCE_PORT..."
+
+    sudo tee "$SERVICE_FILE" > /dev/null << EOF
 [Unit]
-Description=TSP (TypeScript Server Page) Server
+Description=TSP (TypeScript Server Page) Server - Port $INSTANCE_PORT
 After=network.target
 
 [Service]
 Type=simple
 User=$USER
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/$BINARY_NAME --config $CONFIG_DIR/config.jsonc
+ExecStart=$INSTALL_DIR/$BINARY_NAME --config $INSTANCE_CONFIG
 Restart=always
 RestartSec=10
 
@@ -184,35 +219,41 @@ Environment="HOME=$HOME"
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 
 # Logging - capture all output to files
-StandardOutput=append:$SYSTEM_LOG_DIR/denort-tsp-output.log
-StandardError=append:$SYSTEM_LOG_DIR/denort-tsp-error.log
+StandardOutput=append:$SYSTEM_LOG_DIR/${INSTANCE_NAME}-output.log
+StandardError=append:$SYSTEM_LOG_DIR/${INSTANCE_NAME}-error.log
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# Reload systemd
-echo "Reloading systemd..."
-sudo systemctl daemon-reload
-
-# Enable and start service
-echo "Enabling service..."
-sudo systemctl enable "$SERVICE_NAME"
-
-echo "Starting service..."
-sudo systemctl start "$SERVICE_NAME"
+    # Enable and start service
+    echo "Enabling and starting $INSTANCE_NAME..."
+    sudo systemctl daemon-reload
+    sudo systemctl enable "$INSTANCE_NAME"
+    sudo systemctl start "$INSTANCE_NAME"
+done
 
 # Check status
 echo ""
 echo -e "${GREEN}Installation complete!${NC}"
 echo ""
 echo "Service status:"
-sudo systemctl status "$SERVICE_NAME" --no-pager || true
+for i in $(seq 0 $((NUM_INSTANCES - 1))); do
+    INSTANCE_PORT=$((PORT + i))
+    INSTANCE_NAME="${SERVICE_NAME}-${INSTANCE_PORT}"
+    echo ""
+    echo "=== $INSTANCE_NAME (port $INSTANCE_PORT) ==="
+    sudo systemctl status "$INSTANCE_NAME" --no-pager || true
+done
 echo ""
-echo -e "${GREEN}Service installed successfully!${NC}"
+echo -e "${GREEN}All services installed successfully!${NC}"
 echo ""
 echo "Useful commands:"
-echo "  sudo systemctl status $SERVICE_NAME   # Check status"
-echo "  sudo systemctl restart $SERVICE_NAME # Restart"
-echo "  sudo systemctl stop $SERVICE_NAME    # Stop"
-echo "  journalctl -u $SERVICE_NAME -f       # View logs"
+for i in $(seq 0 $((NUM_INSTANCES - 1))); do
+    INSTANCE_PORT=$((PORT + i))
+    INSTANCE_NAME="${SERVICE_NAME}-${INSTANCE_PORT}"
+    echo "  sudo systemctl status $INSTANCE_NAME   # Check status"
+    echo "  sudo systemctl restart $INSTANCE_NAME # Restart"
+    echo "  journalctl -u $INSTANCE_NAME -f       # View logs"
+    echo ""
+done
