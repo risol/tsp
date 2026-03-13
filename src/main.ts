@@ -122,6 +122,16 @@ export interface Config {
   fileManager?: FileManagerConfig;
   /** Redis config for session sharing */
   redis?: RedisConfig;
+  /** Workers config (cluster mode) */
+  workers?: WorkersConfig;
+}
+
+// Workers configuration
+export interface WorkersConfig {
+  /** Enable workers/cluster mode */
+  enabled?: boolean;
+  /** Number of workers (default: CPU cores) */
+  num?: number;
 }
 
 // Default supported static file extensions
@@ -436,6 +446,17 @@ async function parseArgs(logger?: Logger): Promise<Config> {
       case "-d":
         config.dev = true;
         break;
+      case "--workers":
+      case "-w":
+        if (!config.workers) {
+          config.workers = {};
+        }
+        const workersNum = args[++i];
+        if (workersNum && !workersNum.startsWith("-")) {
+          config.workers.num = parseInt(workersNum, 10);
+        }
+        config.workers.enabled = true;
+        break;
       case "--access-log":
       case "-a":
         if (!config.accessLog) {
@@ -483,6 +504,7 @@ Options:
   --root, -r <path>       Document root directory (default: ./www)
   --port, -p <port>       Listening port (default: 9000)
   --dev, -d               Development mode (show detailed errors)
+  --workers, -w [num]      Enable cluster mode (optional: number of workers)
   --access-log, -a <path> Access log file path (default: console output)
   --help, -h              Show help information
 
@@ -1216,6 +1238,22 @@ async function main(): Promise<void> {
     port: config.port,
     mode: config.dev ? "Development" : "Production",
   });
+
+  // Workers mode: disable file logging, use stdout only
+  if (config.workers?.enabled) {
+    // Default to 4 workers if not specified
+    const numWorkers = config.workers.num || 4;
+    console.log(`✓ Cluster mode enabled with ${numWorkers} workers`);
+    console.log("  (File logging disabled, all logs go to stdout)\n");
+
+    // Disable file logging - output to stdout only
+    if (config.logger) {
+      config.logger.file = undefined;
+    }
+    if (config.accessLog) {
+      config.accessLog.file = undefined;
+    }
+  }
 
   // Print startup banner (kept for user-friendly console output)
   const banner = `
