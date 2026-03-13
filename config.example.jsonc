@@ -123,6 +123,22 @@
   },
 
   // ====================
+  // Workers Configuration (Cluster Mode)
+  // ====================
+  // Workers mode uses SO_REUSEPORT on Linux/macOS to enable
+  // multiple processes to bind to the same port.
+  // NOTE: File logging is automatically disabled in workers mode
+  // (all logs go to stdout for systemd collection)
+  // NOTE: Not supported on Windows - will fall back to single-process
+  "workers": {
+    // Enable workers mode (default: false)
+    // "enabled": true,
+
+    // Number of workers (default: 4)
+    // "num": 4
+  },
+
+  // ====================
   // Static File Configuration
   // ====================
 
