@@ -19,7 +19,7 @@ CONFIG_DIR="/etc/tsp"
 SERVICE_NAME="tsp"
 BINARY_NAME="tspserver"
 PORT=9000
-NUM_INSTANCES=1
+NUM_WORKERS=1
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -101,39 +101,24 @@ interactive_install() {
     echo -e "${BLUE}─────────────────────────────────────────────────────────${NC}"
     echo -e "${BLUE}Step 3: Port Configuration${NC}"
     echo ""
+    PORT=$(read_with_default "Port number" "9000")
+    echo ""
 
-    # Ask about multiple instances
-    if ask_yes_no "Do you want to install multiple TSP instances?" "n"; then
-        NUM_INSTANCES=$(read_with_default "Number of instances" "4")
+    # Workers configuration (Linux only)
+    echo -e "${BLUE}─────────────────────────────────────────────────────────${NC}"
+    echo -e "${BLUE}Step 4: Workers Configuration${NC}"
+    echo ""
+    echo "Workers use SO_REUSEPORT to share the same port (Linux/macOS)."
+    echo "On Windows, workers mode is not supported."
+    echo ""
+    if ask_yes_no "Enable workers mode?" "n"; then
+        NUM_WORKERS=$(read_with_default "Number of workers" "4")
         echo ""
-
-        # Ask for ports one by one
-        PORTS=()
-        for i in $(seq 1 $NUM_INSTANCES); do
-            if [ $i -eq 1 ]; then
-                PORT=$(read_with_default "Port for instance 1" "9000")
-                PORTS+=("$PORT")
-            else
-                PREV_PORT=${PORTS[$((i-2))]}
-                NEXT_PORT=$((PREV_PORT + 1))
-                PORT=$(read_with_default "Port for instance $i" "$NEXT_PORT")
-                PORTS+=("$PORT")
-            fi
-        done
-
-        # Convert array to space-separated string
-        PORT="${PORTS[0]}"
-        for i in $(seq 1 $((NUM_INSTANCES - 1))); do
-            PORT="$PORT ${PORTS[$i]}"
-        done
-
-        echo ""
-        echo -e "${GREEN}Will install $NUM_INSTANCES instances on ports: $PORT${NC}"
+        echo -e "${GREEN}Will enable workers mode with $NUM_WORKERS workers${NC}"
     else
-        NUM_INSTANCES=1
-        PORT=$(read_with_default "Port number" "9000")
+        NUM_WORKERS=1
         echo ""
-        echo -e "${GREEN}Will install 1 instance on port $PORT${NC}"
+        echo -e "${GREEN}Will run in single-process mode${NC}"
     fi
 
     # Summary
@@ -142,9 +127,9 @@ interactive_install() {
     echo -e "${BLUE}Installation Summary${NC}"
     echo ""
     echo -e "  Installation directory: ${GREEN}$INSTALL_DIR${NC}"
-    echo -e "  Service name(s):        ${GREEN}$SERVICE_NAME${NC}"
-    echo -e "  Number of instances:     ${GREEN}$NUM_INSTANCES${NC}"
-    echo -e "  Port(s):                ${GREEN}$PORT${NC}"
+    echo -e "  Service name:          ${GREEN}$SERVICE_NAME${NC}"
+    echo -e "  Port:                  ${GREEN}$PORT${NC}"
+    echo -e "  Workers:               ${GREEN}$NUM_WORKERS${NC}"
     echo ""
 
     # Confirm
@@ -224,7 +209,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --workers)
-            NUM_INSTANCES="$2"
+            NUM_WORKERS="$2"
             shift 2
             ;;
         -i|--interactive)
@@ -242,8 +227,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --install-dir DIR    Installation directory (default: /opt/tsp)"
             echo "  --config-dir DIR    Config directory (default: /etc/tsp)"
             echo "  --service-name NAME  Service name (default: tsp)"
-            echo "  --port PORT         Port for this instance (default: 9000)"
-            echo "  --workers NUM        Number of instances (default: 1)"
+            echo "  --port PORT         Port number (default: 9000)"
+            echo "  --workers NUM        Number of workers (default: 1, use 0 to disable)"
             echo "  -i, --interactive  Interactive installation mode"
             echo "  --uninstall         Uninstall the service(s)"
             echo "  -h, --help         Show this help message"
@@ -276,7 +261,7 @@ if [ ! -f "$BINARY_PATH" ]; then
 fi
 
 # Installation
-echo -e "${GREEN}Installing $SERVICE_NAME with $NUM_INSTANCES instance(s)...${NC}"
+echo -e "${GREEN}Installing $SERVICE_NAME on port $PORT with $NUM_WORKERS worker(s)...${NC}"
 
 # Create installation directory
 echo "Creating installation directory: $INSTALL_DIR"
@@ -323,56 +308,26 @@ SYSTEM_LOG_DIR="/var/log/tsp"
 echo "Creating system log directory: $SYSTEM_LOG_DIR"
 sudo mkdir -p "$SYSTEM_LOG_DIR"
 
-# Install multiple instances
-for i in $(seq 0 $((NUM_INSTANCES - 1))); do
-    INSTANCE_PORT=$((PORT + i))
-    INSTANCE_NAME="${SERVICE_NAME}-${INSTANCE_PORT}"
-    INSTANCE_CONFIG="$CONFIG_DIR/config-${INSTANCE_PORT}.jsonc"
+# Build ExecStart command with workers flag
+EXEC_START="$INSTALL_DIR/$BINARY_NAME --config $CONFIG_DIR/config.jsonc --port $PORT"
+if [ "$NUM_WORKERS" -gt 1 ]; then
+    EXEC_START="$EXEC_START --workers $NUM_WORKERS"
+fi
 
-    echo ""
-    echo "--- Installing instance $INSTANCE_NAME on port $INSTANCE_PORT ---"
+# Create single systemd service file
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+echo "Creating systemd service file..."
 
-    # Create instance config
-    echo "Creating config for port $INSTANCE_PORT..."
-    if [ -f "$SCRIPT_DIR/config.example.jsonc" ]; then
-        # Use instance-specific log directory
-        sed "s|\./www|$INSTALL_DIR/www|g; s|\.logs/|$INSTALL_DIR/logs/$INSTANCE_PORT/|g; s|\"port\": [0-9000]*|\"port\": $INSTANCE_PORT|g" \
-            "$SCRIPT_DIR/config.example.jsonc" | sudo tee "$INSTANCE_CONFIG" > /dev/null
-    else
-        sudo tee "$INSTANCE_CONFIG" > /dev/null << EOF
-{
-  "root": "$INSTALL_DIR/www",
-  "port": $INSTANCE_PORT,
-  "dev": false,
-  "logger": {
-    "file": "$INSTALL_DIR/logs/$INSTANCE_PORT/app.log"
-  },
-  "accessLog": {
-    "file": "$INSTALL_DIR/logs/$INSTANCE_PORT/access.log"
-  }
-}
-EOF
-    fi
-
-    # Create instance-specific log directory
-    INSTANCE_LOG_DIR="$INSTALL_DIR/logs/$INSTANCE_PORT"
-    echo "Creating log directory: $INSTANCE_LOG_DIR"
-    sudo mkdir -p "$INSTANCE_LOG_DIR"
-
-    # Create systemd service file
-    SERVICE_FILE="/etc/systemd/system/$INSTANCE_NAME.service"
-    echo "Creating systemd service file for port $INSTANCE_PORT..."
-
-    sudo tee "$SERVICE_FILE" > /dev/null << EOF
+sudo tee "$SERVICE_FILE" > /dev/null << EOF
 [Unit]
-Description=TSP (TypeScript Server Page) Server - Port $INSTANCE_PORT
+Description=TSP (TypeScript Server Page) Server
 After=network.target
 
 [Service]
 Type=simple
 User=$USER
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/$BINARY_NAME --config $INSTANCE_CONFIG
+ExecStart=$EXEC_START
 Restart=always
 RestartSec=10
 
@@ -381,41 +336,30 @@ Environment="HOME=$HOME"
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 
 # Logging - capture all output to files
-StandardOutput=append:$SYSTEM_LOG_DIR/${INSTANCE_NAME}-output.log
-StandardError=append:$SYSTEM_LOG_DIR/${INSTANCE_NAME}-error.log
+StandardOutput=append:$SYSTEM_LOG_DIR/${SERVICE_NAME}-output.log
+StandardError=append:$SYSTEM_LOG_DIR/${SERVICE_NAME}-error.log
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    # Enable and start service
-    echo "Enabling and starting $INSTANCE_NAME..."
-    sudo systemctl daemon-reload
-    sudo systemctl enable "$INSTANCE_NAME"
-    sudo systemctl start "$INSTANCE_NAME"
-done
+# Enable and start service
+echo "Enabling and starting $SERVICE_NAME..."
+sudo systemctl daemon-reload
+sudo systemctl enable "$SERVICE_NAME"
+sudo systemctl start "$SERVICE_NAME"
 
 # Check status
 echo ""
 echo -e "${GREEN}Installation complete!${NC}"
 echo ""
 echo "Service status:"
-for i in $(seq 0 $((NUM_INSTANCES - 1))); do
-    INSTANCE_PORT=$((PORT + i))
-    INSTANCE_NAME="${SERVICE_NAME}-${INSTANCE_PORT}"
-    echo ""
-    echo "=== $INSTANCE_NAME (port $INSTANCE_PORT) ==="
-    sudo systemctl status "$INSTANCE_NAME" --no-pager || true
-done
+sudo systemctl status "$SERVICE_NAME" --no-pager || true
 echo ""
-echo -e "${GREEN}All services installed successfully!${NC}"
+echo -e "${GREEN}Service installed successfully!${NC}"
 echo ""
 echo "Useful commands:"
-for i in $(seq 0 $((NUM_INSTANCES - 1))); do
-    INSTANCE_PORT=$((PORT + i))
-    INSTANCE_NAME="${SERVICE_NAME}-${INSTANCE_PORT}"
-    echo "  sudo systemctl status $INSTANCE_NAME   # Check status"
-    echo "  sudo systemctl restart $INSTANCE_NAME # Restart"
-    echo "  journalctl -u $INSTANCE_NAME -f       # View logs"
-    echo ""
-done
+echo "  sudo systemctl status $SERVICE_NAME   # Check status"
+echo "  sudo systemctl restart $SERVICE_NAME   # Restart"
+echo "  journalctl -u $SERVICE_NAME -f         # View logs"
+echo ""
