@@ -93,6 +93,67 @@ Before finishing, check that:
 - database connections are closed
 - response shapes are consistent with the local codebase
 
+## Pagination Query
+
+**IMPORTANT: Always use `queryPage` function for paginated queries instead of manual LIMIT/OFFSET.**
+
+### queryPage Usage
+
+```typescript
+export default Page(async function(ctx, { createMySQL, response }) {
+  const db = await createMySQL({ ... });
+  const z = await createZod();
+
+  // Define row schema
+  const UserSchema = z.object({
+    id: z.number(),
+    name: z.string(),
+    email: z.string(),
+  });
+
+  // Query with pagination
+  const result = await db.queryPage(
+    UserSchema,
+    "SELECT id, name, email FROM users WHERE status = ? LIMIT ? OFFSET ?",
+    ["active"],
+    { page: 1, pageSize: 10 }
+  );
+
+  // Response structure:
+  // {
+  //   items: [...],           // Array of validated rows
+  //   total: 100,             // Total count
+  //   page: 1,                // Current page
+  //   pageSize: 10,           // Items per page
+  //   totalPages: 10          // Total pages
+  // }
+
+  return response.json(result);
+});
+```
+
+### Key Points
+
+- **ALWAYS use `queryPage` for paginated queries** - do not manually write LIMIT/OFFSET
+- The SQL must include `LIMIT ? OFFSET ?` placeholders - these will be replaced automatically
+- If the SQL includes a `total` column, it will be used as the total count
+- Default page: 1, default pageSize: 10
+- Returns typed results using Zod schema validation
+
+### Alternative: Manual Total Count
+
+If your SQL doesn't include a `total` column, queryPage will count all rows:
+
+```typescript
+// This will automatically count total rows
+const result = await db.queryPage(
+  UserSchema,
+  "SELECT id, name, email FROM users WHERE status = ?",
+  ["active"],
+  { page: 1, pageSize: 10 }
+);
+```
+
 ## References
 
 - `references/tsp-root-detection.md`
