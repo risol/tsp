@@ -100,7 +100,7 @@ index f0f403b..72cc19d 100644
 +ProductName = "Deno-tsp"
 +FileDescription = "Deno-tsp: A secure runtime for JavaScript and TypeScript (TSP version)"
 diff --git a/cli/args/flags.rs b/cli/args/flags.rs
-index d625407..818453b 100644
+index d625407..3feb9be 100644
 --- a/cli/args/flags.rs
 +++ b/cli/args/flags.rs
 @@ -175,6 +175,9 @@ pub struct CompileFlags {
@@ -269,6 +269,392 @@ index d625407..818453b 100644
            no_clear_screen: matches.get_flag("no-clear-screen"),
            exclude: matches
              .remove_many::<String>("watch-exclude")
+@@ -8067,11 +8110,13 @@ mod tests {
+             paths: vec![],
+             no_clear_screen: false,
+             exclude: vec![],
+-          }),
++          
++            dynamic_import_no_cache: false,}),
+           bare: false,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         code_cache_enabled: true,
+         ..Flags::default()
+       }
+@@ -8094,11 +8139,13 @@ mod tests {
+             paths: vec![],
+             no_clear_screen: true,
+             exclude: vec![],
+-          }),
++          
++            dynamic_import_no_cache: false,}),
+           bare: true,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         code_cache_enabled: true,
+         ..Flags::default()
+       }
+@@ -8122,11 +8169,13 @@ mod tests {
+             paths: vec![],
+             no_clear_screen: true,
+             exclude: vec![],
+-          }),
++          
++            dynamic_import_no_cache: false,}),
+           bare: false,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         code_cache_enabled: true,
+         ..Flags::default()
+       }
+@@ -8150,11 +8199,13 @@ mod tests {
+             paths: vec![],
+             no_clear_screen: true,
+             exclude: vec![],
+-          }),
++          
++            dynamic_import_no_cache: false,}),
+           bare: false,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         code_cache_enabled: true,
+         ..Flags::default()
+       }
+@@ -8178,11 +8229,13 @@ mod tests {
+             paths: vec![String::from("foo.txt")],
+             no_clear_screen: true,
+             exclude: vec![],
+-          }),
++          
++            dynamic_import_no_cache: false,}),
+           bare: false,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         code_cache_enabled: true,
+         ..Flags::default()
+       }
+@@ -8207,11 +8260,13 @@ mod tests {
+             paths: vec![String::from("file1"), String::from("file2")],
+             no_clear_screen: false,
+             exclude: vec![],
+-          }),
++          
++            dynamic_import_no_cache: false,}),
+           bare: true,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         code_cache_enabled: true,
+         ..Flags::default()
+       }
+@@ -8239,11 +8294,13 @@ mod tests {
+             paths: vec![],
+             no_clear_screen: true,
+             exclude: vec![],
+-          }),
++          
++            dynamic_import_no_cache: false,}),
+           bare: false,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         code_cache_enabled: true,
+         ..Flags::default()
+       }
+@@ -8270,11 +8327,13 @@ mod tests {
+             paths: vec![],
+             no_clear_screen: false,
+             exclude: vec![String::from("foo")],
+-          }),
++          
++            dynamic_import_no_cache: false,}),
+           bare: true,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         code_cache_enabled: true,
+         ..Flags::default()
+       }
+@@ -8298,11 +8357,13 @@ mod tests {
+             paths: vec![String::from("foo")],
+             no_clear_screen: false,
+             exclude: vec![String::from("bar")],
+-          }),
++          
++            dynamic_import_no_cache: false,}),
+           bare: false,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         code_cache_enabled: true,
+         ..Flags::default()
+       }
+@@ -8327,11 +8388,13 @@ mod tests {
+             paths: vec![],
+             no_clear_screen: false,
+             exclude: vec![String::from("foo"), String::from("bar")],
+-          }),
++          
++            dynamic_import_no_cache: false,}),
+           bare: false,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         code_cache_enabled: true,
+         ..Flags::default()
+       }
+@@ -8355,11 +8418,13 @@ mod tests {
+             paths: vec![String::from("foo"), String::from("bar")],
+             no_clear_screen: false,
+             exclude: vec![String::from("baz"), String::from("qux"),],
+-          }),
++          
++            dynamic_import_no_cache: false,}),
+           bare: true,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         code_cache_enabled: true,
+         ..Flags::default()
+       }
+@@ -8399,7 +8464,8 @@ mod tests {
+           bare: false,
+           coverage_dir: Some("foo".to_string()),
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         code_cache_enabled: true,
+         ..Flags::default()
+       }
+@@ -8652,7 +8718,8 @@ mod tests {
+           bare: true,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         permissions: PermissionFlags {
+           deny_read: Some(vec![]),
+           ..Default::default()
+@@ -10062,7 +10129,8 @@ mod tests {
+           bare: true,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         permissions: PermissionFlags {
+           deny_net: Some(svec!["127.0.0.1"]),
+           ..Default::default()
+@@ -10295,7 +10363,8 @@ mod tests {
+           bare: true,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         permissions: PermissionFlags {
+           deny_sys: Some(svec!["hostname"]),
+           ..Default::default()
+@@ -10596,7 +10665,8 @@ mod tests {
+           bare: true,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         ..Flags::default()
+       }
+     );
+@@ -10920,7 +10990,8 @@ mod tests {
+           bare: true,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         log_level: Some(Level::Error),
+         code_cache_enabled: true,
+         ..Flags::default()
+@@ -11042,7 +11113,8 @@ mod tests {
+           bare: true,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         type_check_mode: TypeCheckMode::None,
+         code_cache_enabled: true,
+         ..Flags::default()
+@@ -11215,7 +11287,8 @@ mod tests {
+           bare: true,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         node_modules_dir: Some(NodeModulesDirMode::Auto),
+         code_cache_enabled: true,
+         ..Flags::default()
+@@ -11851,7 +11924,8 @@ mod tests {
+             no_clear_screen: true,
+             exclude: vec![],
+             paths: vec![],
+-          }),
++          
++            dynamic_import_no_cache: false,}),
+           reporter: Default::default(),
+           junit_path: None,
+           hide_stacktraces: false,
+@@ -11880,7 +11954,8 @@ mod tests {
+             paths: vec![String::from("foo")],
+             no_clear_screen: false,
+             exclude: vec![],
+-          }),
++          
++            dynamic_import_no_cache: false,}),
+           ..TestFlags::default()
+         }),
+         type_check_mode: TypeCheckMode::Local,
+@@ -11904,7 +11979,8 @@ mod tests {
+             paths: vec![String::from("foo"), String::from("bar")],
+             no_clear_screen: false,
+             exclude: vec![],
+-          }),
++          
++            dynamic_import_no_cache: false,}),
+           ..TestFlags::default()
+         }),
+         type_check_mode: TypeCheckMode::Local,
+@@ -11932,7 +12008,8 @@ mod tests {
+             paths: vec![],
+             no_clear_screen: false,
+             exclude: vec![String::from("foo")],
+-          }),
++          
++            dynamic_import_no_cache: false,}),
+           ..TestFlags::default()
+         }),
+         type_check_mode: TypeCheckMode::Local,
+@@ -11960,7 +12037,8 @@ mod tests {
+             paths: vec![String::from("foo")],
+             no_clear_screen: false,
+             exclude: vec![String::from("bar")],
+-          }),
++          
++            dynamic_import_no_cache: false,}),
+           ..TestFlags::default()
+         }),
+         type_check_mode: TypeCheckMode::Local,
+@@ -11989,7 +12067,8 @@ mod tests {
+             paths: vec![],
+             no_clear_screen: false,
+             exclude: vec![String::from("foo"), String::from("bar")],
+-          }),
++          
++            dynamic_import_no_cache: false,}),
+           ..TestFlags::default()
+         }),
+         type_check_mode: TypeCheckMode::Local,
+@@ -12018,7 +12097,8 @@ mod tests {
+             paths: vec![String::from("foo"), String::from("bar")],
+             no_clear_screen: false,
+             exclude: vec![String::from("baz"), String::from("qux"),],
+-          }),
++          
++            dynamic_import_no_cache: false,}),
+           ..TestFlags::default()
+         }),
+         type_check_mode: TypeCheckMode::Local,
+@@ -12442,7 +12522,8 @@ mod tests {
+           bare: true,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         inspect_wait: Some("127.0.0.1:9229".parse().unwrap()),
+         code_cache_enabled: true,
+         ..Flags::default()
+@@ -12490,7 +12571,8 @@ mod tests {
+           exclude: Default::default(),
+           eszip: false,
+           self_extracting: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         type_check_mode: TypeCheckMode::Local,
+         code_cache_enabled: true,
+         ..Flags::default()
+@@ -12517,7 +12599,8 @@ mod tests {
+           exclude: vec!["exclude.txt".to_string()],
+           eszip: false,
+           self_extracting: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         import_map_path: Some("import_map.json".to_string()),
+         no_remote: true,
+         code_cache_enabled: false,
+@@ -13149,7 +13232,8 @@ mod tests {
+           bare: true,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         type_check_mode: TypeCheckMode::None,
+         code_cache_enabled: true,
+         ..Flags::default()
+@@ -14060,7 +14144,8 @@ mod tests {
+           bare: true,
+           coverage_dir: None,
+           print_task_list: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         config_flag: ConfigFlag::Disabled,
+         code_cache_enabled: true,
+         ..Flags::default()
+@@ -14832,7 +14917,8 @@ Usage: deno repl [OPTIONS] [-- [ARGS]...]\n"
+           exclude: Default::default(),
+           eszip: false,
+           self_extracting: false,
+-        }),
++        
++          dynamic_import_no_cache: false,}),
+         type_check_mode: TypeCheckMode::Local,
+         preload: svec!["p1.js", "./p2.js"],
+         code_cache_enabled: true,
 diff --git a/cli/build.rs b/cli/build.rs
 index c32e801..e0931e7 100644
 --- a/cli/build.rs
@@ -449,7 +835,7 @@ index 01cd1f5..3b5f797 100644
  deno_package_json = { workspace = true, features = ["sync"] }
  deno_path_util.workspace = true
 diff --git a/cli/rt/binary.rs b/cli/rt/binary.rs
-index 316e836..d98534e 100644
+index 316e836..7c10eea 100644
 --- a/cli/rt/binary.rs
 +++ b/cli/rt/binary.rs
 @@ -17,6 +17,10 @@ use deno_core::anyhow::bail;
@@ -675,7 +1061,7 @@ index 316e836..d98534e 100644
          specifier,
          is_valid_utf8,
          data: bytes,
-@@ -1040,3 +1200,79 @@ fn read_u64(input: &[u8]) -> std::io::Result<(&[u8], u64)> {
+@@ -1040,3 +1200,78 @@ fn read_u64(input: &[u8]) -> std::io::Result<(&[u8], u64)> {
    let len = u64::from_le_bytes(len_bytes.try_into().unwrap());
    Ok((input, len))
  }
@@ -697,11 +1083,10 @@ index 316e836..d98534e 100644
 +
 +  #[test]
 +  fn needs_transpilation_true_for_tsp_via_unknown() {
-+    // When denort sees a .tsp file, MediaType::from_specifier returns
-+    // Unknown because the upstream Deno media-type table has no entry
-+    // for ".tsp". We must still transpile it.
++    // We must still transpile a .tsp file when the caller passes
++    // MediaType::Unknown (e.g. the VFS loader, which sometimes does
++    // not know the file's media type up front).
 +    let u = url("file:///app/pages/page.tsp");
-+    assert_eq!(MediaType::from_specifier(&u), MediaType::Unknown);
 +    assert!(needs_transpilation(MediaType::Unknown, &u));
 +
 +    // Case-insensitive
@@ -780,7 +1165,7 @@ index 098cea8..1085912 100644
 +  denort_tsp::main()
  }
 diff --git a/cli/rt/run.rs b/cli/rt/run.rs
-index e2b4046..e78657a 100644
+index e2b4046..ef261cf 100644
 --- a/cli/rt/run.rs
 +++ b/cli/rt/run.rs
 @@ -6,6 +6,10 @@ use std::path::PathBuf;
@@ -966,7 +1351,7 @@ index e2b4046..e78657a 100644
      }),
      sys: sys.clone(),
    };
-@@ -1137,3 +1238,104 @@ fn create_default_npmrc() -> Arc<ResolvedNpmRc> {
+@@ -1137,3 +1238,107 @@ fn create_default_npmrc() -> Arc<ResolvedNpmRc> {
      registry_configs: Default::default(),
    })
  }
@@ -1021,14 +1406,17 @@ index e2b4046..e78657a 100644
 +
 +  #[test]
 +  fn test_without_hot_reload_token_preserves_other_query() {
++    // without_hot_reload_token only strips the `__tsp_v` param; every
++    // other query key/value should be preserved verbatim.
 +    let url = Url::parse(
-+      "file:///app/pages/hello.tsp?__tsp_v=1-0&keep=me&drop=none",
++      "file:///app/pages/hello.tsp?__tsp_v=1-0&keep=me&other=stuff",
 +    )
 +    .unwrap();
 +    let cleaned = without_hot_reload_token(url);
-+    assert!(cleaned.query().unwrap().contains("keep=me"));
-+    assert!(!cleaned.query().unwrap().contains("__tsp_v"));
-+    assert!(!cleaned.query().unwrap().contains("drop=none"));
++    let q = cleaned.query().unwrap();
++    assert!(q.contains("keep=me"), "expected keep=me in {q}");
++    assert!(q.contains("other=stuff"), "expected other=stuff in {q}");
++    assert!(!q.contains("__tsp_v"), "expected __tsp_v removed in {q}");
 +  }
 +
 +  #[test]
@@ -1172,7 +1560,7 @@ index 33d0590..48afbd0 100644
    denort.exists().then(|| denort.into_os_string())
  }
 diff --git a/cli/tools/compile.rs b/cli/tools/compile.rs
-index 9562e4b..40a616b 100644
+index 9562e4b..28bcf91 100644
 --- a/cli/tools/compile.rs
 +++ b/cli/tools/compile.rs
 @@ -384,10 +384,29 @@ fn get_module_roots_and_include_paths(
@@ -1220,6 +1608,26 @@ index 9562e4b..40a616b 100644
          {
            module_roots.push(file_url);
          }
+@@ -575,7 +596,8 @@ mod test {
+         exclude: Default::default(),
+         eszip: true,
+         self_extracting: false,
+-      },
++      
++        dynamic_import_no_cache: false,},
+       &resolve_cwd(None).unwrap(),
+     )
+     .await
+@@ -607,7 +629,8 @@ mod test {
+         no_terminal: false,
+         eszip: true,
+         self_extracting: false,
+-      },
++      
++        dynamic_import_no_cache: false,},
+       &resolve_cwd(None).unwrap(),
+     )
+     .await
 diff --git a/cli/tools/installer/mod.rs b/cli/tools/installer/mod.rs
 index 2015f6e..8b67734 100644
 --- a/cli/tools/installer/mod.rs
