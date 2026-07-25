@@ -449,7 +449,7 @@ index 01cd1f5..3b5f797 100644
  deno_package_json = { workspace = true, features = ["sync"] }
  deno_path_util.workspace = true
 diff --git a/cli/rt/binary.rs b/cli/rt/binary.rs
-index 316e836..d315b50 100644
+index 316e836..d98534e 100644
 --- a/cli/rt/binary.rs
 +++ b/cli/rt/binary.rs
 @@ -17,6 +17,10 @@ use deno_core::anyhow::bail;
@@ -675,6 +675,86 @@ index 316e836..d315b50 100644
          specifier,
          is_valid_utf8,
          data: bytes,
+@@ -1040,3 +1200,79 @@ fn read_u64(input: &[u8]) -> std::io::Result<(&[u8], u64)> {
+   let len = u64::from_le_bytes(len_bytes.try_into().unwrap());
+   Ok((input, len))
+ }
++
++#[cfg(test)]
++mod tsp_transpile_tests {
++  use super::*;
++
++  fn url(s: &str) -> Url {
++    Url::parse(s).expect("valid test url")
++  }
++
++  #[test]
++  fn needs_transpilation_true_for_ts_variants() {
++    let u = url("file:///app/pages/page.tsx");
++    assert!(needs_transpilation(MediaType::Tsx, &u));
++    assert!(needs_transpilation(MediaType::TypeScript, &u));
++  }
++
++  #[test]
++  fn needs_transpilation_true_for_tsp_via_unknown() {
++    // When denort sees a .tsp file, MediaType::from_specifier returns
++    // Unknown because the upstream Deno media-type table has no entry
++    // for ".tsp". We must still transpile it.
++    let u = url("file:///app/pages/page.tsp");
++    assert_eq!(MediaType::from_specifier(&u), MediaType::Unknown);
++    assert!(needs_transpilation(MediaType::Unknown, &u));
++
++    // Case-insensitive
++    let u_upper = url("file:///app/pages/PAGE.TSP");
++    assert!(needs_transpilation(MediaType::Unknown, &u_upper));
++  }
++
++  #[test]
++  fn needs_transpilation_false_for_js_json_wasm() {
++    let ts_url = url("file:///app/pages/page.ts");
++    let js_url = url("file:///app/pages/page.js");
++    let json_url = url("file:///app/pages/data.json");
++    let wasm_url = url("file:///app/pages/data.wasm");
++    let unknown_no_tsp = url("file:///app/pages/data.txt");
++
++    assert!(!needs_transpilation(MediaType::JavaScript, &js_url));
++    assert!(!needs_transpilation(MediaType::Json, &json_url));
++    assert!(!needs_transpilation(MediaType::Wasm, &wasm_url));
++    // Unknown media type with non-tsp extension should NOT be transpiled
++    assert!(!needs_transpilation(MediaType::Unknown, &unknown_no_tsp));
++    // Make sure we don't crash on a non-file specifier
++    let https_url = url("https://deno.land/x/mod.ts");
++    assert!(!needs_transpilation(MediaType::Unknown, &https_url));
++    // Suppress unused warning by referencing the ts url
++    let _ = ts_url;
++  }
++
++  #[test]
++  fn get_transpile_media_type_maps_tsp_to_tsx() {
++    let u = url("file:///app/pages/page.tsp");
++    assert_eq!(
++      get_transpile_media_type(MediaType::Unknown, &u),
++      MediaType::Tsx
++    );
++
++    // Already known media types pass through
++    assert_eq!(
++      get_transpile_media_type(MediaType::TypeScript, &u),
++      MediaType::TypeScript
++    );
++    assert_eq!(
++      get_transpile_media_type(MediaType::JavaScript, &u),
++      MediaType::JavaScript
++    );
++
++    // Unknown with a non-tsp extension stays Unknown
++    let txt = url("file:///app/pages/data.txt");
++    assert_eq!(
++      get_transpile_media_type(MediaType::Unknown, &txt),
++      MediaType::Unknown
++    );
++  }
++}
 diff --git a/cli/rt/build.rs b/cli/rt/build.rs
 index 24f94ea..991c200 100644
 --- a/cli/rt/build.rs
@@ -700,7 +780,7 @@ index 098cea8..1085912 100644
 +  denort_tsp::main()
  }
 diff --git a/cli/rt/run.rs b/cli/rt/run.rs
-index e2b4046..b5f9278 100644
+index e2b4046..e78657a 100644
 --- a/cli/rt/run.rs
 +++ b/cli/rt/run.rs
 @@ -6,6 +6,10 @@ use std::path::PathBuf;
@@ -886,6 +966,111 @@ index e2b4046..b5f9278 100644
      }),
      sys: sys.clone(),
    };
+@@ -1137,3 +1238,104 @@ fn create_default_npmrc() -> Arc<ResolvedNpmRc> {
+     registry_configs: Default::default(),
+   })
+ }
++
++#[cfg(test)]
++mod hot_reload_token_tests {
++  use super::*;
++
++  #[test]
++  fn test_now_millis_token_format() {
++    let t1 = now_millis_token();
++    // Format: "<unix-millis>-<seq>"
++    let (millis, seq) = t1
++      .split_once('-')
++      .expect("token should contain '-' separator");
++    assert!(
++      millis.parse::<u128>().is_ok(),
++      "millis part should be numeric, got {millis:?}"
++    );
++    assert!(
++      seq.parse::<u64>().is_ok(),
++      "seq part should be numeric, got {seq:?}"
++    );
++
++    // Sequence must monotonically increase
++    let t2 = now_millis_token();
++    let seq2: u64 = t2.split_once('-').unwrap().1.parse().unwrap();
++    let seq1: u64 = seq.parse().unwrap();
++    assert!(seq2 > seq1, "expected seq to increase: {seq1} -> {seq2}");
++  }
++
++  #[test]
++  fn test_extract_hot_reload_token_present() {
++    let url =
++      Url::parse("file:///app/pages/hello.tsp?__tsp_v=1690283456789-42")
++        .unwrap();
++    assert_eq!(
++      extract_hot_reload_token(&url).as_deref(),
++      Some("1690283456789-42")
++    );
++  }
++
++  #[test]
++  fn test_extract_hot_reload_token_absent() {
++    let url = Url::parse("file:///app/pages/hello.tsp").unwrap();
++    assert_eq!(extract_hot_reload_token(&url), None);
++
++    let url =
++      Url::parse("file:///app/pages/hello.tsp?other=foo&bar=baz").unwrap();
++    assert_eq!(extract_hot_reload_token(&url), None);
++  }
++
++  #[test]
++  fn test_without_hot_reload_token_preserves_other_query() {
++    let url = Url::parse(
++      "file:///app/pages/hello.tsp?__tsp_v=1-0&keep=me&drop=none",
++    )
++    .unwrap();
++    let cleaned = without_hot_reload_token(url);
++    assert!(cleaned.query().unwrap().contains("keep=me"));
++    assert!(!cleaned.query().unwrap().contains("__tsp_v"));
++    assert!(!cleaned.query().unwrap().contains("drop=none"));
++  }
++
++  #[test]
++  fn test_with_hot_reload_token_replaces_existing() {
++    let url = Url::parse("file:///app/pages/hello.tsp?__tsp_v=old-0").unwrap();
++    let updated = with_hot_reload_token(url, "1690283456789-42");
++    let pairs: std::collections::HashMap<String, String> =
++      updated.query_pairs().into_owned().collect();
++    assert_eq!(
++      pairs.get("__tsp_v").map(String::as_str),
++      Some("1690283456789-42")
++    );
++    // Make sure there is only one __tsp_v entry
++    assert_eq!(
++      updated
++        .query_pairs()
++        .filter(|(k, _)| k == "__tsp_v")
++        .count(),
++      1
++    );
++  }
++
++  #[test]
++  fn test_with_hot_reload_token_noop_for_non_file_scheme() {
++    let url = Url::parse("https://deno.land/std/mod.ts").unwrap();
++    let updated = with_hot_reload_token(url.clone(), "1-0");
++    // For non-file schemes, the helper should return the specifier unchanged
++    assert_eq!(updated.as_str(), url.as_str());
++  }
++
++  #[test]
++  fn test_hot_reload_token_round_trip() {
++    // Generate a token, attach it, then strip it, and check the rest matches
++    let token = now_millis_token();
++    let base = Url::parse("file:///app/pages/nested/page.tsp").unwrap();
++    let with = with_hot_reload_token(base.clone(), &token);
++    let extracted = extract_hot_reload_token(&with);
++    assert_eq!(extracted.as_deref(), Some(token.as_str()));
++    let stripped = without_hot_reload_token(with);
++    assert_eq!(stripped.as_str(), base.as_str());
++  }
++}
 diff --git a/cli/standalone/binary.rs b/cli/standalone/binary.rs
 index 33d0590..48afbd0 100644
 --- a/cli/standalone/binary.rs
@@ -1048,7 +1233,7 @@ index 2015f6e..8b67734 100644
  
    let mut new_flags = flags.as_ref().clone();
 diff --git a/cli/util/path.rs b/cli/util/path.rs
-index 5be815c..3acd61d 100644
+index 5be815c..b9999f4 100644
 --- a/cli/util/path.rs
 +++ b/cli/util/path.rs
 @@ -14,7 +14,7 @@ pub fn is_script_ext(path: &Path) -> bool {
@@ -1104,3 +1289,67 @@ index 5be815c..3acd61d 100644
    if media_type != ext_media_type {
      // we can't just add on the extension because typescript considers
      // all .d.*.ts files as declaration files in TS 5.0+
+@@ -201,6 +224,10 @@ mod test {
+     assert!(is_script_ext(Path::new("foo.mts")));
+     assert!(is_script_ext(Path::new("foo.cjs")));
+     assert!(is_script_ext(Path::new("foo.cts")));
++    // TSP file support: .tsp is a script extension (treated as TSX)
++    assert!(is_script_ext(Path::new("foo.tsp")));
++    assert!(is_script_ext(Path::new("foo.TSP")));
++    assert!(is_script_ext(Path::new("path/to/page.tsp")));
+     assert!(!is_script_ext(Path::new("foo.json")));
+     assert!(!is_script_ext(Path::new("foo.wasm")));
+     assert!(!is_script_ext(Path::new("foo.mjsx")));
+@@ -223,11 +250,52 @@ mod test {
+     assert!(is_importable_ext(Path::new("foo.mts")));
+     assert!(is_importable_ext(Path::new("foo.cjs")));
+     assert!(is_importable_ext(Path::new("foo.cts")));
++    // TSP file support: .tsp is importable
++    assert!(is_importable_ext(Path::new("foo.tsp")));
++    assert!(is_importable_ext(Path::new("foo.TSP")));
+     assert!(is_importable_ext(Path::new("foo.json")));
+     assert!(is_importable_ext(Path::new("foo.wasm")));
+     assert!(!is_importable_ext(Path::new("foo.mjsx")));
+   }
+ 
++  #[test]
++  fn test_map_tsp_to_tsx() {
++    // Unknown media type + .tsp extension -> Tsx
++    let tsp_url =
++      ModuleSpecifier::parse("file:///app/pages/hello.tsp").unwrap();
++    assert_eq!(
++      map_tsp_to_tsx(MediaType::Unknown, &tsp_url),
++      MediaType::Tsx
++    );
++
++    // Case-insensitive: .TSP should also map to Tsx
++    let tsp_upper =
++      ModuleSpecifier::parse("file:///app/pages/HELLO.TSP").unwrap();
++    assert_eq!(
++      map_tsp_to_tsx(MediaType::Unknown, &tsp_upper),
++      MediaType::Tsx
++    );
++
++    // Non-tsp extension with Unknown should stay Unknown
++    let other_url =
++      ModuleSpecifier::parse("file:///app/pages/data.txt").unwrap();
++    assert_eq!(
++      map_tsp_to_tsx(MediaType::Unknown, &other_url),
++      MediaType::Unknown
++    );
++
++    // Already-known media type passes through unchanged
++    assert_eq!(
++      map_tsp_to_tsx(MediaType::JavaScript, &tsp_url),
++      MediaType::JavaScript
++    );
++    assert_eq!(
++      map_tsp_to_tsx(MediaType::TypeScript, &tsp_url),
++      MediaType::TypeScript
++    );
++    assert_eq!(map_tsp_to_tsx(MediaType::Tsx, &tsp_url), MediaType::Tsx);
++  }
++
+   #[test]
+   fn test_relative_specifier() {
+     let fixtures: Vec<(&str, &str, Option<&str>)> = vec![
