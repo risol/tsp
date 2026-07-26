@@ -1,0 +1,107 @@
+/**
+ * Fragment routing demo - TSP file
+ *
+ * Demonstrates the `fragments` named export convention. Each fragment is
+ * a `Fragment()`-wrapped function (semantic alias of `Page()`) and is
+ * addressable via:
+ *
+ *   /fragments_demo.tsp/__fragment/<name>
+ *
+ * The htmx `hx-get` attributes below show the typical client-side wiring.
+ * Server-side tests verify the rendered HTML directly.
+ */
+
+export const fragments: FragmentMap = {
+  // Simple static fragment
+  table: Fragment(async () => {
+    return (
+      <table id="demo-table" data-source="fragment">
+        <thead>
+          <tr>
+            <th>id</th>
+            <th>name</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td>apple</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td>banana</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td>cherry</td>
+          </tr>
+        </tbody>
+      </table>
+    );
+  }),
+
+  // Fragment that reads query parameters
+  echo: Fragment(async (_ctx, { query, createZod }) => {
+    const z = await createZod();
+    const { msg } = query(z.object({ msg: z.string().default("hello") }));
+    return <span id="demo-echo" data-msg={msg}>{msg}</span>;
+  }),
+
+  // Fragment that returns a Response (e.g. JSON for non-htmx callers)
+  json: Fragment(async (_ctx, { query, createZod, response }) => {
+    const z = await createZod();
+    const { n } = query(z.object({ n: z.coerce.number().default(1) }));
+    return response.json({ ok: true, n });
+  }),
+};
+
+export default Page(async function (ctx) {
+  // Render the `table` fragment once for initial server-side content, then
+  // htmx will replace it on every poll. This means users without JS still
+  // see the table.
+  const initialTable = await fragments.table(ctx);
+
+  return (
+    <html>
+      <head>
+        <title>Fragments Demo</title>
+      </head>
+      <body>
+        <h1>Fragments Demo</h1>
+
+        <section>
+          <h2>Table fragment (polled every 5s)</h2>
+          <div
+            id="table-slot"
+            hx-get="/fragments_demo.tsp/__fragment/table"
+            hx-trigger="every 5s"
+            hx-swap="outerHTML"
+          >
+            {initialTable}
+          </div>
+        </section>
+
+        <section>
+          <h2>Echo fragment (with query)</h2>
+          <div
+            id="echo-slot"
+            hx-get="/fragments_demo.tsp/__fragment/echo?msg=hi+from+htmx"
+            hx-trigger="click from:#echo-btn"
+            hx-swap="outerHTML"
+          >
+            <em>click the button to fetch</em>
+          </div>
+          <button id="echo-btn" type="button">Fetch echo</button>
+        </section>
+
+        <section>
+          <h2>JSON fragment (Response return)</h2>
+          <p>
+            Fetched via:
+            <code>GET /fragments_demo.tsp/__fragment/json?n=42</code>
+          </p>
+        </section>
+      </body>
+    </html>
+  );
+});

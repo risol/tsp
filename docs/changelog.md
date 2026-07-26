@@ -2,6 +2,22 @@
 
 All notable changes to TSP will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- Fragment routing: a single `.tsp` file can expose named sub-renders via
+  `<page>/__fragment/<name>`. Each fragment is a `Fragment()`-wrapped
+  function and returns bare HTML (no `<!DOCTYPE>` wrapper) suitable for
+  htmx `hx-get` / `hx-swap`. Fragments may also return a `Response` (e.g.
+  JSON) — headers pass through. See `tests/test_www/fragments_demo.tsp`
+  for a working example.
+
+### Globals
+- `Fragment<T>(fn)` — semantic alias of `Page<T>` for declaring named
+  sub-renders inside `.tsp` files.
+- `FragmentMap` — `Record<string, (ctx: PageContext) => Promise<any>>`
+  matching the `fragments` named export convention.
+
 ## [0.1.0] - 2026-03-02
 
 ### Added

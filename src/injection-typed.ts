@@ -266,6 +266,11 @@ export function initGlobalPage(): void {
   if (typeof (globalThis as any).Page === "undefined") {
     (globalThis as any).Page = createPage();
   }
+  // Fragment is a semantic alias of Page. It exists as a separate global so
+  // user code reads naturally when declaring named sub-renders.
+  if (typeof (globalThis as any).Fragment === "undefined") {
+    (globalThis as any).Fragment = (globalThis as any).Page;
+  }
 }
 
 // Auto-initialize (executes when module is loaded)
@@ -274,6 +279,11 @@ initGlobalPage();
 // Export Page
 const _pageFn = createPage();
 export const Page = _pageFn;
+
+// Export Fragment (semantic alias of Page at runtime; type identity is
+// the same since they share the `Page<T>` signature).
+const _fragmentFn = createPage();
+export const Fragment = _fragmentFn;
 
 // ============================================
 // Register default dependencies (types, body, query, zod)

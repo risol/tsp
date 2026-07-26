@@ -18,6 +18,35 @@ interface SecurityResult {
   error?: string;
 }
 
+/**
+ * Parsed fragment request, extracted from a URL pathname.
+ *
+ * URL convention: `<pagePath>/__fragment/<fragmentName>`
+ * - `pagePath` is the path of the page module that owns the fragment
+ * - `fragmentName` is the named export to invoke (looked up under
+ *   `fragments[name]` first, then as a top-level named export)
+ */
+export interface FragmentRequest {
+  /** Base page path, e.g. "/users" or "/" */
+  pagePath: string;
+  /** Fragment identifier, e.g. "table" */
+  fragmentName: string;
+}
+
+/**
+ * Reserved URL segment that marks a fragment request.
+ * Case-sensitive; users should not use a directory literally named
+ * `__fragment` under their document root.
+ */
+export const FRAGMENT_MARKER = "/__fragment/";
+
+/**
+ * Regex for a valid fragment name. Identifiers, with `-` and `_` allowed
+ * after the first char. Rejects path separators so we never accidentally
+ * match `__fragment/foo/bar`.
+ */
+const FRAGMENT_NAME_RE = /^[a-zA-Z_][a-zA-Z0-9_-]*$/;
+
 // Allowed file extensions (TSP pages)
 const ALLOWED_EXTENSIONS = [".tsp"];
 
@@ -84,6 +113,37 @@ export function resolvePath(
       error: "Invalid path",
     };
   }
+}
+
+/**
+ * Detect and parse a fragment request from a URL pathname.
+ *
+ * Returns `null` if the URL is not a fragment request. Otherwise returns
+ * the base page path (without the marker) and the fragment name.
+ *
+ * @example
+ * parseFragmentPath("/users/__fragment/table")
+ *   -> { pagePath: "/users", fragmentName: "table" }
+ * parseFragmentPath("/__fragment/root")
+ *   -> { pagePath: "/", fragmentName: "root" }
+ * parseFragmentPath("/users")           -> null
+ * parseFragmentPath("/users/__fragment/") -> null  // empty name
+ * parseFragmentPath("/users/__fragment/foo/bar") -> null  // slash in name
+ */
+export function parseFragmentPath(pathname: string): FragmentRequest | null {
+  const idx = pathname.lastIndexOf(FRAGMENT_MARKER);
+  if (idx < 0) return null;
+
+  const fragmentName = pathname.slice(idx + FRAGMENT_MARKER.length);
+  if (!fragmentName) return null;
+  if (!FRAGMENT_NAME_RE.test(fragmentName)) return null;
+
+  // Strip any trailing slash from the page path. The marker is always
+  // mid-path, so the substring before it never ends with a slash.
+  const raw = pathname.slice(0, idx);
+  const pagePath = raw === "" ? "/" : raw;
+
+  return { pagePath, fragmentName };
 }
 
 /**

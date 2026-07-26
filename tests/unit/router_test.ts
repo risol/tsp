@@ -4,7 +4,11 @@
  */
 
 import { assertEquals } from "https://deno.land/std@0.210.0/testing/asserts.ts";
-import { resolvePath, securityCheck } from "../../src/router.ts";
+import {
+  parseFragmentPath,
+  resolvePath,
+  securityCheck,
+} from "../../src/router.ts";
 
 // Use paths relative to project root
 const TEST_ROOT = "./www";
@@ -151,4 +155,70 @@ Deno.test("router - securityCheck: .tsx files cannot be accessed via HTTP", asyn
 
   assertEquals(result.success, false);
   assertEquals(result.error, "File type not allowed");
+});
+
+// ============================================
+// Fragment routing tests
+// ============================================
+
+Deno.test("router - parseFragmentPath: simple fragment", () => {
+  assertEquals(parseFragmentPath("/users/__fragment/table"), {
+    pagePath: "/users",
+    fragmentName: "table",
+  });
+});
+
+Deno.test("router - parseFragmentPath: root page fragment", () => {
+  assertEquals(parseFragmentPath("/__fragment/root"), {
+    pagePath: "/",
+    fragmentName: "root",
+  });
+});
+
+Deno.test("router - parseFragmentPath: nested directory page", () => {
+  assertEquals(parseFragmentPath("/admin/users/__fragment/row"), {
+    pagePath: "/admin/users",
+    fragmentName: "row",
+  });
+});
+
+Deno.test("router - parseFragmentPath: non-fragment URL", () => {
+  assertEquals(parseFragmentPath("/users"), null);
+  assertEquals(parseFragmentPath("/admin/index.tsp"), null);
+  assertEquals(parseFragmentPath("/"), null);
+});
+
+Deno.test("router - parseFragmentPath: empty fragment name", () => {
+  assertEquals(parseFragmentPath("/users/__fragment/"), null);
+  assertEquals(parseFragmentPath("/__fragment/"), null);
+});
+
+Deno.test("router - parseFragmentPath: rejects slashes in name", () => {
+  assertEquals(parseFragmentPath("/users/__fragment/foo/bar"), null);
+});
+
+Deno.test("router - parseFragmentPath: rejects names starting with digit/dash", () => {
+  assertEquals(parseFragmentPath("/users/__fragment/123"), null);
+  assertEquals(parseFragmentPath("/users/__fragment/-foo"), null);
+  assertEquals(parseFragmentPath("/users/__fragment/.dot"), null);
+});
+
+Deno.test("router - parseFragmentPath: accepts underscores and dashes", () => {
+  assertEquals(parseFragmentPath("/users/__fragment/user_table"), {
+    pagePath: "/users",
+    fragmentName: "user_table",
+  });
+  assertEquals(parseFragmentPath("/users/__fragment/row-1"), {
+    pagePath: "/users",
+    fragmentName: "row-1",
+  });
+});
+
+Deno.test("router - resolvePath: fragment URL resolves to base page file", () => {
+  // The fragment prefix must be stripped before resolvePath is called
+  // (router does this in main.ts); this test guards the assumption.
+  const result = resolvePath("/users", "./www");
+  assertEquals(result.success, true);
+  const normalized = result.filepath!.replace(/\\/g, "/");
+  assertEquals(normalized, "www/users.tsp");
 });

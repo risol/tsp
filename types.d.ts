@@ -1730,6 +1730,30 @@ interface PageContext {
   function Page<T>(
     fn: (ctx: PageContext, deps: AppDeps) => Promise<T> | T
   ): (ctx: PageContext) => Promise<T>;
+
+  /**
+   * 全局 Fragment 函数 - Page 的语义别名。
+   * 用于在同一个 .tsp 文件中声明可被 htmx 等客户端按名寻址的子渲染。
+   * 通过 `<page>/__fragment/<name>` 访问。
+   *
+   * @example
+   * ```tsx
+   * export const fragments: FragmentMap = {
+   *   table: Fragment(async (ctx, { db }) => (
+   *     <table>{/* ... *\/}</table>
+   *   )),
+   * };
+   * ```
+   */
+  function Fragment<T>(
+    fn: (ctx: PageContext, deps: AppDeps) => Promise<T> | T
+  ): (ctx: PageContext) => Promise<T>;
+
+  /**
+   * 片段映射类型 - 与 .tsp 文件的 `fragments` 命名导出约定配合使用。
+   * 每个片段是 Page/Fragment 包装的函数，接收 PageContext 并返回可渲染节点。
+   */
+  type FragmentMap = Record<string, (ctx: PageContext) => Promise<any>>;
 }
 
 // 确保类型被视为全局的

@@ -29,6 +29,7 @@ import { getExcelJsTests } from "./e2e/exceljs.ts";
 import { getLdapTests } from "./e2e/ldap.ts";
 import { getConfigTests } from "./e2e/config.ts";
 import { getValidationTests } from "./e2e/validation.ts";
+import { getFragmentTests } from "./e2e/fragments.ts";
 
 export const TEST_PORT = 9001;
 export const RELOAD_DELAY = 1000;
@@ -508,6 +509,7 @@ async function runE2ETests(): Promise<void> {
   tests.push(...getLdapTests());
   tests.push(...getConfigTests());
   tests.push(...getValidationTests());
+  tests.push(...getFragmentTests());
 
 
   // Test 16: Cleanup resources

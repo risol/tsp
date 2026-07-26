@@ -5,7 +5,7 @@
  * Template server implemented using Deno + TSX
  */
 
-import { resolvePath, securityCheck } from "./router.ts";
+import { parseFragmentPath, resolvePath, securityCheck } from "./router.ts";
 import { buildContext } from "./context.ts";
 import { renderToString } from "react-dom/server";
 import { registerDep } from "./injection-typed.ts";
@@ -601,7 +601,14 @@ async function handleRequest(
 
     // Resolve file path (including static file extensions)
     const staticExtensions = config.staticExtensions || [];
-    const fileResult = resolvePath(pathname, config.root, staticExtensions);
+
+    // Fragment routing: detect `/<page>/__fragment/<name>` URLs and redirect
+    // the file lookup to the base page. The fragment itself is resolved
+    // after the page module is imported.
+    const fragReq = parseFragmentPath(pathname);
+    const effectivePath = fragReq ? fragReq.pagePath : pathname;
+
+    const fileResult = resolvePath(effectivePath, config.root, staticExtensions);
     if (!fileResult.success) {
       return new Response(fileResult.error, {
         status: 404,
@@ -766,6 +773,61 @@ async function handleRequest(
     }
 
     pageFn = pageModule.default;
+
+    // Fragment request: look up the named export and render as bare HTML.
+    // Lookup order: pageModule.fragments[name] then pageModule[name].
+    if (fragReq) {
+      const fragmentFn = (pageModule.fragments ?? {})[fragReq.fragmentName] ??
+        pageModule[fragReq.fragmentName];
+      if (typeof fragmentFn !== "function") {
+        return new Response(`Fragment not found: ${fragReq.fragmentName}`, {
+          status: 404,
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        });
+      }
+
+      const fragResult = await fragmentFn(context);
+
+      // Build response headers. Fragments default to no-cache in dev mode
+      // and never carry a <!DOCTYPE> wrapper.
+      const fragHeaders: HeadersInit = {
+        "Content-Type": "text/html; charset=utf-8",
+      };
+      if (config.dev) {
+        fragHeaders["Cache-Control"] = "no-cache, no-store, must-revalidate";
+        fragHeaders["Pragma"] = "no-cache";
+        fragHeaders["Expires"] = "0";
+      }
+
+      // If the fragment returned a Response directly, attach any
+      // Set-Cookie headers set on the page context and return.
+      if (fragResult instanceof Response) {
+        const { extractSetCookieHeaders } = await import("./cookies.ts");
+        const setCookieHeaders = extractSetCookieHeaders(context);
+        if (setCookieHeaders && setCookieHeaders.length > 0) {
+          const newHeaders = new Headers(fragResult.headers);
+          for (const header of setCookieHeaders) {
+            newHeaders.append("Set-Cookie", header);
+          }
+          return new Response(fragResult.body, {
+            status: fragResult.status,
+            statusText: fragResult.statusText,
+            headers: newHeaders,
+          });
+        }
+        return fragResult;
+      }
+
+      // Otherwise treat the return value as a VNode and render bare HTML.
+      const fragHtml = renderToString(fragResult as any);
+      const { extractSetCookieHeaders } = await import("./cookies.ts");
+      const setCookieHeaders = extractSetCookieHeaders(context);
+      if (setCookieHeaders && setCookieHeaders.length > 0) {
+        (fragHeaders as Record<string, string | string[]>)["Set-Cookie"] =
+          setCookieHeaders;
+      }
+      return new Response(fragHtml, { status: 200, headers: fragHeaders });
+    }
 
     const result = await pageFn(context);
 
