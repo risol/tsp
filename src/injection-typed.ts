@@ -13,6 +13,7 @@ import { createBody } from "./body.ts";
 import { createQuery } from "./query.ts";
 import { createFormatZodError } from "./zod.ts";
 import { createTypesRegistry } from "./types.ts";
+import { hxUrl, HtmxScript, HtmxFragment } from "./htmx-helpers.ts";
 
 // Zod instance cache
 let zodInstance: typeof import("zod") | null = null;
@@ -271,6 +272,18 @@ export function initGlobalPage(): void {
   if (typeof (globalThis as any).Fragment === "undefined") {
     (globalThis as any).Fragment = (globalThis as any).Page;
   }
+  // htmx integration helpers: URL builder + the two render components.
+  // These are pure functions / components so registering them as plain
+  // globals is enough; they don't need DI lifecycle.
+  if (typeof (globalThis as any).hxUrl === "undefined") {
+    (globalThis as any).hxUrl = hxUrl;
+  }
+  if (typeof (globalThis as any).HtmxScript === "undefined") {
+    (globalThis as any).HtmxScript = HtmxScript;
+  }
+  if (typeof (globalThis as any).HtmxFragment === "undefined") {
+    (globalThis as any).HtmxFragment = HtmxFragment;
+  }
 }
 
 // Auto-initialize (executes when module is loaded)
@@ -284,6 +297,10 @@ export const Page = _pageFn;
 // the same since they share the `Page<T>` signature).
 const _fragmentFn = createPage();
 export const Fragment = _fragmentFn;
+
+// Re-export htmx helpers so the bundler can tree-shake cleanly if a
+// .tsp file imports them via the injection-typed module path.
+export { hxUrl, HtmxScript, HtmxFragment } from "./htmx-helpers.ts";
 
 // ============================================
 // Register default dependencies (types, body, query, zod)

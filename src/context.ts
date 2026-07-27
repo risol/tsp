@@ -64,7 +64,7 @@ export type PageContext = Readonly<{
 
 /**
  * Internal page context type
- * Extends PageContext with internal fields (_query, _body)
+ * Extends PageContext with internal fields (_query, _body, _fragments)
  * Only used by dependency injection system, not accessible from external code
  */
 export interface InternalPageContext extends PageContext {
@@ -72,6 +72,8 @@ export interface InternalPageContext extends PageContext {
   _query: Record<string, string>;
   /** Internal use: request body data */
   _body: unknown;
+  /** Internal use: per-request fragments map (keyed by name) for HtmxFragment auto-resolve */
+  _fragments: Record<string, (ctx: PageContext) => Promise<unknown>>;
 }
 
 /**
@@ -91,5 +93,6 @@ export function buildContext(params: ContextParams): InternalPageContext {
     // Internal fields
     _query: params.query,
     _body: params.body,
+    _fragments: {},
   };
 }

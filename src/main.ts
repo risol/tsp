@@ -36,6 +36,7 @@ import { validateFileManagerConfig } from "./filemanager/config.ts";
 import { TSP_VERSION } from "./version.ts";
 import { LogRotator } from "./logger-rotation.ts";
 import { HTMX_JS } from "./assets/htmx.ts";
+import { HTMX_ASSET_PATH, resolveHtmxFragments } from "./htmx-helpers.ts";
 
 // Session config interface
 export interface SessionConfig {
@@ -603,7 +604,7 @@ async function handleRequest(
     // Built-in static assets: the htmx client library is bundled with
     // the server so a page can use htmx attributes without an extra
     // network fetch and without a vendored copy in `www/`.
-    if (pathname === "/__static/htmx.js") {
+    if (pathname === HTMX_ASSET_PATH) {
       return new Response(HTMX_JS, {
         status: 200,
         headers: {
@@ -788,6 +789,15 @@ async function handleRequest(
 
     pageFn = pageModule.default;
 
+    // Expose the page's `fragments` map to the request context so
+    // HtmxFragment (in the page's JSX) can auto-resolve initial content
+    // from `fragments[name]`. The map is per-request so concurrent
+    // requests see only their own fragments.
+    if (pageModule.fragments) {
+      (context as { _fragments?: Record<string, unknown> })._fragments =
+        pageModule.fragments as Record<string, unknown>;
+    }
+
     // Fragment request: look up the named export and render as bare HTML.
     // Lookup order: pageModule.fragments[name] then pageModule[name].
     if (fragReq) {
@@ -843,7 +853,13 @@ async function handleRequest(
       return new Response(fragHtml, { status: 200, headers: fragHeaders });
     }
 
-    const result = await pageFn(context);
+    const pageResult = await pageFn(context);
+
+    // Pre-walk the JSX tree to auto-resolve any <HtmxFragment> nodes.
+    // This is what makes `<HtmxFragment name="table" page="..." />` work
+    // without an explicit `initial` prop — the framework calls
+    // `fragments.table(ctx)` here and injects the result as children.
+    const result = await resolveHtmxFragments(pageResult, context);
 
     // Extract cookie response headers
     const { extractSetCookieHeaders } = await import("./cookies.ts");

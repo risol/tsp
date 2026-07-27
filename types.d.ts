@@ -1754,6 +1754,69 @@ interface PageContext {
    * 每个片段是 Page/Fragment 包装的函数，接收 PageContext 并返回可渲染节点。
    */
   type FragmentMap = Record<string, (ctx: PageContext) => Promise<any>>;
+
+  // ============================================
+  // htmx 集成辅助
+  // ============================================
+
+  /**
+   * 拼接 fragment URL，避免手写 `__fragment` 路径。
+   *
+   * @example
+   * hxUrl("/users", "table")          // "/users.tsp/__fragment/table"
+   * hxUrl("/users.tsp", "table")      // "/users.tsp/__fragment/table"
+   * hxUrl("users", "row-1")           // "/users.tsp/__fragment/row-1"
+   */
+  function hxUrl(page: string, name: string): string;
+
+  /**
+   * HtmxScript 配置项 - 透传到 `<meta name="htmx-config">`。
+   * 只暴露最常用的几个开关，避免把 htmx 全部 30+ 字段平铺出来。
+   */
+  interface HtmxConfigOptions {
+    defaultSwap?: string;
+    defaultSwapDelay?: number;
+    defaultSettleDelay?: number;
+    timeout?: number;
+    historyCacheSize?: number;
+    withCredentials?: boolean;
+    indicatorClass?: string;
+    inlineScriptNonce?: string;
+  }
+
+  /**
+   * 渲染 `<script src="/__static/htmx.js">` 及可选的 `<meta name="htmx-config">`。
+   * 放在 `<head>` 里就启用整页 htmx。
+   */
+  function HtmxScript(props?: HtmxConfigOptions): any;
+
+  /**
+   * HtmxFragment 属性 - 声明一个会被 htmx 周期刷新的局部片段。
+   */
+  interface HtmxFragmentProps {
+    /** 页面路径，如 "/users" 或 "/users.tsp" */
+    page: string;
+    /** 同页面 `fragments` 导出里的名字 */
+    name: string;
+    /** hx-trigger 值 */
+    trigger?: string;
+    /** hx-swap 值，默认 outerHTML */
+    swap?: string;
+    /** hx-target CSS 选择器 */
+    target?: string;
+    /** hx-include CSS 选择器 */
+    include?: string;
+    /** hx-confirm 提示 */
+    confirm?: string;
+    /** 显式初始内容；不传则框架 SSR 阶段调 fragments[name](ctx) */
+    children?: any;
+  }
+
+  /**
+   * 渲染 hx-* 包装的 div，初始内容自动从同页面 fragments[name] 拿。
+   * 显式传 children 时不自动取。
+   */
+  function HtmxFragment(props: HtmxFragmentProps): any;
 }
 
 // 确保类型被视为全局的

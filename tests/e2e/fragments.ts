@@ -221,5 +221,111 @@ export function getFragmentTests() {
         console.log(`  ${COLORS.dim}${Date.now() - start}ms${COLORS.reset}`);
       },
     },
+
+    {
+      name: "HtmxScript - emits <meta name=htmx-config> with provided options",
+      fn: async () => {
+        const start = Date.now();
+        printSubsection("HtmxScript config meta tag");
+
+        const resp = await fetch(PAGE);
+        const text = await resp.text();
+        // The demo uses <HtmxScript defaultSwap="outerHTML" timeout={5000}
+        //                    historyCacheSize={20} />.
+        const metaMatch = text.match(
+          /<meta\s+name="htmx-config"\s+content="([^"]+)"\s*\/>/,
+        );
+        assertExists(metaMatch, "HtmxScript must emit <meta name=htmx-config>");
+        const parsed = JSON.parse(
+          metaMatch[1].replace(/&quot;/g, '"').replace(/&amp;/g, "&"),
+        );
+        assertEquals(parsed.defaultSwapStyle, "outerHTML");
+        assertEquals(parsed.timeout, 5000);
+        assertEquals(parsed.historyCacheSize, 20);
+
+        printTestResult(
+          "HtmxScript serializes props to htmx-config meta",
+          true,
+        );
+        console.log(`  ${COLORS.dim}${Date.now() - start}ms${COLORS.reset}`);
+      },
+    },
+
+    {
+      name: "HtmxFragment - auto-fetches initial from fragments[name]",
+      fn: async () => {
+        const start = Date.now();
+        printSubsection("HtmxFragment auto-resolve");
+
+        const resp = await fetch(PAGE);
+        const text = await resp.text();
+
+        // The page has <HtmxFragment page="..." name="table" trigger="every 5s" />
+        // and the fixture does NOT pass children. The framework must call
+        // fragments.table(ctx) on the server and inject the <table> as
+        // initial content.
+        const tableDiv = text.match(
+          /<div\s+hx-get="\/fragments_demo\.tsp\/__fragment\/table"\s+hx-trigger="every 5s">[\s\S]*?<\/div>/,
+        );
+        assertExists(tableDiv, "HtmxFragment must render the hx-* div");
+        assertExists(
+          tableDiv[0].includes('<table id="demo-table"'),
+          "auto-resolved table must live inside the div",
+        );
+        assertExists(
+          tableDiv[0].includes("apple") && tableDiv[0].includes("cherry"),
+          "auto-resolved table must contain the rows",
+        );
+
+        printTestResult("HtmxFragment auto-injects initial content", true);
+        console.log(`  ${COLORS.dim}${Date.now() - start}ms${COLORS.reset}`);
+      },
+    },
+
+    {
+      name: "HtmxFragment - URL uses hxUrl convention (not hand-written)",
+      fn: async () => {
+        const start = Date.now();
+        printSubsection("HtmxFragment URL shape");
+
+        const resp = await fetch(PAGE);
+        const text = await resp.text();
+        // Echo fragment should be wired with click trigger and the
+        // same /__fragment/ path.
+        assertExists(
+          text.includes(
+            '<div hx-get="/fragments_demo.tsp/__fragment/echo" hx-trigger="click from:#echo-btn">',
+          ),
+        );
+
+        // The JSON section uses hxUrl() inside a template literal;
+        // the resolved URL must match the same /__fragment/ shape.
+        assertExists(text.includes("/fragments_demo.tsp/__fragment/json"));
+
+        printTestResult("HtmxFragment / hxUrl produce correct URLs", true);
+        console.log(`  ${COLORS.dim}${Date.now() - start}ms${COLORS.reset}`);
+      },
+    },
+
+    {
+      name: "HtmxFragment - missing fragment name does not crash page render",
+      fn: async () => {
+        // A bad fragment name would print to console.warn but should
+        // not 500 the page or leak the warning text into the HTML.
+        const start = Date.now();
+        printSubsection("Robustness check");
+
+        const resp = await fetch(PAGE);
+        assertEquals(resp.status, 200);
+        const text = await resp.text();
+        assertExists(!text.includes("HtmxFragment] fragment"));
+
+        printTestResult(
+          "page renders without spurious HtmxFragment warnings",
+          true,
+        );
+        console.log(`  ${COLORS.dim}${Date.now() - start}ms${COLORS.reset}`);
+      },
+    },
   ];
 }

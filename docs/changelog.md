@@ -22,6 +22,14 @@ All notable changes to TSP will be documented in this file.
   sub-renders inside `.tsp` files.
 - `FragmentMap` — `Record<string, (ctx: PageContext) => Promise<any>>`
   matching the `fragments` named export convention.
+- `hxUrl(page, name)` — builds the fragment URL, normalizing `.tsp`
+  and the `__fragment` marker.
+- `HtmxScript(props?)` — emits the vendored htmx client + optional
+  `<meta name="htmx-config">` for global config (defaultSwap, timeout,
+  historyCacheSize, withCredentials, indicatorClass, ...).
+- `HtmxFragment(props)` — emits the hx-* wrapper div. Initial content
+  is auto-fetched from the same page's `fragments[name]`; pass
+  `children` explicitly to override.
 
 ## [0.1.0] - 2026-03-02
 

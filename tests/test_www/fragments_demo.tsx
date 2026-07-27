@@ -1,5 +1,5 @@
 /**
- * Fragment routing demo - TSX twin for tooling/editor support
+ * Fragment routing + htmx helper demo - TSX twin for tooling/editor support
  *
  * See fragments_demo.tsp for the canonical version. Both files must
  * stay in sync.
@@ -47,47 +47,43 @@ export const fragments: FragmentMap = {
 };
 
 export default Page(async function (ctx) {
-  const initialTable = await fragments.table(ctx);
-
   return (
     <html>
       <head>
         <title>Fragments Demo</title>
-        <script src="/__static/htmx.js"></script>
+        <HtmxScript
+          defaultSwap="outerHTML"
+          timeout={5000}
+          historyCacheSize={20}
+        />
       </head>
       <body>
         <h1>Fragments Demo</h1>
 
         <section>
-          <h2>Table fragment (polled every 5s)</h2>
-          <div
-            id="table-slot"
-            hx-get="/fragments_demo.tsp/__fragment/table"
-            hx-trigger="every 5s"
-            hx-swap="outerHTML"
-          >
-            {initialTable}
-          </div>
+          <h2>Table (auto-fetched initial)</h2>
+          <HtmxFragment
+            page="/fragments_demo.tsp"
+            name="table"
+            trigger="every 5s"
+          />
         </section>
 
         <section>
-          <h2>Echo fragment (with query)</h2>
-          <div
-            id="echo-slot"
-            hx-get="/fragments_demo.tsp/__fragment/echo?msg=hi+from+htmx"
-            hx-trigger="click from:#echo-btn"
-            hx-swap="outerHTML"
-          >
-            <em>click the button to fetch</em>
-          </div>
+          <h2>Echo (with query)</h2>
+          <HtmxFragment
+            page="/fragments_demo.tsp"
+            name="echo"
+            trigger="click from:#echo-btn"
+          />
           <button id="echo-btn" type="button">Fetch echo</button>
         </section>
 
         <section>
-          <h2>JSON fragment (Response return)</h2>
+          <h2>JSON (Response return)</h2>
           <p>
             Fetched via:
-            <code>GET /fragments_demo.tsp/__fragment/json?n=42</code>
+            <code>{hxUrl("/fragments_demo.tsp", "json")}?n=42</code>
           </p>
         </section>
       </body>
