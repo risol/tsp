@@ -53,6 +53,7 @@ export default Page(async function (ctx) {
     <html>
       <head>
         <title>Fragments Demo</title>
+        <script src="/__static/htmx.js"></script>
       </head>
       <body>
         <h1>Fragments Demo</h1>

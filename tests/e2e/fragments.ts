@@ -7,6 +7,7 @@
  *   3. Pass query parameters through
  *   4. Return 404 for unknown fragment names
  *   5. Allow fragments to return Response objects (e.g. JSON)
+ * And that the built-in htmx asset is served at `/__static/htmx.js`.
  */
 
 import {
@@ -170,6 +171,53 @@ export function getFragmentTests() {
         assertExists(text.includes("Form Test"));
 
         printTestResult("Existing routes untouched", true);
+        console.log(`  ${COLORS.dim}${Date.now() - start}ms${COLORS.reset}`);
+      },
+    },
+
+    {
+      name: "htmx - /__static/htmx.js returns the vendored library",
+      fn: async () => {
+        const start = Date.now();
+        printSubsection("htmx asset");
+
+        const resp = await fetch(`${BASE}/__static/htmx.js`);
+        assertEquals(resp.status, 200);
+        const ct = resp.headers.get("content-type") ?? "";
+        assertStringIncludes(ct, "application/javascript");
+
+        const body = await resp.text();
+        // The vendored bundle must register htmx on the global window
+        // and declare the expected version. Both signals confirm we are
+        // not accidentally serving a 404 HTML page or an empty body.
+        assertExists(body.includes("htmx") && body.includes("1.9.10"));
+
+        // Cache header is set so the browser can keep the library.
+        const cache = resp.headers.get("cache-control") ?? "";
+        assertExists(cache.includes("max-age"));
+
+        printTestResult(
+          "htmx asset is served with correct MIME + version",
+          true,
+        );
+        console.log(`  ${COLORS.dim}${Date.now() - start}ms${COLORS.reset}`);
+      },
+    },
+
+    {
+      name: "htmx - default page references the built-in script",
+      fn: async () => {
+        const start = Date.now();
+        printSubsection("htmx wired into demo page");
+
+        const resp = await fetch(PAGE);
+        const text = await resp.text();
+        assertExists(text.includes('src="/__static/htmx.js"'));
+
+        printTestResult(
+          "fragments_demo.tsp includes the htmx script tag",
+          true,
+        );
         console.log(`  ${COLORS.dim}${Date.now() - start}ms${COLORS.reset}`);
       },
     },

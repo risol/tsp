@@ -11,6 +11,11 @@ All notable changes to TSP will be documented in this file.
   htmx `hx-get` / `hx-swap`. Fragments may also return a `Response` (e.g.
   JSON) — headers pass through. See `tests/test_www/fragments_demo.tsp`
   for a working example.
+- Built-in htmx client: vendored `htmx.org@1.9.10` (~47KB minified) is
+  served at `/__static/htmx.js` with `application/javascript` MIME and
+  `Cache-Control: public, max-age=3600`. Drop
+  `<script src="/__static/htmx.js">` into a page to enable htmx
+  attributes without any external network fetch.
 
 ### Globals
 - `Fragment<T>(fn)` — semantic alias of `Page<T>` for declaring named

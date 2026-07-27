@@ -35,6 +35,7 @@ import type { FileManagerConfig } from "./filemanager/types.ts";
 import { validateFileManagerConfig } from "./filemanager/config.ts";
 import { TSP_VERSION } from "./version.ts";
 import { LogRotator } from "./logger-rotation.ts";
+import { HTMX_JS } from "./assets/htmx.ts";
 
 // Session config interface
 export interface SessionConfig {
@@ -597,6 +598,19 @@ async function handleRequest(
           sessionSecure,
         );
       }
+    }
+
+    // Built-in static assets: the htmx client library is bundled with
+    // the server so a page can use htmx attributes without an extra
+    // network fetch and without a vendored copy in `www/`.
+    if (pathname === "/__static/htmx.js") {
+      return new Response(HTMX_JS, {
+        status: 200,
+        headers: {
+          "Content-Type": "application/javascript; charset=utf-8",
+          "Cache-Control": "public, max-age=3600",
+        },
+      });
     }
 
     // Resolve file path (including static file extensions)
