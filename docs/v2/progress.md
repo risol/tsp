@@ -792,6 +792,71 @@ is green.
   `Response` (spec sect.18). The host must distinguish
   the two and emit the right HTTP wire form.
 
+### Slice 16b -- Response ABI (HtmlNode | Web Response) (done, bun commit `a155f9ff`)
+
+- **Why:** Phase 7 (spec sect.18) -- the page-side return
+  type is `HtmlNode | Response`. Slice 16a lands the
+  Context surface but the page's return value is opaque
+  to the host: bun subprocess stdout was passed through
+  as the response body regardless of shape. Slice 16b
+  inspects the return value via `instanceof Response` (in
+  JS) and surfaces the page's status / content-type / body
+  / headers to the HTTP wire.
+- **What landed (in `bun/src/runtime/tsp/`):**
+  - `jsx.rs`: `wrap_for_bun_cli` now wraps the handler in
+    an async IIFE. `instanceof Response` produces a
+    `{type: 'response', status, headers, body}` envelope;
+    `typeof string` produces a `{type: 'html', body}`
+    envelope; anything else throws (the host returns 500
+    on non-zero bun exit, matching spec sect.6.3). The
+    envelope is prefixed with `__TSP_OUT_V1__` on its
+    own line.
+  - `host.rs`: new `parse_envelope` (no serde dep,
+    hand-rolled JSON extractors) and `EnvelopeOutcome`
+    struct. The Found arm now uses the envelope's
+    `status_line` / `content_type` / `body` instead of
+    the render placeholder. The legacy branch (envelope
+    tag absent) keeps the slice 6 behaviour for older
+    fixtures.
+  - Status line is mapped through a small table of
+    common HTTP statuses (200, 201, 204, 30x, 4xx, 5xx)
+    with a fallback to 200 for unknown codes.
+- **Verify:** 55 lib tests pass (no new tests; the change
+  is parser-shape). E2E with the slice 16b fixture
+  (POST returns `new Response("created", { status: 201,
+  headers: { "x-demo": "slice16b" } })`):
+  ```
+  GET /                    -> 200 + Content-Type: text/html
+  GET /?q=hi               -> 200
+  POST /                   -> 201 + body "created"  (envelope response path)
+  HEAD /                   -> 200 + empty body
+  GET /nope                -> 404
+  OPTIONS /                -> 204 + Allow
+  ```
+- **Out of slice 16b (deferred to 16c):**
+  - Full header propagation (`extra_headers` is an empty
+    vec in the Found arm; the `json_extract_headers`
+    helper is too fragile for header values containing
+    commas).
+  - spec sect.18 helpers (`redirect()`, `json()`) -- the
+    page can use `new Response(null, { status: 302,
+    headers: { Location: '/x' } })` directly already.
+  - spec sect.6.3 typed error codes (currently the host
+    500s without a TSP3xxx code).
+  - spec sect.18.2 `HtmlNode` -> text/html pipeline
+    (the slice 6 inline JSX shim still treats
+    `<h1>x</h1>` as a string literal).
+- **Known issue (pre-existed, NOT a 16b regression):**
+  DELETE / PUT / PATCH on a route that exports only GET
+  returns 200 + "method X not exported" error body
+  instead of 405. The route's `methods` field is the
+  boot-time `REAL` set (GET/POST/PUT/PATCH/DELETE) and
+  the registry's detected-method set is a subset. Cleanest
+  fix: make `Route::methods` reflect the page-detected
+  set after boot. Tracked as a follow-up slice.
+- **Next:** slice 16c = full header propagation +
+  `ctx.request` body (spec sect.13) + `ctx.signal`.
+
 ## Realistic next-step options (post-Slice 7) -- STALE
 
 > Note (2026-08-24): the in-process JSC bridge was closed
