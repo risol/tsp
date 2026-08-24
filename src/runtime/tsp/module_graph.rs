@@ -49,6 +49,13 @@ impl ModuleId {
         Self(canonicalize_best_effort(path))
     }
 
+    /// Wrap an already-canonical path. The caller is asserting
+    /// the path is canonical (used by tests and by the slice-10
+    /// generation module which works in normalised paths).
+    pub fn from_canonical_path(path: PathBuf) -> Self {
+        Self(path)
+    }
+
     /// Borrow the underlying canonical path.
     pub fn as_path(&self) -> &Path {
         &self.0

@@ -26,10 +26,11 @@
 //! slice 2 lands the listener; slice 3 lands the router; slice 4 lands
 //! the JSC deps; slice 5 lands `page.rs`; slice 6 lands `jsx.rs` and
 //! `jsc_bridge.rs`; slice 7 adds `in_process_jsc.rs`; slice 9 adds
-//! `module_graph.rs`.
+//! `module_graph.rs`; slice 10 adds `generation.rs`.
 
-#![doc = "Slice 9: module graph (plan sect.20). See `module_graph.rs`."]
+#![doc = "Slice 10: generation + PageSlot + state machine. See `generation.rs`."]
 
+pub mod generation;
 pub mod host;
 pub mod in_process_jsc;
 pub mod jsc_bridge;
