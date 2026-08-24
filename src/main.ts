@@ -8,6 +8,14 @@
 import { parseFragmentPath, resolvePath, securityCheck } from "./router.ts";
 import { buildContext } from "./context.ts";
 import { renderToString } from "react-dom/server";
+import * as reactBuiltin from "react";
+import * as reactDomServerBuiltin from "react-dom/server";
+// Keep both JSX runtime entry points in the standalone module graph. External
+// TSP pages are transpiled by the embedded Bun loader and may use either the
+// development or production JSX transform without an application
+// node_modules directory next to the compiled server.
+import * as reactJsxDevRuntime from "react/jsx-dev-runtime";
+import * as reactJsxRuntime from "react/jsx-runtime";
 import bcryptjs from "bcryptjs";
 import { registerDep } from "./injection-typed.ts";
 import { serveStaticFileWithCache } from "./static.ts";
@@ -40,6 +48,18 @@ import { TSP_VERSION } from "./version.ts";
 import { LogRotator } from "./logger-rotation.ts";
 import { HTMX_JS } from "./assets/htmx.ts";
 import { HTMX_ASSET_PATH, resolveHtmxFragments } from "./htmx-helpers.ts";
+
+void reactJsxDevRuntime;
+void reactJsxRuntime;
+
+(globalThis as typeof globalThis & {
+  __tspBuiltins?: Record<string, unknown>;
+}).__tspBuiltins = {
+  react: reactBuiltin,
+  reactJsxRuntime,
+  reactJsxDevRuntime,
+  reactDomServer: reactDomServerBuiltin,
+};
 
 // Session config interface
 export interface SessionConfig {
