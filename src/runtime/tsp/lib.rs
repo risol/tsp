@@ -25,13 +25,15 @@
 //! Each `mod` is added the slice it lands in. Slice 1: library shell;
 //! slice 2 lands the listener; slice 3 lands the router; slice 4 lands
 //! the JSC deps; slice 5 lands `page.rs`; slice 6 lands `jsx.rs` and
-//! `jsc_bridge.rs`; slice 7 adds `in_process_jsc.rs` (spike only).
+//! `jsc_bridge.rs`; slice 7 adds `in_process_jsc.rs`; slice 9 adds
+//! `module_graph.rs`.
 
-#![doc = "Slice 7: bun_runtime reachable as a dep; in-process bridge is a spike pending real wiring."]
+#![doc = "Slice 9: module graph (plan sect.20). See `module_graph.rs`."]
 
 pub mod host;
 pub mod in_process_jsc;
 pub mod jsc_bridge;
 pub mod jsx;
+pub mod module_graph;
 pub mod page;
 pub mod router;
