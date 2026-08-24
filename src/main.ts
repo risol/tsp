@@ -17,6 +17,15 @@ import * as reactDomServerBuiltin from "react-dom/server";
 import * as reactJsxDevRuntime from "react/jsx-dev-runtime";
 import * as reactJsxRuntime from "react/jsx-runtime";
 import bcryptjs from "bcryptjs";
+import * as bcryptjsBuiltin from "bcryptjs";
+import * as compressingBuiltin from "compressing";
+import * as exceljsBuiltin from "exceljs";
+import * as jsoncParserBuiltin from "jsonc-parser";
+import * as ldaptsBuiltin from "ldapts";
+import * as mysql2PromiseBuiltin from "mysql2/promise";
+import * as nanoidBuiltin from "nanoid";
+import * as redisBuiltin from "redis";
+import * as zodBuiltin from "zod";
 import { registerDep } from "./injection-typed.ts";
 import { serveStaticFileWithCache } from "./static.ts";
 import { dirname, join, relative, resolve } from "node:path";
@@ -59,6 +68,15 @@ void reactJsxRuntime;
   reactJsxRuntime,
   reactJsxDevRuntime,
   reactDomServer: reactDomServerBuiltin,
+  bcryptjs: bcryptjsBuiltin,
+  compressing: compressingBuiltin,
+  exceljs: exceljsBuiltin,
+  "jsonc-parser": jsoncParserBuiltin,
+  ldapts: ldaptsBuiltin,
+  "mysql2/promise": mysql2PromiseBuiltin,
+  nanoid: nanoidBuiltin,
+  redis: redisBuiltin,
+  zod: zodBuiltin,
 };
 
 // Session config interface
