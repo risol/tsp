@@ -1675,10 +1675,6 @@ dependencies = [
 [[package]]
 name = "bun_runtime_tsp"
 version = "0.0.0"
-dependencies = [
- "bun_jsc",
- "bun_transpiler",
-]
 
 [[package]]
 name = "bun_s3_signing"

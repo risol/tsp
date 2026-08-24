@@ -13,20 +13,23 @@
 //! mod router;      // route matcher (PoC 1: linear / only)
 //! mod request;     // HTTP request -> Context bridge
 //! mod response;    // Response builder
-//! mod jsx;         // TSP JSX runtime (PoC 1: stub)
+//! mod jsx;         // TSP JSX runtime (PoC 1: subprocess path)
 //! mod page_registry; // PageSlot, Generation tracking
 //! mod module_graph;  // forward/reverse edges
 //! mod generation;    // Generation + LKG
 //! mod errors;        // TSP1xxx-5xxx codes
-//! mod jsc_bridge;    // JSC + TSX transpile + execute
+//! mod jsc_bridge;    // JSC exec (PoC 1: spawns bun.exe)
 //! ```
 //!
 //! Each `mod` is added the slice it lands in. Slice 1: library shell;
 //! slice 2 lands the listener; slice 3 lands the router; slice 4 lands
-//! the JSC deps; slice 5 lands `page.rs`; etc.
+//! the JSC deps; slice 5 lands `page.rs`; slice 6 lands `jsx.rs` and
+//! `jsc_bridge.rs`; etc.
 
-#![doc = "Slice 5: page source reader + static export detector. See `page.rs`."]
+#![doc = "Slice 6: JSX transform + bun.exe subprocess bridge. See `jsx.rs` and `jsc_bridge.rs`."]
 
 pub mod host;
+pub mod jsc_bridge;
+pub mod jsx;
 pub mod page;
 pub mod router;

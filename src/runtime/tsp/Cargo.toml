@@ -7,7 +7,7 @@ edition.workspace = true
 #
 # v1 `src/main.ts` is unchanged. This crate is the side-by-side v2 runtime
 # entry point; PoC 1 (plan sect.70) is the 7-step vertical slice
-# (HTTP -> routes/index.tsp -> TSX transpile -> JSC -> GET -> response)
+# (HTTP -> routes/index.tsp -> TSX transform -> JSC -> GET -> response)
 # and lives behind `bin/tspserver_v2.rs`. Library code is the same source
 # the bin re-uses so future tests and embedded callers can drive it.
 [lib]
@@ -20,15 +20,14 @@ path = "bin/tspserver_v2.rs"
 [lints]
 workspace = true
 
-# Slice 4: pull in Bun's JSC binding + transpiler so the route table can
-# actually execute `routes/index.tsp`. These two crates re-export
-# everything the host needs:
-# - `bun_jsc`     - raw JSC VM, JSCell, JSValue, host functions, GC
-# - `bun_transpiler` - TS/TSX -> JS via `bun_bundler::transpiler::Transpiler`
+# Slice 6 (pivot): instead of pulling in `bun_runtime` (cold compile
+# 20-40 min) or wiring `bun_jsc` directly (not a standalone embeddable
+# VM per slice 4's discovery), the host spawns the project's vendored
+# `bun.exe` (1.4.0+) as a subprocess to evaluate a slice-6-prepared
+# `.js` file. That keeps PoC 1's "JSC is the execution engine" promise
+# (plan sect.25) while side-stepping the bun_runtime C++/codegen
+# integration this session. The full in-process bridge lands in slice
+# 7+ when we have the time budget for the heavy compile.
 #
-# The transitive dep graph is large (bun_bundler alone is most of the
-# Bun bundler); slice 4's first cargo build is the cold one and will
-# take 15-30 minutes. The subsequent slice-5 work uses the warm cache.
+# The deps are intentionally zero: the host is a small orchestrator.
 [dependencies]
-bun_jsc = { workspace = true }
-bun_transpiler = { workspace = true }
