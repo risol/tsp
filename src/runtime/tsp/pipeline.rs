@@ -44,6 +44,19 @@ impl std::fmt::Display for BuildError {
 
 impl std::error::Error for BuildError {}
 
+impl BuildError {
+    /// The TSP-NNNN code for this build failure (spec
+    /// sect.6.3 / slice 16h). The host threads this into
+    /// the 500 body so the dev can grep for the failure
+    /// phase (prepare vs jsx vs subprocess).
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Prepare(_) => "TSP3001",
+            Self::Jsc(e) => e.code(),
+        }
+    }
+}
+
 /// Build a page: read the source, transpile + evaluate via
 /// `bun`, return the rendered HTTP body. The body is what the
 /// `HttpResponse` field of the `Generation` carries to the
@@ -64,4 +77,25 @@ pub fn build(
     let source = page::prepare(route).map_err(BuildError::Prepare)?;
     jsc_bridge::execute(bun, &source.text, method, Some(ctx_json))
         .map_err(BuildError::Jsc)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn build_error_codes_are_stable() {
+        // Slice 16h: BuildError is the host's view of a
+        // build pipeline failure. The `code()` method
+        // delegates to the inner source (prepare or
+        // jsc bridge) so the host can render a 500 body
+        // with the precise `[TSP-NNNN]` prefix. Pin
+        // both branches here.
+        let prepare_err = BuildError::Prepare(crate::page::PrepareError::Io {
+            path: PathBuf::from("/x"),
+            source: std::io::Error::new(std::io::ErrorKind::Other, "x"),
+        });
+        assert_eq!(prepare_err.code(), "TSP3001");
+    }
 }

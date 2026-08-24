@@ -248,6 +248,23 @@ impl std::fmt::Display for RouterError {
     }
 }
 
+impl RouterError {
+    /// The TSP-NNNN code for this router failure
+    /// (spec sect.6.3 / slice 16h). All four variants
+    /// land in the 1xxx routing range; the page-surface
+    /// codes (spec sect.6.3 "dev diagnostics") document
+    /// a slightly different mapping but the prefixes
+    /// are stable within the runtime.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::RoutesDirMissing { .. } => "TSP1001",
+            Self::UnsupportedShape { .. } => "TSP1002",
+            Self::DuplicatePath { .. } => "TSP1003",
+            Self::Io { .. } => "TSP1004",
+        }
+    }
+}
+
 impl std::error::Error for RouterError {}
 
 use std::io;
@@ -1028,5 +1045,43 @@ mod tests {
         assert!(!table.remove_by_path("/x"));
         assert_eq!(table.len(), 0);
         assert!(table.get_by_path("/x").is_none());
+    }
+
+    #[test]
+    fn router_error_codes_are_stable() {
+        // Slice 16h: the host's boot-time path threads
+        // RouterError::code() into a 5xx body. Pin the
+        // 1xxx partition so a future refactor cannot
+        // silently renumber these -- the spec's
+        // ambiguous-routes example references
+        // `TSP1004` (FREEZE item 14) and the rest are
+        // discoverable by name.
+        let cases: &[(RouterError, &str)] = &[
+            (
+                RouterError::RoutesDirMissing { path: PathBuf::from("/x") },
+                "TSP1001",
+            ),
+            (
+                RouterError::UnsupportedShape {
+                    path: PathBuf::from("/x"),
+                    reason: "x",
+                },
+                "TSP1002",
+            ),
+            (
+                RouterError::DuplicatePath { path: "/x".to_string() },
+                "TSP1003",
+            ),
+            (
+                RouterError::Io {
+                    path: PathBuf::from("/x"),
+                    source: std::io::Error::new(std::io::ErrorKind::Other, "x"),
+                },
+                "TSP1004",
+            ),
+        ];
+        for (err, want) in cases {
+            assert_eq!(err.code(), *want, "err = {err:?}");
+        }
     }
 }

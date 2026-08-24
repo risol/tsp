@@ -37,6 +37,166 @@ use crate::pipeline;
 use crate::router::{HttpMethod, MatchResult, RouteTable};
 use std::sync::Arc;
 
+/// Stable error codes for development diagnostics
+/// (spec sect.6.3 / sect.37). The full set lives in
+/// `docs/v2/progress.md` slice 16h; the contract is:
+///
+/// - 1xxx: route / filesystem configuration errors
+///   (scanner + shape + duplicate + ambiguous)
+/// - 2xxx: request input errors (parse / size / params)
+/// - 3xxx: build / handler runtime errors (prepare /
+///   jsx / subprocess / invalid return / render)
+/// - 4xxx: reserved for response-state codes (the
+///   spec lists 405 in sect.36.3 as a routing concern,
+///   not a typed error -- 405 stays plain). When a
+///   response-state error acquires a code, the prefix
+///   stays at 4xxx.
+///
+/// The wire form is `[TSP-NNNN] <detail>` on the FIRST
+/// line of the error body. Subsequent lines keep the
+/// pre-16h "TSP v2 PoC 1 slice N: ..." trace so existing
+/// tooling that greps for `slice 12` etc. continues to
+/// work.
+///
+/// Note on overlap with the page-side examples: the
+/// 10 `.tsp` fixtures in `docs/v2/examples/` use the
+/// 2xxx / 3xxx ranges from the application surface
+/// perspective (the page author types `TSP2003` /
+/// `TSP3001` into their dev loop). 16h's prefix table
+/// is the runtime surface; the dev-visible codes are a
+/// subset (e.g. `TSP2003` here = "no route matches",
+/// while `TSP2003` in the spec examples = "shape magic
+/// in a fixture"). The codes are stable within the
+/// runtime; the dev-facing examples are a separate
+/// concern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TspError {
+    // 1xxx: routing.
+    /// `RouterError::RoutesDirMissing` -- the configured
+    /// `routes_dir` does not exist or is not a directory.
+    RoutesDirMissing,
+    /// `RouterError::UnsupportedShape` -- a `.tsp` file
+    /// has a name we cannot translate to a URL path
+    /// (e.g. `[1st].tsp`, non-final catch-all, dynamic
+    /// without a name).
+    UnsupportedRouteShape,
+    /// `RouterError::DuplicatePath` -- two scanned
+    /// routes produce the same canonical URL path.
+    DuplicateRoutePath,
+    /// `RouterError::Io` -- stat / read_dir failed
+    /// for some path inside the routes root.
+    RouteIoError,
+    // 2xxx: request input.
+    /// The request line was missing or unparseable
+    /// (Unknown from parse_request).
+    MalformedRequestLine,
+    /// `Content-Length` exceeded the configured body
+    /// limit (spec sect.14.2 -> 413 before page runs).
+    BodyTooLarge,
+    /// No route matched the request path.
+    NoRouteMatches,
+    /// The matched route did not export the requested
+    /// HTTP method (spec sect.6.4 -> 405 + Allow).
+    MethodNotAllowed,
+    // 3xxx: build / handler.
+    /// The page's source could not be read or its
+    /// method exports could not be detected.
+    PagePrepareError,
+    /// The generation cache holds no current payload
+    /// for a Clean slot -- a build that should have
+    /// produced a body did not (defence-in-depth; the
+    /// commit path always sets payload).
+    CleanSlotMissingPayload,
+    /// A page slot has no successful build ever (LKG
+    /// empty) and the request needs it now -- the
+    /// host serves 500 because there is nothing to
+    /// fall back to.
+    PageNeverBuilt,
+    /// The matched route has no slot in the
+    /// `PageRegistry` (boot-time scan and per-method
+    /// detector disagree on whether the method is
+    /// exported). Surfaces as 500 in the dispatcher's
+    /// "UnknownPage" arm.
+    UnknownPage,
+}
+
+impl TspError {
+    /// The canonical `TSP-NNNN` string. Spec sect.6.3
+    /// and FREEZE item 14 anchor these codes; the
+    /// application-side spec examples in
+    /// `docs/v2/examples/09-no-tsp-imports.tsp` and
+    /// `10-shape-magic.tsp` reference `TSP2003` /
+    /// `TSP3001` directly.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::RoutesDirMissing => "TSP1001",
+            Self::UnsupportedRouteShape => "TSP1002",
+            Self::DuplicateRoutePath => "TSP1003",
+            Self::RouteIoError => "TSP1004",
+            Self::MalformedRequestLine => "TSP2001",
+            Self::BodyTooLarge => "TSP2002",
+            Self::NoRouteMatches => "TSP2003",
+            Self::MethodNotAllowed => "TSP2004",
+            Self::PagePrepareError => "TSP3001",
+            Self::CleanSlotMissingPayload => "TSP3006",
+            Self::PageNeverBuilt => "TSP3007",
+            Self::UnknownPage => "TSP3008",
+        }
+    }
+
+    /// Short human description -- one short line, no
+    /// detail. Format: `[TSP-NNNN] <description>`.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Self::RoutesDirMissing => "routes directory not found",
+            Self::UnsupportedRouteShape => "unsupported route shape",
+            Self::DuplicateRoutePath => "duplicate route path",
+            Self::RouteIoError => "route filesystem error",
+            Self::MalformedRequestLine => "malformed request line",
+            Self::BodyTooLarge => "request body exceeds limit",
+            Self::NoRouteMatches => "no route matches",
+            Self::MethodNotAllowed => "method not exported by route",
+            Self::PagePrepareError => "page prepare error",
+            Self::CleanSlotMissingPayload => "clean slot has no payload",
+            Self::PageNeverBuilt => "page never built successfully",
+            Self::UnknownPage => "page not registered",
+        }
+    }
+}
+
+/// Format an error page body whose first line is
+/// `[TSP-NNNN] <description>` (spec sect.6.3 dev
+/// diagnostics). The `code` and `description` come
+/// from the typed `TspError` enum; for build-time
+/// codes that the host enum does not have a variant
+/// for (e.g. `TSP3002` JSX transform, `TSP3012`
+/// subprocess failure) use `format_error_body_raw`
+/// below. Detail lines follow so the pre-16h grep
+/// patterns (`TSP v2 PoC 1 slice 12: ...`) keep
+/// working -- existing dev tooling scans for those
+/// substrings and 16h does not want to break that.
+pub fn format_error_body(code: TspError, detail: &str) -> String {
+    format_error_body_raw(code.code(), code.describe(), detail)
+}
+
+/// Like `format_error_body` but takes the code /
+/// description as raw strings. Used by the build
+/// pipeline to surface JSX / subprocess / etc. failure
+/// codes that the host's own error enum does not model.
+pub fn format_error_body_raw(code: &str, description: &str, detail: &str) -> String {
+    let mut out = String::new();
+    out.push('[');
+    out.push_str(code);
+    out.push_str("] ");
+    out.push_str(description);
+    out.push('\n');
+    out.push_str(detail);
+    if !detail.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 /// Per-request Context exposed to the `.tsp` page handler
 /// (spec sect.13, plan sect.8). Slice 16a landed the minimum
 /// subset (method / path / query / params); slice 16d adds
@@ -811,8 +971,11 @@ fn handle_connection(
     let (head, body) = match read_request(&mut stream, max_body)? {
         ReadOutcome::Complete { head, body } => (head, body),
         ReadOutcome::BodyTooLarge { limit } => {
-            let body_text = format!(
-                "TSP v2 PoC 1 slice 16d: request body exceeds configured limit of {limit} bytes\n"
+            let body_text = format_error_body(
+                TspError::BodyTooLarge,
+                &format!(
+                    "TSP v2 PoC 1 slice 16d: request body exceeds configured limit of {limit} bytes\n"
+                ),
             );
             let head = format!(
                 "HTTP/1.1 413 Payload Too Large\r\n\
@@ -834,7 +997,10 @@ fn handle_connection(
             "HTTP/1.1 400 Bad Request",
             "text/plain; charset=utf-8".to_string(),
             None,
-            "TSP v2 PoC 1 slice 10b: malformed request line\n".to_string(),
+            format_error_body(
+                TspError::MalformedRequestLine,
+                "TSP v2 PoC 1 slice 10b: malformed request line\n",
+            ),
             Vec::new(),
         ),
         ParsedRequest::Known { method, path, query, headers } => {
@@ -988,9 +1154,12 @@ fn handle_connection(
                 "HTTP/1.1 404 Not Found",
                 "text/plain; charset=utf-8".to_string(),
                 None,
-                format!(
-                    "TSP v2 PoC 1 slice 10b: no route matches path={path} (table has {} route(s))\n",
-                    routes.len()
+                format_error_body(
+                    TspError::NoRouteMatches,
+                    &format!(
+                        "TSP v2 PoC 1 slice 10b: no route matches path={path} (table has {} route(s))\n",
+                        routes.len()
+                    ),
                 ),
                 Vec::new(),
             ),
@@ -1073,13 +1242,31 @@ fn render_per_request(
                         "TSPv2PoC1: build error on {}: {e}",
                         route.source.display()
                     );
+                    // Build-time errors carry their own
+                    // `BuildError::code()` (TSP3001 for
+                    // prepare, TSP3002 / TSP3010-3014 for
+                    // the bridge). The bridge code path
+                    // supplies a more specific description
+                    // (JscError::describe); the prepare
+                    // path falls back to the host enum.
+                    let (code, desc) = match &e {
+                        pipeline::BuildError::Prepare(_) => {
+                            (TspError::PagePrepareError.code(),
+                             TspError::PagePrepareError.describe())
+                        }
+                        pipeline::BuildError::Jsc(j) => (j.code(), j.describe()),
+                    };
                     (
                         "HTTP/1.1 500 Internal Server Error",
                         "text/plain; charset=utf-8",
                         None,
-                        format!(
-                            "TSP v2 PoC 1 slice 16d: build error on {}\n  {msg}\n",
-                            route.source.display()
+                        format_error_body_raw(
+                            code,
+                            desc,
+                            &format!(
+                                "TSP v2 PoC 1 slice 16d: build error on {}\n  {msg}\n",
+                                route.source.display()
+                            ),
                         ),
                     )
                 }
@@ -1087,10 +1274,13 @@ fn render_per_request(
         }
         Ok(page) => {
             let allow = build_allow_header(&page.methods);
-            let body = format!(
-                "TSP v2 PoC 1 slice 16d: method {} not exported by {}\n",
-                requested.as_str(),
-                route.source.display()
+            let body = format_error_body(
+                TspError::MethodNotAllowed,
+                &format!(
+                    "TSP v2 PoC 1 slice 16d: method {} not exported by {}\n",
+                    requested.as_str(),
+                    route.source.display()
+                ),
             );
             (
                 "HTTP/1.1 405 Method Not Allowed",
@@ -1103,7 +1293,10 @@ fn render_per_request(
             "HTTP/1.1 500 Internal Server Error",
             "text/plain; charset=utf-8",
             None,
-            format!("TSP v2 PoC 1 slice 16d: prepare error: {e}\n"),
+            format_error_body(
+                TspError::PagePrepareError,
+                &format!("TSP v2 PoC 1 slice 16d: prepare error: {e}\n"),
+            ),
         ),
     }
 }
@@ -1143,11 +1336,13 @@ fn render_for_route(
             Ok(p) => build_allow_header(&p.methods),
             Err(_) => String::new(),
         };
-        let body = format!(
-            "TSP v2 PoC 1 slice 12: method {} not exported by {}
-",
-            requested.as_str(),
-            route.source.display()
+        let body = format_error_body(
+            TspError::MethodNotAllowed,
+            &format!(
+                "TSP v2 PoC 1 slice 12: method {} not exported by {}\n",
+                requested.as_str(),
+                route.source.display()
+            ),
         );
         return (
             "HTTP/1.1 405 Method Not Allowed",
@@ -1225,8 +1420,10 @@ fn render_for_route(
                     "HTTP/1.1 500 Internal Server Error",
                     "text/plain; charset=utf-8",
                     None,
-                    "TSP v2 PoC 1 slice 12: page not registered in PageRegistry
-".to_string(),
+                    format_error_body(
+                        TspError::UnknownPage,
+                        "TSP v2 PoC 1 slice 12: page not registered in PageRegistry\n",
+                    ),
                 ),
             }
         }
@@ -1298,8 +1495,10 @@ fn serve_current_pinned_or_500(
             "HTTP/1.1 500 Internal Server Error",
             "text/plain; charset=utf-8",
             None,
-            "TSP v2 PoC 1 slice 12: Clean slot has no payload
-".to_string(),
+            format_error_body(
+                TspError::CleanSlotMissingPayload,
+                "TSP v2 PoC 1 slice 12: Clean slot has no payload\n",
+            ),
         ),
     }
 }
@@ -1315,10 +1514,12 @@ fn serve_lkg_pinned_or_500(
             "HTTP/1.1 500 Internal Server Error",
             "text/plain; charset=utf-8",
             None,
-            format!(
-                "TSP v2 PoC 1 slice 12: page {} never built successfully
-",
-                route.source.display()
+            format_error_body(
+                TspError::PageNeverBuilt,
+                &format!(
+                    "TSP v2 PoC 1 slice 12: page {} never built successfully\n",
+                    route.source.display()
+                ),
             ),
         ),
     }
@@ -1344,16 +1545,22 @@ fn render_405_body(
     match prepared {
         Ok(page) => {
             let allow = build_allow_header(&page.methods);
-            let body = format!(
-                "TSP v2 PoC 1 slice 10b: method {} not exported by {}\n",
-                requested.as_str(),
-                route.source.display()
+            let body = format_error_body(
+                TspError::MethodNotAllowed,
+                &format!(
+                    "TSP v2 PoC 1 slice 10b: method {} not exported by {}\n",
+                    requested.as_str(),
+                    route.source.display()
+                ),
             );
             (allow, body)
         }
         Err(e) => (
             String::new(),
-            format!("TSP v2 PoC 1 slice 10b: prepare error: {e}\n"),
+            format_error_body(
+                TspError::PagePrepareError,
+                &format!("TSP v2 PoC 1 slice 10b: prepare error: {e}\n"),
+            ),
         ),
     }
 }
@@ -1770,6 +1977,71 @@ mod tests {
             base64_encode(&mut out, input);
             assert_eq!(&out, want, "input = {input:?}");
         }
+    }
+
+    #[test]
+    fn tsp_error_codes_are_stable() {
+        // The 1xxx / 2xxx / 3xxx partition is part of the
+        // dev-loop contract; spec sect.6.3 names a few
+        // (TSP2003 / TSP3001) that the example fixtures
+        // reference. Pin the strings here so a future
+        // refactor cannot silently renumber them.
+        let pairs: &[(TspError, &str)] = &[
+            (TspError::RoutesDirMissing, "TSP1001"),
+            (TspError::UnsupportedRouteShape, "TSP1002"),
+            (TspError::DuplicateRoutePath, "TSP1003"),
+            (TspError::RouteIoError, "TSP1004"),
+            (TspError::MalformedRequestLine, "TSP2001"),
+            (TspError::BodyTooLarge, "TSP2002"),
+            (TspError::NoRouteMatches, "TSP2003"),
+            (TspError::MethodNotAllowed, "TSP2004"),
+            (TspError::PagePrepareError, "TSP3001"),
+            (TspError::CleanSlotMissingPayload, "TSP3006"),
+            (TspError::PageNeverBuilt, "TSP3007"),
+            (TspError::UnknownPage, "TSP3008"),
+        ];
+        for (code, want) in pairs {
+            assert_eq!(code.code(), *want, "code = {code:?}");
+        }
+    }
+
+    #[test]
+    fn format_error_body_typed_form() {
+        // Body shape contract: first line is
+        // `[TSP-NNNN] <description>`, the detail line
+        // follows, the detail keeps its trailing newline
+        // when present.
+        let body = format_error_body(
+            TspError::NoRouteMatches,
+            "TSP v2 PoC 1 slice 10b: no route matches path=/ (table has 0 route(s))\n",
+        );
+        assert!(body.starts_with("[TSP2003] no route matches\n"), "got: {body:?}");
+        assert!(body.contains("slice 10b: no route matches"), "got: {body:?}");
+    }
+
+    #[test]
+    fn format_error_body_raw_passes_arbitrary_code() {
+        // The raw variant is used by the build pipeline
+        // when the failure came from the JSC bridge --
+        // it owns the code (`TSP3002` / `TSP3012` etc.)
+        // and a description, neither of which the host's
+        // own enum has a variant for.
+        let body = format_error_body_raw(
+            "TSP3012",
+            "bun subprocess exited non-zero",
+            "bun exited 1: error page\n",
+        );
+        assert!(body.starts_with("[TSP3012] bun subprocess exited non-zero\n"),
+                "got: {body:?}");
+        assert!(body.contains("bun exited 1: error page\n"), "got: {body:?}");
+    }
+
+    #[test]
+    fn format_error_body_adds_trailing_newline_if_missing() {
+        // Detail without a trailing newline still gets
+        // one so the wire form always ends with \n.
+        let body = format_error_body(TspError::BodyTooLarge, "limit=8 bytes");
+        assert!(body.ends_with('\n'), "got: {body:?}");
     }
 
     #[test]

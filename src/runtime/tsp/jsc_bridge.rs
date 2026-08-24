@@ -70,6 +70,38 @@ impl std::fmt::Display for JscError {
 
 impl std::error::Error for JscError {}
 
+impl JscError {
+    /// The TSP-NNNN code for this JSC bridge failure
+    /// (spec sect.6.3 / slice 16h). The host threads
+    /// this into the 500 body so the dev can grep for
+    /// the failure phase (jsx transform / subprocess
+    /// / empty stdout).
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::BunNotFound { .. } => "TSP3010",
+            Self::Spawn(_) => "TSP3011",
+            Self::BunFailed { .. } => "TSP3012",
+            Self::EmptyStdout => "TSP3013",
+            Self::WriteTemp(_) => "TSP3014",
+            Self::Jsx(_) => "TSP3002",
+        }
+    }
+
+    /// Short description for the `[TSP-NNNN] <desc>`
+    /// line. Kept here (not in host.rs) so the bridge
+    /// layer owns the wording for its own failures.
+    pub fn describe(&self) -> &'static str {
+        match self {
+            Self::BunNotFound { .. } => "bun binary not found",
+            Self::Spawn(_) => "bun subprocess spawn failed",
+            Self::BunFailed { .. } => "bun subprocess exited non-zero",
+            Self::EmptyStdout => "bun produced no stdout",
+            Self::WriteTemp(_) => "writing bun temp file failed",
+            Self::Jsx(_) => "jsx transform error",
+        }
+    }
+}
+
 /// Resolve the bun binary. `TSP_BUN_BIN` wins, else the vendored
 /// `.bun-bootstrap/node_modules/bun/bin/bun.exe` relative to the
 /// current working directory.
@@ -188,6 +220,35 @@ mod tests {
             Err(JscError::BunNotFound { .. }) => {}
             Err(other) => panic!("expected BunNotFound, got {other:?}"),
             Ok(_) => unreachable!("just checked Err above"),
+        }
+    }
+
+    #[test]
+    fn jsc_error_codes_are_stable() {
+        // Slice 16h: the host formats 500 bodies with the
+        // JSC bridge's own code + description. Pin the
+        // code table here so a refactor cannot silently
+        // renumber the prefix (e.g. turning `TSP3002`
+        // for JSX into `TSP3009`).
+        let pairs: &[(JscError, &str)] = &[
+            (JscError::BunNotFound { tried: PathBuf::from("x") }, "TSP3010"),
+            (
+                JscError::BunFailed { code: Some(1), stderr_tail: String::new() },
+                "TSP3012",
+            ),
+            (JscError::EmptyStdout, "TSP3013"),
+            (
+                JscError::WriteTemp(std::io::Error::new(std::io::ErrorKind::Other, "x")),
+                "TSP3014",
+            ),
+            (
+                JscError::Jsx(jsx::JsxError::UnsupportedShape { line: 1, reason: "x" }),
+                "TSP3002",
+            ),
+        ];
+        for (err, want) in pairs {
+            assert_eq!(err.code(), *want, "err = {err:?}");
+            assert!(!err.describe().is_empty(), "describe empty for {err:?}");
         }
     }
 }
