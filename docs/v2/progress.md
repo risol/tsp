@@ -999,6 +999,185 @@ is green.
   Phase 8 (session / cookies). Read plan sect.61 and the
   Phase 8 queue before starting.
 
+### Slice 16e -- ctx.params + dynamic route segments (done, bun commit `a607deb9`)
+
+- **Why:** plan sect.61 Phase 7 lists `params` as a
+  first-class requirement and FREEZE item 3 froze the
+  segment-name rule (`[A-Za-z_][A-Za-z0-9_]*`). Slices
+  16a-16d landed the bridge, query, headers, body, url,
+  signal, and response -- but `ctx.params` stayed an empty
+  map and dynamic routes were `RouterError::UnsupportedShape`
+  at boot. Phase 7 still had a real gap: `routes/users/[id].tsp`
+  refused to start. 16e closes it.
+- **What landed (in `bun/src/runtime/tsp/`):**
+  - `router.rs` -- new `Segment` enum (`Static` / `Param` /
+    `CatchAll`) plus `Route { path, source, methods,
+    segments, params }`. `url_path_for` recognises
+    `[name]` (one-segment dynamic) and `[...name]` (catch-
+    all) at any position; the catch-all is constrained to
+    the last position (FREEZE item 3). The segment name
+    pattern is validated with the FREEZE item 3 regex
+    `[A-Za-z_][A-Za-z0-9_]*` -- a typo'd `routes/users/
+    [1st].tsp` refuses to boot, matching the slice-3
+    `RouterError::UnsupportedShape` policy. The `path` is
+    the URL template (`/users/:id`, `/files/*path`).
+    `lookup` is rewritten: it splits the request path into
+    segments, walks every route, picks the lowest-priority
+    score (spec sect.11.6: static > dynamic > catch-all),
+    and returns the matched `Route` with `params`
+    populated. `match_segments` is the per-route pattern
+    engine. Trailing slash is normalised (spec sect.11.9):
+    `/foo` and `/foo/` are the same route; the root `/`
+    is its own canonical form.
+  - `host.rs` -- `handle_connection` looks up the route
+    once, then seeds `ctx.params` from the matched route
+    before building the per-request `Context`. The page
+    handler now reads `ctx.params.<name>` correctly. The
+    `render_per_request` cache-bypass condition (slice
+    16d) is extended: a request with `params` non-empty
+    bypasses the generation cache, because the registry
+    keys on (route, method) and a cached payload would
+    replay the FIRST captured params to every later
+    request on the same source file.
+  - `generation.rs` -- the two test `Route` literals gain
+    the new `segments` + `params` fields.
+  - `routes/users/[id].tsp` (new fixture) -- demonstrates
+    the dynamic segment with `ctx.params.id`, the
+    `URLSearchParams` `query`, and the `URL` `pathname`.
+- **Verify:** 80 lib tests pass (was 70; +10: dynamic
+  segment bind, dynamic non-over-match, catch-all bind,
+  static-over-dynamic precedence, dynamic-over-catch-all
+  precedence, trailing slash normalisation, dynamic
+  directory segment template, catch-all template,
+  invalid segment name rejection, non-final catch-all
+  rejection). E2E with the new fixture:
+  ```
+  GET /users/42            -> 200, "User 42" + path=/users/42
+  GET /users/99?lang=zh    -> 200, "User 99" + query=lang=zh
+  GET /                    -> 200 (static route still works)
+  GET /nope                -> 404
+  ```
+- **Out of slice 16e (deferred to later slices):**
+  - Static-vs-dynamic ambiguity rejection at scan time
+    (e.g. `routes/users/[id].tsp` and `routes/users/[name]
+    .tsp` at the same path). The current scan orders
+    lexicographically and the matcher picks the static
+    route when one is available, but a path-only conflict
+    between two dynamics or two statics of the same
+    shape still relies on `RouterError::DuplicatePath`
+    (which fires when two files produce the same canonical
+    `path`). A proper "ambiguous routes" check is a
+    follow-up slice alongside spec sect.6.3 typed error
+    codes.
+  - `ctx.signal` abort triggers (16d deferred).
+  - `request.formData()` (16d deferred -- needs raw-bytes
+    body transport).
+  - `ctx.cookies` (Phase 8 / slice 18).
+  - URL percent-decoding of dynamic segments (spec
+    sect.11.8) -- currently surfaced verbatim; pages
+    can use `decodeURIComponent` on the JS side.
+- **Next:** slice 16f = the remaining Phase 7 items are
+  `formData` (spec sect.14.3, needs raw-bytes body) and
+  `cookies` (spec sect.15, Phase 8 in plan but covered
+  in Phase 7 per spec ordering). Either is the natural
+  next slice; pick based on which has a cleaner dependency
+  surface. `formData` is a host-side change; `cookies`
+  needs a Set-Cookie merge path through the response
+  ABI (slice 16c's `extra_headers` is a flat object,
+  cookies are multi-value). Read plan sect.61 + spec
+  sect.15/18.3 to decide.
+
+### Slice 16f -- ctx.cookies + Set-Cookie multi-value merge (done, bun commit `b9c3be8e`)
+
+- **Why:** spec sect.15 is a MUST-implement contract for
+  `ctx.cookies` (read / write / delete). Phase 7's last
+  real gap. The slice 16c envelope emitted `headers` as a
+  flat JSON object (`{k: v}`), which collapses two
+  `Set-Cookie:` wire lines with the same header name into a
+  single comma-folded value -- violating spec sect.15's
+  "preserve all valid cookie header lines rather than
+  comma-joining them". The 16c trade-off was honest but
+  undeclared; slice 16f closes both gaps in one slice
+  because the cookie merge is impossible without the
+  multi-value header shape. (memory: "根因重叠 bug 优先合并
+  slice" -- one commit, one slice, one merge.)
+- **What landed (in `bun/src/runtime/tsp/`):**
+  - `jsx.rs` -- the wrap preamble now parses the
+    `Cookie` request header into a small `Map` and exposes
+    `ctx.cookies = { get, has, set, delete }`. Read methods
+    return values from the request's cookies; write methods
+    push formatted `Set-Cookie` lines into a
+    `__tspCookieWrites` array (the page's options flow
+    through -- `path` / `maxAge` / `domain` / `httpOnly` /
+    `secure` / `sameSite` per spec sect.15's
+    `CookieOptions`). The async IIFE now merges the writes
+    into the response header list AFTER the page's
+    `Response.headers` are walked, so:
+    - `Set-Cookie` writes reflect on the response even
+      when the handler returns an `HtmlNode` (string)
+      -- spec sect.15 line 809 satisfied.
+    - multiple writes become separate `Set-Cookie` wire
+      lines -- spec sect.15 line 813 satisfied.
+    - explicit `Response` Set-Cookie lines from the page
+      + runtime cookie writes are preserved as a single
+      ordered list.
+  - `jsx.rs` -- the response envelope's `headers` field
+    changed from a flat object `{k: v}` to an array of
+    `[name, value]` pairs. The wrap script emits the new
+    shape via `__tspHeaders__.push([k, v])`. The host's
+    `parse_envelope` accepts both shapes (array for
+    forward, object for slice 16c backward compat).
+  - `host.rs` -- `parse_envelope` now delegates header
+    extraction to `parse_envelope_headers(v)`, which
+    handles the array shape correctly (preserving
+    duplicates) and still accepts the flat-object shape
+    (one entry per name). The writer's `header_block` loop
+    was already array-of-pairs aware; it just needed
+    multi-value to reach it.
+- **Verify:** 83 lib tests pass (was 80; +3: array
+  headers preserve multi-value, malformed array entries
+  skipped without fatal, wrap preamble builds cookies
+  with read+write API). E2E:
+  ```
+  GET / (no cookies)
+    -> 200, Set-Cookie: sid=s_<rand>; Path=/; HttpOnly
+       Set-Cookie: theme=dark; Path=/; Max-Age=3600
+       (two separate wire lines; NOT comma-joined)
+  GET / with Cookie: sid=old
+    -> 200, body shows "seen=old" and cookies.has(sid)=true
+  POST with body, no inbound cookies
+    -> 201, x-demo: slice16f, x-method: POST
+       Set-Cookie: a=v1; Path=/
+       Set-Cookie: b=v2; Path=/
+       (Response return path also surfaces both writes)
+  ```
+- **Out of slice 16f (deferred to 16g+ / Phase 8):**
+  - `request.formData()` for multipart (spec sect.14.3).
+    Bun's native `Request.formData()` already works for
+    text bodies, but the host body path is UTF-8 lossy --
+    binary multipart payloads need a raw-bytes transport
+    slice before formData is genuinely spec-compliant.
+  - `ctx.signal` abort triggers (16d deferred).
+  - Cookie read-side spec details: spec sect.15's
+    `cookie.set` is documented with full `CookieOptions`
+    (signed / prefix / priority / partitioned); 16f
+    covers the common subset (`path` / `maxAge` / `domain` /
+    `httpOnly` / `secure` / `sameSite`). Full coverage
+    follows with the rest of the options interface in
+    Phase 8 / slice 18.
+  - URL percent-decode on dynamic segment values
+    (spec sect.11.8) -- 16e deferred.
+  - `ctx.session` (Phase 8).
+- **Next:** slice 16g = `request.formData()` (spec
+  sect.14.3) requires a raw-bytes body channel. The
+  change is wider than cookies: `Context.body` becomes
+  `Vec<u8>` (or stays `String` plus a separate
+  `body_raw: Option<...>`), the wrap preamble hands Bun
+  the bytes verbatim, and the env side channel stops
+  carrying the body. Read plan sect.61 and the Phase 8
+  queue before starting so the raw-bytes path also
+  enables future file-upload + body streaming work.
+
 ## Realistic next-step options (post-Slice 7) -- STALE
 
 > Note (2026-08-24): the in-process JSC bridge was closed
