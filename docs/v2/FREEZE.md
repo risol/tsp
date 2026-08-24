@@ -1,8 +1,12 @@
 # TSP v2 — Frozen Contract (Phase 0 deliverable)
 
-> Status: **DRAFT for Sol sign-off (Phase 0 of `tsp-v2-plan.md` §61)**
+> Status: **FROZEN — TSP v2.0 contract, signed off by Sol 2026-08-24**
 > Date: 2026-08-24
 > Owner: Mavis, on behalf of Sol
+
+This document is the v2.0 application-facing contract. Any later
+spec change that contradicts a frozen item must come with an
+ADR (plan §69).
 
 This document is the consolidation of the 12 contract items `tsp-v2-plan.md`
 §60 says must be frozen before any non-trivial user code lands. The answers
@@ -371,7 +375,12 @@ contract application code can rely on:
 
 ## Sign-off
 
-Phase 0 closes when Sol confirms the 12 items above as the v2.0
-contract. Mavis will then update `tsp-v2-specification.md` to mark
+Phase 0 closed 2026-08-24 when Sol confirmed the 12 items above as
+the v2.0 contract. Mavis updated `tsp-v2-specification.md` to mark
 the corresponding sections as "frozen" and any later spec change
-that contradicts a frozen item must come with an ADR.
+that contradicts a frozen item must come with an ADR (plan §69).
+
+The 12 frozen items are now the surface application code is
+allowed to rely on. Subsequent slices (in-process JSC bridge,
+watcher + atomic reload, full Context bridge, ...) build on
+these, they do not renegotiate them.
