@@ -5,7 +5,7 @@
 //! same library code so future tests and embedded callers can drive the
 //! host without spawning a process.
 //!
-//! Module layout (from plan §26):
+//! Module layout (from plan sect.26):
 //! ```text
 //! mod cli;         // CLI args
 //! mod config;      // tsp.toml loader
@@ -25,6 +25,7 @@
 //! slice 2 lands the listener; slice 3 lands the router; slice 4 lands
 //! the JSC bridge; etc.
 
-#![doc = "Slice 2: stdlib TCP listener + 404. See `host.rs` for the entry point."]
+#![doc = "Slice 3: route scanner + matcher wired into the listener. See `router.rs` and `host.rs`."]
 
 pub mod host;
+pub mod router;
