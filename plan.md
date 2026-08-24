@@ -2188,7 +2188,7 @@ Mitigation：TSP coding model 明确：page/library module top-level 应尽量 p
 - [x] 相同 canonical URL 可以得到新 module generation
 - [x] nested dependency 任意深度可 reload
 - [x] shared dependency 可以标记多个 page dirty
-- [ ] 只 reload affected page graph
+- [x] 只 reload affected page graph
 - [ ] 旧请求可以完成
 - [ ] 新请求使用新 generation
 - [x] reload compile failure 不摧毁 last-known-good
@@ -2206,17 +2206,17 @@ Mitigation：TSP coding model 明确：page/library module top-level 应尽量 p
 
 ### Packaging
 
-- [ ] Windows `tspserver.exe + www/`
+- [x] Windows `tspserver.exe + www/`
 - [ ] Linux `tspserver + www/`
-- [ ] 修改外部 `.tsp/.ts/.tsx` 无需重启 server
-- [ ] executable 不需要用户安装完整 Bun runtime
+- [x] 修改外部 `.tsp/.ts/.tsx` 无需重启 server
+- [x] executable 不需要用户安装完整 Bun runtime
 - [x] 不需要 Deno/denort
 
 ### Maintenance
 
 - [ ] Bun patch inventory 完整
 - [ ] fork 可以持续 rebase upstream
-- [ ] JSC 保持 upstream Bun 预编译版本
+- [x] JSC 保持 upstream Bun 预编译版本
 
 ---
 

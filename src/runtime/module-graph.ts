@@ -276,6 +276,21 @@ export class TspModuleGraph {
     return this.modules.get(canonicalModuleKey(modulePath));
   }
 
+  getPageModulePaths(pagePath: string): string[] {
+    const page = this.getPage(pagePath);
+    if (!page) return [];
+
+    const modules = new Set<ModuleKey>();
+    const queue = [page.rootModule];
+    while (queue.length > 0) {
+      const key = queue.shift()!;
+      if (modules.has(key)) continue;
+      modules.add(key);
+      queue.push(...(this.modules.get(key)?.dependencies ?? []));
+    }
+    return [...modules];
+  }
+
   dirtyPages(): TspPageSlot[] {
     return [...this.pages.values()].filter((page) => page.dirty);
   }
@@ -290,20 +305,11 @@ export class TspModuleGraph {
     const page = this.getPage(pagePath);
     if (!page) return undefined;
 
-    const modules = new Set<ModuleKey>();
-    const queue = [page.rootModule];
-    while (queue.length > 0) {
-      const key = queue.shift()!;
-      if (modules.has(key)) continue;
-      modules.add(key);
-      queue.push(...(this.modules.get(key)?.dependencies ?? []));
-    }
-
     return {
       generation: page.currentGeneration,
       dirty: page.dirty,
       loading: page.loading,
-      modules: [...modules],
+      modules: this.getPageModulePaths(pagePath),
       lastError: page.lastError,
     };
   }

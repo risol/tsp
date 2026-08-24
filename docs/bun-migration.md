@@ -25,10 +25,10 @@ The application repository contains the portable graph model in
 dependencies under `config.root`, checks their source stamps on requests, and
 propagates changes through reverse dependencies so shared modules mark all
 owning pages dirty. The page-loading boundary reloads only dirty pages and
-keeps the last-known-good generation when a candidate fails. Precise native
-registry eviction of only the resolved affected modules remains a Bun follow-up
-once the loader exposes its resolved module graph; the current native fallback
-invalidates the configured source scope for a dirty page.
+keeps the last-known-good generation when a candidate fails. On reload it passes
+the union of the previous and current page graph paths to the Bun fork, whose
+native loader evicts only those exact registry entries. A scope-level eviction
+fallback remains for older or incomplete bindings.
 
 Build a standalone server with:
 

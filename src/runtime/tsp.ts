@@ -19,7 +19,12 @@ export interface TspPageModule {
 }
 
 interface TspRuntimeBinding {
-  loadPage(filepath: string, reload?: boolean, scopeRoot?: string): Promise<TspPageModule>;
+  loadPage(
+    filepath: string,
+    reload?: boolean,
+    scopeRoot?: string,
+    invalidatePaths?: string[],
+  ): Promise<TspPageModule>;
   inspectPage?(filepath: string): unknown;
   stats?(): unknown;
 }
@@ -57,6 +62,7 @@ export function loadPage(
   const promise = (async () => {
     const root = scopeRoot ?? filepath;
     const knownPage = pageGraph.getPage(filepath);
+    const previousModules = pageGraph.getPageModulePaths(filepath);
     if (knownPage && watchChanges) {
       await pageGraph.refreshChangedModules();
     }
@@ -68,11 +74,19 @@ export function loadPage(
     const page = pageGraph.getPage(filepath);
     const shouldReload = reload || !cached || page?.dirty === true;
     if (!shouldReload && cached) return cached;
+    const invalidatePaths = [
+      ...new Set([...previousModules, ...pageGraph.getPageModulePaths(filepath)]),
+    ];
 
     pageGraph.beginReload(filepath);
 
     try {
-      const loaded = await getTspRuntime().loadPage(filepath, true, scopeRoot);
+      const loaded = await getTspRuntime().loadPage(
+        filepath,
+        true,
+        scopeRoot,
+        invalidatePaths,
+      );
       if (!loaded || typeof loaded.default !== "function") {
         throw new Error(`TSP page has no default function export: ${filepath}`);
       }
