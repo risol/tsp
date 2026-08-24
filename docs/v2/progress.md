@@ -724,6 +724,74 @@ is green.
   - **ModuleGraph hot-reload** -- a future slice if a
     real app needs it.
 
+### Slice 16a -- Context bridge (host -> JS via env var) (done, bun commit `c0dcb654`)
+
+- **Why:** Phase 7 (Context / Request / Response, plan
+  sect.61) is the next unblocked phase after the
+  side-by-side PoC 1 work. The current `.tsp` pages
+  receive no arguments; the host calls `GET()` with no
+  argument, so a page cannot know its own URL, query
+  string, or method. spec sect.13 is the canonical answer
+  for the page-side Context surface; slice 16a lands the
+  minimum useful subset (method / path / query / empty
+  params). The rest of spec sect.13 (cookies, signal,
+  body, formData) lands in 16b/c; spec sect.18 (Response
+  ABI) lands in 16b alongside.
+- **What landed (in `bun/src/runtime/tsp/`):**
+  - `host.rs`: new `Context` struct with `to_json()`
+    (hand-rolled, no serde dep). `parse_request` now
+    extracts the query string. `handle_connection`
+    builds the per-request `Context` and threads it
+    through `render_for_route` and `pipeline::build`.
+  - `pipeline.rs`: `build` accepts a `ctx_json: &str`
+    and forwards to `jsc_bridge::execute`.
+  - `jsc_bridge.rs`: `execute` accepts an optional
+    `ctx_json` and sets the `TSP_CONTEXT_JSON` env var
+    on the bun subprocess (the page does not actually
+    need to read it because the JS preamble bakes the
+    JSON in as a literal; the env var is there for
+    completeness and for code that wants the raw form).
+  - `jsx.rs`: `wrap_for_bun_cli` accepts an optional
+    `ctx_json`. When present, the preamble parses it
+    into `__tspContext` and passes it as the page
+    handler's only argument. When absent, the handler
+    is called with no argument (legacy zero-arg
+    fixtures keep working).
+  - `routes/index.tsp`: rewritten to `GET(ctx) { return
+    ... ctx.method ... }` using a template literal
+    (the slice-6 inline JSX shim only handles
+    `<tag>text</tag>`, not interpolation; a future
+    slice lands full JSX).
+- **Verify:** 54 lib tests pass (was 51; 3 new in
+  `host::tests::` for `Context::to_json`). E2E:
+  ```
+  GET /                     -> 200 with method=GET path=/
+  GET /?q=hello&page=2      -> 200 with method=GET path=/ query=q=hello&page=2
+  GET /POST                 -> 404 (no /POST route)
+  GET /nope                 -> 404 (no /nope route)
+  ```
+- **Known limitation:** the rendered body includes a
+  literal `q=` prefix because the fixture uses
+  `q=${ctx.query}`. Future slices that land JSX
+  expression interpolation will produce a cleaner
+  body. The Context object itself is correct; the
+  noise is purely the fixture's template string.
+- **Out of slice 16a (deferred to 16b/c):**
+  - spec sect.18 `Response` ABI (status / headers / body
+    on the page return value).
+  - spec sect.13 `ctx.request` (Web Request), `ctx.url`
+    (Web URL), `ctx.signal` (AbortSignal), `ctx.formData()`.
+  - spec sect.13 cookies (slice 18).
+  - spec sect.13 params populated by dynamic route
+    segments (needs spec sect.11.3-11.4 first).
+  - spec sect.11.8 URL percent-decode -- currently
+    surfaced verbatim; pages that want decoded forms
+    use `decodeURIComponent` on the JS side.
+- **Next:** slice 16b = Response ABI. The page returns
+  either an `HtmlNode` (current behaviour) or a Web
+  `Response` (spec sect.18). The host must distinguish
+  the two and emit the right HTTP wire form.
+
 ## Realistic next-step options (post-Slice 7) -- STALE
 
 > Note (2026-08-24): the in-process JSC bridge was closed
