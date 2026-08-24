@@ -229,6 +229,47 @@ is green.
   `bun_runtime`; `cargo build -p bun_runtime_tsp` is 1.37s
   incremental.
 
+### Slice 8 — Phase 0 docs freeze (done, commit TBD)
+
+- **Why:** Sol picked the Phase 0 path in the post-slice-7 sync to
+  protect later slices from ABI drift. The 12 freeze items are
+  the v2.0 contract application code can rely on; freezing them
+  before the in-process JSC bridge / watcher / Context-bridge
+  slices prevents costly rewrites.
+- **What landed (all in `docs/v2/`):**
+  - `FREEZE.md` -- the 12 items, each with: question, answer,
+    evidence (spec / plan section), and "what this freezes for
+    application code". The contract surface.
+  - `spec.md` -- the index document. Points at FREEZE.md + the
+    four topic docs + the root `tsp-v2-specification.md` and
+    `tsp-v2-plan.md`. No re-derivation; it is a navigation aid.
+  - `tsp-module.md` -- the `.tsp` file format. Covers freeze
+    items 1, 2, 3, 4 and the "what `.tsp` is NOT" list.
+  - `jsx-runtime.md` -- the JSX -> HtmlNode contract. Covers
+    freeze 9 (child / attribute rules) and freeze 10 (async
+    components).
+  - `context.md` -- the Context ABI. Covers freeze 5 (handler
+    result), 6 (Context shape), 7 (fragment), 8 (`tsp:*`
+    builtins), 11 (PageConfig).
+  - `examples/01-hello.tsp` through `examples/10-shape-magic.tsp`
+    -- 10 fixtures. Eight are spec-compliant (the contract);
+    two (`09-no-tsp-imports.tsp`, `10-shape-magic.tsp`) are
+    intentionally invalid and document the host's
+    `TSP2003` / `TSP3001` errors.
+- **Phase 0 completion condition (plan §61):** "the 12 freeze
+  items have explicit answers and 10-20 `.tsp` example
+  fixtures demonstrate the contract." All three are satisfied:
+  - 12 explicit answers in `FREEZE.md`.
+  - 10 fixtures, 8 spec-compliant + 2 invalid-as-documentation.
+  - No v1 compatibility work has begun.
+- **Out of slice 8:** Sol's sign-off on the 12 items. The
+  freeze is "draft" until Sol confirms; an ADR (plan §69)
+  would be the formal step if any item needs to change.
+- **Next user-side decision:** Sol confirms `FREEZE.md` (or
+  flags items for revision). Once confirmed, the v2.0 contract
+  is locked and slice 9+ can resume code work without
+  renegotiating the surface.
+
 ## Realistic next-step options (post-Slice 7)
 
 The in-process bridge is genuinely multi-session work. Other
