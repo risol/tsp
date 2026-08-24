@@ -19,16 +19,18 @@
 //! mod generation;    // Generation + LKG
 //! mod errors;        // TSP1xxx-5xxx codes
 //! mod jsc_bridge;    // JSC exec (PoC 1: spawns bun.exe)
+//! mod in_process_jsc; // JSC exec (slice 7+ spike: dep reachable, API not yet wired)
 //! ```
 //!
 //! Each `mod` is added the slice it lands in. Slice 1: library shell;
 //! slice 2 lands the listener; slice 3 lands the router; slice 4 lands
 //! the JSC deps; slice 5 lands `page.rs`; slice 6 lands `jsx.rs` and
-//! `jsc_bridge.rs`; etc.
+//! `jsc_bridge.rs`; slice 7 adds `in_process_jsc.rs` (spike only).
 
-#![doc = "Slice 6: JSX transform + bun.exe subprocess bridge. See `jsx.rs` and `jsc_bridge.rs`."]
+#![doc = "Slice 7: bun_runtime reachable as a dep; in-process bridge is a spike pending real wiring."]
 
 pub mod host;
+pub mod in_process_jsc;
 pub mod jsc_bridge;
 pub mod jsx;
 pub mod page;

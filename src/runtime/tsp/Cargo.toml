@@ -9,7 +9,8 @@ edition.workspace = true
 # entry point; PoC 1 (plan sect.70) is the 7-step vertical slice
 # (HTTP -> routes/index.tsp -> TSX transform -> JSC -> GET -> response)
 # and lives behind `bin/tspserver_v2.rs`. Library code is the same source
-# the bin re-uses so future tests and embedded callers can drive it.
+# the bin re-uses so future tests and embedded callers can drive the
+# host without spawning a process.
 [lib]
 path = "lib.rs"
 
@@ -20,14 +21,14 @@ path = "bin/tspserver_v2.rs"
 [lints]
 workspace = true
 
-# Slice 6 (pivot): instead of pulling in `bun_runtime` (cold compile
-# 20-40 min) or wiring `bun_jsc` directly (not a standalone embeddable
-# VM per slice 4's discovery), the host spawns the project's vendored
-# `bun.exe` (1.4.0+) as a subprocess to evaluate a slice-6-prepared
-# `.js` file. That keeps PoC 1's "JSC is the execution engine" promise
-# (plan sect.25) while side-stepping the bun_runtime C++/codegen
-# integration this session. The full in-process bridge lands in slice
-# 7+ when we have the time budget for the heavy compile.
+# Slice 7: in-process JSC bridge. We add `bun_runtime` so the host can
+# own the JavaScriptCore VM (plan sect.25.3) instead of shelling out
+# to the vendored `bun.exe`. The subprocess path in `jsc_bridge.rs`
+# stays as a fallback; the binary picks one via `TSP_JSC` (`subprocess`
+# is default, `in-process` switches to bun_runtime).
 #
-# The deps are intentionally zero: the host is a small orchestrator.
+# Cost: the first `cargo build` here takes 20-40 minutes on a clean
+# cache -- basically every Bun workspace crate needs to compile.
+# Subsequent `cargo build` calls are fast.
 [dependencies]
+bun_runtime = { workspace = true }
