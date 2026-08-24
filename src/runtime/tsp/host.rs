@@ -100,11 +100,42 @@ impl Context {
     }
 }
 
+/// Outcome of parsing the `__TSP_OUT_V1__` envelope the page
+/// emits on stdout.
+#[derive(Debug, PartialEq, Eq)]
+enum EnvelopeKind {
+    /// `{type: "html", body: "..."}` -> 200 text/html.
+    Html,
+    /// `{type: "response", status, headers, body}` -> use
+    /// the status / headers / body verbatim.
+    Response,
+    /// The line did not start with the envelope tag, or
+    /// the JSON was malformed. The host falls back to
+    /// treating the whole stdout as an HTML body (slice 6
+    /// legacy behaviour).
+    Legacy,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)] // kind / status_line: used by the dev-
+                   // inspector slice; parse_envelope produces
+                   // them for the request path.
+struct EnvelopeOutcome {
+    kind: EnvelopeKind,
+    content_type: String,
+    status_line: &'static str,
+    body: String,
+    headers: Vec<(String, String)>,
+}
+
+const ENVELOPE_TAG: &str = "__TSP_OUT_V1__";
+
 /// Minimal JSON string escape: handle quote, backslash, and
 /// control characters. The Context's `path` and `query`
 /// come from the HTTP request line and may contain quotes
 /// (rare, but possible in malformed input), so we escape
-/// defensively rather than trust the input.
+/// defensively rather than trust the input. This is the
+/// serializer counterpart of the parser below.
 fn json_string(out: &mut String, s: &str) {
     out.push('"');
     for ch in s.chars() {
@@ -124,267 +155,376 @@ fn json_string(out: &mut String, s: &str) {
     out.push('"');
 }
 
-/// Outcome of parsing the `__TSP_OUT_V1__` envelope the page
-/// emits on stdout. The envelope is one line of header tag
-/// plus one line of JSON. We split on the first '\n' and
-/// inspect the JSON object's `type` field.
-#[derive(Debug, PartialEq, Eq)]
-enum EnvelopeKind {
-    /// `{type: "html", body: "..."}` -> 200 text/html.
-    Html,
-    /// `{type: "response", status, headers, body}` -> use
-    /// the status / headers / body verbatim.
-    Response,
-    /// The line did not start with the envelope tag, or
-    /// the JSON was malformed. The host falls back to
-    /// treating the whole stdout as an HTML body (slice 6
-    /// legacy behaviour).
-    Legacy,
+/// A tiny JSON value tree. This is the host-side parser for
+/// the `__TSP_OUT_V1__` envelope and the page's headers
+/// object. It is intentionally minimal (no serde dep stays
+/// in the slice-16 cost envelope) but correct for the
+/// shapes the wrap script produces: flat objects, strings,
+/// numbers, booleans, null, and arrays of strings.
+///
+/// Accepted grammar (subset of RFC 8259):
+///   json = value
+///   value = object | array | string | number | true | false | null
+/// Strings can contain escaped quote / backslash / n r t uXXXX.
+#[derive(Debug, Clone, PartialEq)]
+enum JsonValue {
+    Null,
+    Bool(bool),
+    Number(f64),
+    String(String),
+    Array(Vec<JsonValue>),
+    Object(Vec<(String, JsonValue)>),
 }
 
-#[derive(Debug)]
-#[allow(dead_code)] // kind / status_line: not used by slice 16b's
-                   // render path; reserved for the dev-inspector
-                   // slice and for the Response handling (status_line
-                   // is currently produced by an explicit match in
-                   // the function that consumes the outcome).
-struct EnvelopeOutcome {
-    kind: EnvelopeKind,
-    /// `text/html; charset=utf-8` for HTML, preserved from
-    /// the page for Response (currently always
-    /// `text/plain; charset=utf-8` from the JS side -- the
-    /// page's `Response` content-type is the source of
-    /// truth for spec sect.18.3; we surface whatever the
-    /// page set).
-    content_type: String,
-    /// HTTP status line, e.g. `"HTTP/1.1 201 Created"`.
-    status_line: &'static str,
-    /// Raw body bytes (already UTF-8 String).
-    body: String,
-    /// Headers (slice 16b: only Content-Type; full header
-    /// map lands in 16c). Empty for HTML.
-    headers: Vec<(String, String)>,
+impl JsonValue {
+    /// Look up a top-level object field by key (only valid
+    /// on Object).
+    fn get(&self, key: &str) -> Option<&JsonValue> {
+        match self {
+            JsonValue::Object(entries) => entries.iter().find(|(k, _)| k == key).map(|(_, v)| v),
+            _ => None,
+        }
+    }
+
+    /// Treat the value as a JSON string and return its text.
+    fn as_str(&self) -> Option<&str> {
+        match self {
+            JsonValue::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Treat the value as a JSON number and return it
+    /// rounded to u16 (for the HTTP status code).
+    fn as_u16(&self) -> Option<u16> {
+        match self {
+            JsonValue::Number(n) => Some(n.round() as u16),
+            _ => None,
+        }
+    }
 }
 
-const ENVELOPE_TAG: &str = "__TSP_OUT_V1__";
+/// Parse a complete JSON document (no trailing input).
+fn parse_json(text: &str) -> Option<JsonValue> {
+    let mut p = JsonParser { bytes: text.as_bytes(), pos: 0 };
+    let v = p.parse_value()?;
+    p.skip_ws();
+    if p.pos == p.bytes.len() {
+        Some(v)
+    } else {
+        None
+    }
+}
 
+struct JsonParser<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> JsonParser<'a> {
+    fn skip_ws(&mut self) {
+        while self.pos < self.bytes.len() && matches!(self.bytes[self.pos], b' ' | b'\t' | b'\n' | b'\r') {
+            self.pos += 1;
+        }
+    }
+
+    fn peek(&self) -> u8 {
+        *self.bytes.get(self.pos).unwrap_or(&0)
+    }
+
+    fn parse_value(&mut self) -> Option<JsonValue> {
+        self.skip_ws();
+        match self.peek() {
+            b'{' => self.parse_object(),
+            b'[' => self.parse_array(),
+            b'"' => self.parse_string().map(JsonValue::String),
+            b't' => self.parse_keyword("true").map(|_| JsonValue::Bool(true)),
+            b'f' => self.parse_keyword("false").map(|_| JsonValue::Bool(false)),
+            b'n' => self.parse_keyword("null").map(|_| JsonValue::Null),
+            b'-' | b'0'..=b'9' => self.parse_number(),
+            _ => None,
+        }
+    }
+
+    fn parse_keyword(&mut self, kw: &str) -> Option<()> {
+        if self.bytes[self.pos..].starts_with(kw.as_bytes()) {
+            self.pos += kw.len();
+            Some(())
+        } else {
+            None
+        }
+    }
+
+    fn parse_string(&mut self) -> Option<String> {
+        // Assumes the caller is AT the opening quote.
+        if self.peek() != b'"' {
+            return None;
+        }
+        self.pos += 1;
+        let mut out = String::new();
+        loop {
+            let ch = *self.bytes.get(self.pos)?;
+            match ch {
+                b'"' => {
+                    self.pos += 1;
+                    return Some(out);
+                }
+                b'\\' => {
+                    self.pos += 1;
+                    let esc = *self.bytes.get(self.pos)?;
+                    self.pos += 1;
+                    match esc {
+                        b'"' => out.push('"'),
+                        b'\\' => out.push('\\'),
+                        b'/' => out.push('/'),
+                        b'b' => out.push('\u{8}'),
+                        b'f' => out.push('\u{c}'),
+                        b'n' => out.push('\n'),
+                        b'r' => out.push('\r'),
+                        b't' => out.push('\t'),
+                        b'u' => {
+                            if self.pos + 4 > self.bytes.len() {
+                                return None;
+                            }
+                            let hex = std::str::from_utf8(&self.bytes[self.pos..self.pos + 4]).ok()?;
+                            let code = u32::from_str_radix(hex, 16).ok()?;
+                            out.push(char::from_u32(code)?);
+                            self.pos += 4;
+                        }
+                        _ => return None,
+                    }
+                }
+                _ => {
+                    // UTF-8 decode a single char (multi-byte safe).
+                    let rest = &self.bytes[self.pos..];
+                    let s = std::str::from_utf8(rest).ok()?;
+                    let c = s.chars().next()?;
+                    out.push(c);
+                    self.pos += c.len_utf8();
+                }
+            }
+        }
+    }
+
+    fn parse_number(&mut self) -> Option<JsonValue> {
+        let start = self.pos;
+        while self.pos < self.bytes.len()
+            && matches!(self.bytes[self.pos], b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9')
+        {
+            self.pos += 1;
+        }
+        let text = std::str::from_utf8(&self.bytes[start..self.pos]).ok()?;
+        text.parse::<f64>().ok().map(JsonValue::Number)
+    }
+
+    fn parse_array(&mut self) -> Option<JsonValue> {
+        // Assumes the caller is AT the opening '['.
+        self.pos += 1;
+        let mut items = Vec::new();
+        loop {
+            self.skip_ws();
+            match self.peek() {
+                b']' => {
+                    self.pos += 1;
+                    return Some(JsonValue::Array(items));
+                }
+                b',' => {
+                    self.pos += 1;
+                }
+                _ => {
+                    let v = self.parse_value()?;
+                    items.push(v);
+                }
+            }
+        }
+    }
+
+    fn parse_object(&mut self) -> Option<JsonValue> {
+        // Assumes the caller is AT the opening '{'.
+        self.pos += 1;
+        let mut entries = Vec::new();
+        loop {
+            self.skip_ws();
+            match self.peek() {
+                b'}' => {
+                    self.pos += 1;
+                    return Some(JsonValue::Object(entries));
+                }
+                b',' => {
+                    self.pos += 1;
+                }
+                b'"' => {
+                    let key = self.parse_string()?;
+                    self.skip_ws();
+                    if self.peek() != b':' {
+                        return None;
+                    }
+                    self.pos += 1;
+                    let v = self.parse_value()?;
+                    entries.push((key, v));
+                }
+                _ => return None,
+            }
+        }
+    }
+}
+
+/// Parse the `__TSP_OUT_V1__` envelope (status / content /
+/// body / headers) into a typed outcome.
+///
+/// Envelope wire shape (one line): `__TSP_OUT_V1__\n{json}`.
+/// The JSON is a flat object:
+///   {"type":"html","body":"..."}              (slice 6 / 16a)
+///   {"type":"response","status":201,"headers":{"x-foo":"bar"},"body":"..."}
 fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
     // The first line must be the envelope tag; the rest is
-    // the JSON body. Trim a trailing newline.
+    // the JSON body.
     let mut lines = stdout.splitn(2, '\n');
     let head = lines.next().unwrap_or("").trim_end_matches('\r');
     let body_json = lines.next().unwrap_or("").trim_end_matches('\n');
-    if head != ENVELOPE_TAG {
-        return EnvelopeOutcome {
+
+    let EnvelopeOutcome {
+        kind,
+        content_type,
+        status_line,
+        body,
+        headers,
+    } = if head == ENVELOPE_TAG {
+        match parse_json(body_json) {
+            Some(JsonValue::Object(entries)) => {
+                let obj = JsonValue::Object(entries);
+                let ty = obj.get("type").and_then(JsonValue::as_str).unwrap_or("");
+                let kind = match ty {
+                    "html" => EnvelopeKind::Html,
+                    "response" => EnvelopeKind::Response,
+                    _ => EnvelopeKind::Legacy,
+                };
+                let body = obj.get("body").and_then(JsonValue::as_str).unwrap_or("").to_string();
+                let mut headers: Vec<(String, String)> = Vec::new();
+                if let Some(JsonValue::Object(hs)) = obj.get("headers") {
+                    for (k, v) in hs {
+                        if let Some(s) = v.as_str() {
+                            headers.push((k.clone(), s.to_string()));
+                        }
+                    }
+                }
+                match kind {
+                    EnvelopeKind::Html => EnvelopeOutcome {
+                        kind,
+                        content_type: "text/html; charset=utf-8".to_string(),
+                        status_line: "HTTP/1.1 200 OK",
+                        body,
+                        headers,
+                    },
+                    EnvelopeKind::Response => {
+                        let status = obj.get("status").and_then(JsonValue::as_u16).unwrap_or(200);
+                        let status_line = status_line_for(status);
+                        let ct = headers
+                            .iter()
+                            .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+                            .map(|(_, v)| v.clone())
+                            .unwrap_or_else(|| "text/plain; charset=utf-8".to_string());
+                        EnvelopeOutcome {
+                            kind,
+                            content_type: ct,
+                            status_line,
+                            body,
+                            headers,
+                        }
+                    }
+                    EnvelopeKind::Legacy => EnvelopeOutcome {
+                        kind,
+                        content_type: "text/html; charset=utf-8".to_string(),
+                        status_line: "HTTP/1.1 200 OK",
+                        body,
+                        headers,
+                    },
+                }
+            }
+            _ => EnvelopeOutcome {
+                kind: EnvelopeKind::Legacy,
+                content_type: "text/html; charset=utf-8".to_string(),
+                status_line: "HTTP/1.1 200 OK",
+                body: stdout.to_string(),
+                headers: Vec::new(),
+            },
+        }
+    } else {
+        // Legacy: no envelope tag -> raw HTML body.
+        EnvelopeOutcome {
             kind: EnvelopeKind::Legacy,
             content_type: "text/html; charset=utf-8".to_string(),
             status_line: "HTTP/1.1 200 OK",
             body: stdout.to_string(),
             headers: Vec::new(),
-        };
-    }
-    // Minimal JSON object walk: find `"type":"html"` or
-    // `"type":"response"` and the relevant fields. The
-    // wrap script produces a flat object with primitive
-    // values; we walk the top level by scanning for `"key":`
-    // positions. This is intentionally small: it does not
-    // handle nested arrays, escaped backslashes inside the
-    // body, etc. The wrap script's JSON.stringify never
-    // produces those.
-    let kind = if body_json.contains("\"type\":\"html\"") {
-        EnvelopeKind::Html
-    } else if body_json.contains("\"type\":\"response\"") {
-        EnvelopeKind::Response
-    } else {
-        EnvelopeKind::Legacy
+        }
     };
-    let body = json_extract_string(body_json, "body").unwrap_or_default();
-    match kind {
-        EnvelopeKind::Html => EnvelopeOutcome {
-            kind,
-            content_type: "text/html; charset=utf-8".to_string(),
-            status_line: "HTTP/1.1 200 OK",
-            body,
-            headers: Vec::new(),
-        },
-        EnvelopeKind::Response => {
-            let status = json_extract_number(body_json, "status")
-                .unwrap_or(200) as u16;
-            let content_type = json_extract_string(body_json, "content_type")
-                .unwrap_or_else(|| "text/plain; charset=utf-8".to_string());
-            // The wrap script does not currently emit
-            // `content_type` (Response objects carry the
-            // type implicitly via the body's media type),
-            // so we always fall back to text/plain above
-            // and treat any explicit `Content-Type` header
-            // the page set as the source of truth.
-            let _ = content_type; // suppress unused warning
-            let headers = json_extract_headers(body_json);
-            let status_line: &'static str = match status {
-                100..=199 => "HTTP/1.1 100 Continue",
-                200 => "HTTP/1.1 200 OK",
-                201 => "HTTP/1.1 201 Created",
-                202 => "HTTP/1.1 202 Accepted",
-                204 => "HTTP/1.1 204 No Content",
-                301 => "HTTP/1.1 301 Moved Permanently",
-                302 => "HTTP/1.1 302 Found",
-                303 => "HTTP/1.1 303 See Other",
-                304 => "HTTP/1.1 304 Not Modified",
-                307 => "HTTP/1.1 307 Temporary Redirect",
-                308 => "HTTP/1.1 308 Permanent Redirect",
-                400 => "HTTP/1.1 400 Bad Request",
-                401 => "HTTP/1.1 401 Unauthorized",
-                403 => "HTTP/1.1 403 Forbidden",
-                404 => "HTTP/1.1 404 Not Found",
-                405 => "HTTP/1.1 405 Method Not Allowed",
-                409 => "HTTP/1.1 409 Conflict",
-                410 => "HTTP/1.1 410 Gone",
-                412 => "HTTP/1.1 412 Precondition Failed",
-                415 => "HTTP/1.1 415 Unsupported Media Type",
-                422 => "HTTP/1.1 422 Unprocessable Entity",
-                429 => "HTTP/1.1 429 Too Many Requests",
-                500 => "HTTP/1.1 500 Internal Server Error",
-                501 => "HTTP/1.1 501 Not Implemented",
-                502 => "HTTP/1.1 502 Bad Gateway",
-                503 => "HTTP/1.1 503 Service Unavailable",
-                504 => "HTTP/1.1 504 Gateway Timeout",
-                _ => "HTTP/1.1 200 OK",
-            };
-            // Content-Type defaults to whatever the page's
-            // Response set; absent that, text/plain (since
-            // we do not know the page's actual media type).
-            let ct = json_extract_string(body_json, "content_type")
-                .unwrap_or_else(|| "text/plain; charset=utf-8".to_string());
-            EnvelopeOutcome {
-                kind,
-                content_type: ct,
-                status_line,
-                body,
-                headers,
-            }
-        }
-        EnvelopeKind::Legacy => EnvelopeOutcome {
-            kind,
-            content_type: "text/html; charset=utf-8".to_string(),
-            status_line: "HTTP/1.1 200 OK",
-            body: stdout.to_string(),
-            headers: Vec::new(),
-        },
+
+    EnvelopeOutcome {
+        kind,
+        content_type,
+        status_line,
+        body,
+        headers,
     }
 }
 
-/// Extract a top-level JSON string value by key. Returns
-/// the un-escaped value (handles the common escapes the
-/// wrap script produces: backslash, quote, n, r, t, uXXXX).
-fn json_extract_string(json: &str, key: &str) -> Option<String> {
-    let needle = format!("\"{}\":", key);
-    let pos = json.find(&needle)? + needle.len();
-    let rest = &json[pos..];
-    let rest = rest.strip_prefix(' ').unwrap_or(rest);
-    if !rest.starts_with('"') {
-        return None;
+/// Map an HTTP status code to its canonical reason-phrase
+/// (the wire form the host emits). Unknown codes fall back
+/// to "HTTP/1.1 200 OK" -- accepting a page that returns a
+/// code we do not document is better than failing the
+/// whole request; the dev-inspector slice can surface the
+/// unmapped code.
+fn status_line_for(status: u16) -> &'static str {
+    match status {
+        100 => "HTTP/1.1 100 Continue",
+        101 => "HTTP/1.1 101 Switching Protocols",
+        200 => "HTTP/1.1 200 OK",
+        201 => "HTTP/1.1 201 Created",
+        202 => "HTTP/1.1 202 Accepted",
+        203 => "HTTP/1.1 203 Non-Authoritative Information",
+        204 => "HTTP/1.1 204 No Content",
+        205 => "HTTP/1.1 205 Reset Content",
+        206 => "HTTP/1.1 206 Partial Content",
+        300 => "HTTP/1.1 300 Multiple Choices",
+        301 => "HTTP/1.1 301 Moved Permanently",
+        302 => "HTTP/1.1 302 Found",
+        303 => "HTTP/1.1 303 See Other",
+        304 => "HTTP/1.1 304 Not Modified",
+        307 => "HTTP/1.1 307 Temporary Redirect",
+        308 => "HTTP/1.1 308 Permanent Redirect",
+        400 => "HTTP/1.1 400 Bad Request",
+        401 => "HTTP/1.1 401 Unauthorized",
+        402 => "HTTP/1.1 402 Payment Required",
+        403 => "HTTP/1.1 403 Forbidden",
+        404 => "HTTP/1.1 404 Not Found",
+        405 => "HTTP/1.1 405 Method Not Allowed",
+        406 => "HTTP/1.1 406 Not Acceptable",
+        408 => "HTTP/1.1 408 Request Timeout",
+        409 => "HTTP/1.1 409 Conflict",
+        410 => "HTTP/1.1 410 Gone",
+        411 => "HTTP/1.1 411 Length Required",
+        412 => "HTTP/1.1 412 Precondition Failed",
+        413 => "HTTP/1.1 413 Payload Too Large",
+        414 => "HTTP/1.1 414 URI Too Long",
+        415 => "HTTP/1.1 415 Unsupported Media Type",
+        416 => "HTTP/1.1 416 Range Not Satisfiable",
+        417 => "HTTP/1.1 417 Expectation Failed",
+        418 => "HTTP/1.1 418 I'm a teapot",
+        422 => "HTTP/1.1 422 Unprocessable Entity",
+        425 => "HTTP/1.1 425 Too Early",
+        426 => "HTTP/1.1 426 Upgrade Required",
+        429 => "HTTP/1.1 429 Too Many Requests",
+        431 => "HTTP/1.1 431 Request Header Fields Too Large",
+        451 => "HTTP/1.1 451 Unavailable For Legal Reasons",
+        500 => "HTTP/1.1 500 Internal Server Error",
+        501 => "HTTP/1.1 501 Not Implemented",
+        502 => "HTTP/1.1 502 Bad Gateway",
+        503 => "HTTP/1.1 503 Service Unavailable",
+        504 => "HTTP/1.1 504 Gateway Timeout",
+        505 => "HTTP/1.1 505 HTTP Version Not Supported",
+        _ => "HTTP/1.1 200 OK",
     }
-    let mut out = String::new();
-    let chars: Vec<char> = rest.chars().collect();
-    let mut i = 1; // skip opening quote
-    while i < chars.len() {
-        let c = chars[i];
-        if c == '"' {
-            return Some(out);
-        } else if c == '\\' && i + 1 < chars.len() {
-            let nxt = chars[i + 1];
-            match nxt {
-                '"' => out.push('"'),
-                '\\' => out.push('\\'),
-                'n' => out.push('\n'),
-                'r' => out.push('\r'),
-                't' => out.push('\t'),
-                'u' if i + 5 < chars.len() => {
-                    let hex: String = chars[i+2..i+6].iter().collect();
-                    if let Ok(code) = u32::from_str_radix(&hex, 16) {
-                        if let Some(ch) = char::from_u32(code) {
-                            out.push(ch);
-                        }
-                    }
-                    i += 4;
-                }
-                _ => out.push(nxt),
-            }
-            i += 2;
-        } else {
-            out.push(c);
-            i += 1;
-        }
-    }
-    None
-}
-
-/// Extract a top-level JSON number by key. Returns None if
-/// the value is not a parseable integer.
-fn json_extract_number(json: &str, key: &str) -> Option<u32> {
-    let needle = format!("\"{}\":", key);
-    let pos = json.find(&needle)? + needle.len();
-    let rest = &json[pos..];
-    let rest = rest.strip_prefix(' ').unwrap_or(rest);
-    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    digits.parse().ok()
-}
-
-/// Extract the `headers` object's top-level entries. The
-/// wrap script serialises headers as a flat object:
-///   {"x-foo":"bar","content-type":"text/html"}
-/// We walk the object body between the outer braces and
-/// split on `","`. Good enough for the slice-16b
-/// surface; multi-value headers (Set-Cookie) and
-/// header values containing commas land in a later slice.
-fn json_extract_headers(json: &str) -> Vec<(String, String)> {
-    let needle = "\"headers\":";
-    let Some(pos) = json.find(needle) else {
-        return Vec::new();
-    };
-    let rest = &json[pos + needle.len()..];
-    let rest = rest.strip_prefix(' ').unwrap_or(rest);
-    if !rest.starts_with('{') {
-        return Vec::new();
-    }
-    // Find the matching close brace. We use brace depth
-    // counting; values are strings (no nested objects in
-    // the headers map per the wrap script).
-    let bytes = rest.as_bytes();
-    let mut depth = 0i32;
-    let mut end = 0;
-    for (i, &b) in bytes.iter().enumerate() {
-        match b {
-            b'{' => depth += 1,
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    end = i;
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-    let body = &rest[1..end];
-    // Split on `","` (string boundary). We rely on the
-    // wrap script never producing commas inside header
-    // values.
-    let mut out = Vec::new();
-    for entry in body.split("\",\"") {
-        let colon = match entry.find("\":") {
-            Some(i) => i,
-            None => continue,
-        };
-        let key = entry[..colon].trim().to_string();
-        let value = entry[colon + 4..].to_string();
-        // Strip the surrounding quotes from the value.
-        let value = value.trim_matches('"').to_string();
-        if !key.is_empty() {
-            out.push((key, value));
-        }
-    }
-    out
 }
 
 const DEFAULT_PORT: u16 = 3000;
@@ -462,7 +602,7 @@ fn handle_connection(
     let request = std::str::from_utf8(&buf[..n]).unwrap_or("");
     let parsed = parse_request(request);
 
-    let (status_line, content_type, allow_header, body, _extra_headers) = match parsed {
+    let (status_line, content_type, allow_header, body, extra_headers) = match parsed {
         ParsedRequest::Unknown => (
             "HTTP/1.1 400 Bad Request",
             "text/plain; charset=utf-8".to_string(),
@@ -517,8 +657,7 @@ fn handle_connection(
                 // (extra_headers) lands in slice 16c with a
                 // proper JSON object walker; for now we pass
                 // an empty vec so the writer skips the loop.
-                let response_headers: Vec<(String, String)> = Vec::new();
-                (outcome.status_line, outcome.content_type, allow_header, outcome.body, response_headers)
+                (outcome.status_line, outcome.content_type, allow_header, outcome.body, outcome.headers)
             }
             MatchResult::FoundHeadOverGet { route } => {
                 // Spec sect.6.5: HEAD with no explicit HEAD export.
@@ -590,9 +729,27 @@ fn handle_connection(
         }
     };
 
+    // Slice 16c: emit the page's extra headers before
+    // Content-Type. Content-Type / Content-Length are
+    // computed by the host (from the envelope and the body
+    // length respectively), so the page's own copies are
+    // skipped.
+    let mut header_block = String::new();
+    for (k, v) in &extra_headers {
+        if k.eq_ignore_ascii_case("content-type") {
+            continue;
+        }
+        if k.eq_ignore_ascii_case("content-length") {
+            continue;
+        }
+        header_block.push_str(k);
+        header_block.push_str(": ");
+        header_block.push_str(v);
+        header_block.push_str("\r\n");
+    }
     let mut head = format!(
         "{status_line}\r\n\
-         Content-Type: {content_type}\r\n\
+         {header_block}Content-Type: {content_type}\r\n\
          Content-Length: {}\r\n\
          Connection: close\r\n",
         body.len()
@@ -972,5 +1129,59 @@ mod tests {
         };
         let s = ctx.to_json();
         assert!(s.contains("\"id\":\"42\""), "got: {s}");
+    }
+
+#[cfg(test)]
+    
+
+    #[test]
+    fn envelope_parses_html() {
+        let out = parse_envelope("__TSP_OUT_V1__\n{\"type\":\"html\",\"body\":\"<h1>Hi</h1>\"}");
+        assert_eq!(out.kind, EnvelopeKind::Html);
+        assert_eq!(out.body, "<h1>Hi</h1>");
+        assert_eq!(out.status_line, "HTTP/1.1 200 OK");
+        assert_eq!(out.content_type, "text/html; charset=utf-8");
+        assert!(out.headers.is_empty());
+    }
+
+    #[test]
+    fn envelope_parses_response_with_headers() {
+        let out = parse_envelope(
+            "__TSP_OUT_V1__\n{\"type\":\"response\",\"status\":201,\"headers\":{\"x-demo\":\"slice16c\",\"x-comma\":\"a,b,c\",\"content-type\":\"application/json\"},\"body\":\"created\"}",
+        );
+        assert_eq!(out.kind, EnvelopeKind::Response);
+        assert_eq!(out.status_line, "HTTP/1.1 201 Created");
+        assert_eq!(out.content_type, "application/json");
+        assert_eq!(out.body, "created");
+        // Headers: content-type is derived into content_type,
+        // both extras are propagated.
+        assert_eq!(out.headers.len(), 3);
+        assert!(out.headers.contains(&("x-demo".to_string(), "slice16c".to_string())));
+        assert!(out.headers.contains(&("x-comma".to_string(), "a,b,c".to_string())));
+    }
+
+    #[test]
+    fn envelope_legacy_when_no_tag() {
+        // A raw body (no envelope tag) is treated as HTML.
+        let out = parse_envelope("<h1>raw</h1>");
+        assert_eq!(out.kind, EnvelopeKind::Legacy);
+        assert_eq!(out.body, "<h1>raw</h1>");
+        assert_eq!(out.status_line, "HTTP/1.1 200 OK");
+    }
+
+    #[test]
+    fn envelope_unknown_status_falls_back_200() {
+        let out = parse_envelope("__TSP_OUT_V1__\n{\"type\":\"response\",\"status\":599,\"headers\":{},\"body\":\"x\"}");
+        assert_eq!(out.status_line, "HTTP/1.1 200 OK");
+        assert_eq!(out.body, "x");
+    }
+
+    #[test]
+    fn json_parser_handles_escaped_quotes() {
+        // A header value containing an escaped quote.
+        let out = parse_envelope(
+            "__TSP_OUT_V1__\n{\"type\":\"response\",\"status\":200,\"headers\":{\"x-quote\":\"say \\\"hi\\\"\"},\"body\":\"ok\"}",
+        );
+        assert!(out.headers.contains(&("x-quote".to_string(), "say \"hi\"".to_string())));
     }
 }
