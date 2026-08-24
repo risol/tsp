@@ -341,6 +341,7 @@ pub mod bun_object {
         BunObject_lazyPropCb_JSONC => super::get_jsonc_object,
         BunObject_lazyPropCb_markdown => super::get_markdown_object,
         BunObject_lazyPropCb_TOML => super::get_toml_object,
+        BunObject_lazyPropCb_TSP => super::get_tsp_object,
         BunObject_lazyPropCb_JSON5 => super::get_json5_object,
         BunObject_lazyPropCb_XML => super::get_xml_object,
         BunObject_lazyPropCb_YAML => super::get_yaml_object,
@@ -1797,6 +1798,70 @@ fn get_markdown_object(global_this: &JSGlobalObject, _: &JSObject) -> JSValue {
 }
 fn get_toml_object(global_this: &JSGlobalObject, _: &JSObject) -> JSValue {
     TOMLObject::create(global_this)
+}
+
+/// `Bun.TSP` — TSP's native page-loading boundary.
+///
+/// Bun's existing module loader owns resolution, TypeScript/TSX transpilation
+/// and ESM evaluation. This object exposes that loader through a stable API
+/// for the TSP server without creating a second JavaScript module system.
+fn get_tsp_object(global_this: &JSGlobalObject, _: &JSObject) -> JSValue {
+    let object = JSValue::create_empty_object(global_this, 1);
+
+    bun_jsc::jsc_host_abi! {
+        unsafe fn load_page_shim(
+            g: *mut JSGlobalObject,
+            f: *mut CallFrame,
+        ) -> JSValue {
+            // SAFETY: JSC always passes valid pointers here.
+            let (g, f) = unsafe { (&*g, &*f) };
+            bun_jsc::to_js_host_call(g, || {
+                let Some(path_value) = f.arguments().first().copied() else {
+                    return Err(g.throw_invalid_arguments(format_args!(
+                        "Bun.TSP.loadPage expects a filepath",
+                    )));
+                };
+
+                // Development requests can explicitly invalidate the canonical
+                // page entry before importing it. This keeps the module key
+                // stable while allowing the page source itself to be re-read;
+                // production requests retain Bun's normal module cache.
+                let reload = f
+                    .arguments()
+                    .get(1)
+                    .copied()
+                    .map(JSValue::to_boolean)
+                    .unwrap_or(false);
+                if reload {
+                    if let Some(scope_value) = f.arguments().get(2).copied() {
+                        let scope = scope_value.get_zig_string(g)?;
+                        g.delete_module_registry_entries_for_scope(&scope)?;
+                    } else {
+                        let key = path_value.get_zig_string(g)?;
+                        g.delete_module_registry_entries_for_page(&key)?;
+                    }
+                }
+
+                let path = path_value.to_bun_string(g)?;
+                let path = scopeguard::guard(path, |s| s.deref());
+                let promise = jsc::JSModuleLoader::import(g, &path)?;
+                Ok(JSValue::from_cell(promise.as_ptr()))
+            })
+        }
+    }
+
+    object.put(
+        global_this,
+        b"loadPage",
+        JSFunction::create(
+            global_this,
+            "loadPage",
+            load_page_shim,
+            3,
+            Default::default(),
+        ),
+    );
+    object
 }
 
 fn get_json5_object(global_this: &JSGlobalObject, _: &JSObject) -> JSValue {

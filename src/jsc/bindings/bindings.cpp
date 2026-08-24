@@ -3040,6 +3040,60 @@ void JSC__JSGlobalObject__deleteModuleRegistryEntry(JSC::JSGlobalObject* global,
     moduleLoader->removeEntry(identifier);
 }
 
+static void deleteModuleRegistryEntriesWithPrefix(JSC::JSGlobalObject* global, WTF::String prefix)
+{
+    auto slashPrefix = prefix.endsWith('/') ? prefix : makeString(prefix, "/"_s);
+    auto backslashPrefix = prefix.endsWith('\\') ? prefix : makeString(prefix, "\\"_s);
+    auto fileURLSlashPrefix = makeString("file://"_s, slashPrefix);
+    auto fileURLBackslashPrefix = makeString("file://"_s, backslashPrefix);
+    auto& vm = JSC::getVM(global);
+    auto* moduleLoader = global->moduleLoader();
+
+    // ModuleLoader::visitChildrenImpl iterates the registry under cellLock();
+    // collect stable identifiers before removing entries from the map.
+    WTF::Locker locker { moduleLoader->cellLock() };
+    WTF::Vector<JSC::Identifier> entries;
+    for (auto& [key, entry] : moduleLoader->moduleMap()) {
+        if (!key.first || !entry)
+            continue;
+
+        auto keyString = WTF::String { key.first };
+        if (keyString.startsWith(slashPrefix) ||
+            keyString.startsWith(backslashPrefix) ||
+            keyString.startsWith(fileURLSlashPrefix) ||
+            keyString.startsWith(fileURLBackslashPrefix))
+            entries.append(JSC::Identifier::fromString(vm, keyString));
+    }
+
+    for (auto& identifier : entries)
+        moduleLoader->removeEntry(identifier);
+}
+
+void JSC__JSGlobalObject__deleteModuleRegistryEntriesForPage(JSC::JSGlobalObject* global, ZigString* arg1)
+{
+    auto pagePath = Zig::toString(*arg1);
+    auto slash = pagePath.reverseFind('/');
+    auto backslash = pagePath.reverseFind('\\');
+    if (backslash != WTF::notFound && (slash == WTF::notFound || backslash > slash))
+        slash = backslash;
+
+    // A page must be a filesystem path. If it has no parent, fall back to
+    // deleting the exact registry entry rather than broadening the scope.
+    if (slash == WTF::notFound) {
+        JSC__JSGlobalObject__deleteModuleRegistryEntry(global, arg1);
+        return;
+    }
+
+    deleteModuleRegistryEntriesWithPrefix(global, pagePath.substring(0, slash + 1));
+}
+
+void JSC__JSGlobalObject__deleteModuleRegistryEntriesForScope(JSC::JSGlobalObject* global, ZigString* arg1)
+{
+    auto scopePath = Zig::toString(*arg1);
+    if (!scopePath.isEmpty())
+        deleteModuleRegistryEntriesWithPrefix(global, scopePath);
+}
+
 void JSC__VM__collectAsync(JSC::VM* vm)
 {
     JSC::JSLockHolder lock(*vm);

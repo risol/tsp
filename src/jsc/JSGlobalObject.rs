@@ -1067,6 +1067,18 @@ impl JSGlobalObject {
         })
     }
 
+    pub fn delete_module_registry_entries_for_page(&self, page_path: &ZigString) -> JsResult<()> {
+        crate::from_js_host_call_generic(self, || {
+            JSC__JSGlobalObject__deleteModuleRegistryEntriesForPage(self, page_path)
+        })
+    }
+
+    pub fn delete_module_registry_entries_for_scope(&self, scope_path: &ZigString) -> JsResult<()> {
+        crate::from_js_host_call_generic(self, || {
+            JSC__JSGlobalObject__deleteModuleRegistryEntriesForScope(self, scope_path)
+        })
+    }
+
     fn bun_vm_unsafe(&self) -> *mut c_void {
         JSC__JSGlobalObject__bunVM(self)
     }
@@ -1584,6 +1596,14 @@ unsafe extern "C" {
     safe fn JSC__JSGlobalObject__deleteModuleRegistryEntry(
         this: &JSGlobalObject,
         name_: &ZigString,
+    );
+    safe fn JSC__JSGlobalObject__deleteModuleRegistryEntriesForPage(
+        this: &JSGlobalObject,
+        page_path: &ZigString,
+    );
+    safe fn JSC__JSGlobalObject__deleteModuleRegistryEntriesForScope(
+        this: &JSGlobalObject,
+        scope_path: &ZigString,
     );
     safe fn JSGlobalObject__clearException(this: &JSGlobalObject);
     safe fn JSGlobalObject__clearExceptionExceptTermination(this: &JSGlobalObject) -> bool;

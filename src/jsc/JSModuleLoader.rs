@@ -25,6 +25,16 @@ unsafe extern "C" {
 }
 
 impl JSModuleLoader {
+    /// Import a module from a host function while retaining the borrowed
+    /// `JSGlobalObject` ABI used by the low-tier FFI.
+    pub fn import(
+        global_object: &JSGlobalObject,
+        module_name: &BunString,
+    ) -> JsResult<core::ptr::NonNull<JSInternalPromise>> {
+        core::ptr::NonNull::new(JSModuleLoader__import(global_object, module_name))
+            .ok_or(JsError::Thrown)
+    }
+
     /// Raw-pointer variant of `load_and_evaluate_module`. Returns the FFI
     /// `*mut JSInternalPromise` directly so callers that need to store or pass
     /// a mutable cell pointer don't launder provenance through `&T -> *mut T`.

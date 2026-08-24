@@ -591,6 +591,7 @@ const DEFAULT_LOADERS_POSIX: &[(&[u8], Loader)] = &[
     (b".css", Loader::Css),
     (b".ts", Loader::Ts),
     (b".tsx", Loader::Tsx),
+    (b".tsp", Loader::Tsx),
     (b".mts", Loader::Ts),
     (b".cts", Loader::Ts),
     (b".toml", Loader::Toml),
@@ -649,6 +650,7 @@ impl DefaultLoaders {
             4 => match ext {
                 b".jsx" => Some(&Loader::Jsx),
                 b".tsx" => Some(&Loader::Tsx),
+                b".tsp" => Some(&Loader::Tsx),
                 b".mjs" => Some(&Loader::Js),
                 b".cjs" => Some(&Loader::Js),
                 b".mts" => Some(&Loader::Ts),
