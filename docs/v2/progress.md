@@ -857,6 +857,66 @@ is green.
 - **Next:** slice 16c = full header propagation +
   `ctx.request` body (spec sect.13) + `ctx.signal`.
 
+### Slice 16c -- full header propagation + real JSON parser (done, bun commit `dceeca00`)
+
+- **Why:** slice 16b's envelope carried the page's `Response`
+  headers but the host's comma-split extractor broke on
+  header values containing commas (`x-comma: a,b,c`) and
+  on escaped quotes. spec sect.18.3 requires the page's
+  headers surfaced verbatim. Slice 16c replaces the
+  hand-rolled extractors with a correct, small
+  recursive-descent JSON parser (no serde dep -- the plan
+  "no new deps unless the plan supports it" discipline
+  holds; `bun_runtime` is the only workspace dep).
+- **What landed (in `host.rs`, the only file changed):**
+  - `JsonValue` enum + `JsonParser` (skip_ws /
+    parse_value / parse_keyword / parse_string
+    escape-aware incl. `\uXXXX` / parse_number /
+    parse_array / parse_object). Correct for the shapes
+    the wrap script produces.
+  - `parse_envelope` rewritten: `kind` from the `type`
+    field, status via an explicit `status_line_for()`
+    table (widened to 101/203/205/206/300/402/406/408/
+    411/413/414/416/417/418/425/426/431/451/505),
+    content-type from the page's `content-type` header
+    (fallback text/plain), headers pushed to a vec.
+  - `handle_connection`: Found arm passes
+    `outcome.headers` as the 5-tuple's `extra_headers`;
+    the writer's `header_block` loop emits each header
+    before Content-Type, skipping
+    host-computed content-type/content-length.
+  - Removed `json_extract_string` / `json_extract_number`
+    / `json_extract_headers` / `unescape_json_string` /
+    `json_string` kept only where `Context::to_json`
+    needs the serializer.
+- **Verify:** 60 lib tests pass (was 55; 5 new host
+  tests: `envelope_parses_html` /
+  `envelope_parses_response_with_headers` /
+  `envelope_legacy_when_no_tag` /
+  `envelope_unknown_status_falls_back_200` /
+  `json_parser_handles_escaped_quotes`). E2E:
+  ```
+  POST /   -> 201 + x-demo: slice16c + x-comma: a,b,c
+              + Content-Type: application/json
+  GET /    -> 200 text/html
+  HEAD /   -> 200 empty
+  GET /nope -> 404
+  OPTIONS / -> 204
+  ```
+- **Out of slice 16c (deferred to 16d+ / Phase 8):**
+  - `ctx.request` body (`request.text()` / `json()` /
+    `formData()`).
+  - `ctx.signal` (AbortSignal).
+  - Set-Cookie multi-value headers (the wrap script emits
+    a flat object; list form lands with cookies in Phase
+    8 / slice 18).
+  - spec sect.18 helpers (`redirect()` / `json()`) -- the
+    page can use `new Response(null, { status: 302,
+    headers: { Location: '/x' } })` directly already.
+  - spec sect.6.3 typed error codes (TSP3xxx).
+- **Next:** slice 16d = `ctx.request` body + `ctx.signal`
+  (spec sect.13.3/13.7) -- the last Phase 7 Context gap.
+
 ## Realistic next-step options (post-Slice 7) -- STALE
 
 > Note (2026-08-24): the in-process JSC bridge was closed
