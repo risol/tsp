@@ -624,6 +624,85 @@ is green.
   bridge, dynamic routing, fragments), or ADR work for the
   remaining plan/spec gaps surfaced in the audit.
 
+### Slice 15a -- hot-reload RouteTable + PageRegistry on add/remove (done, bun commit `a832659f`)
+
+- **Why:** the watcher audit (2026-08-24) found two spec
+  MUSTs that slice 11 had not implemented:
+  - spec sect.12: route file creation/deletion MUST update
+    the route table without a process restart.
+  - spec sect.33.5: deleting a `.tsp` route MUST remove the
+    route from the route table; in-flight requests already
+    pinned MAY complete.
+  Before this slice, deleting `routes/index.tsp` produced a
+  500 "build error" (the route was still in the table but
+  the file was gone), and creating a new `routes/foo.tsp`
+  produced a 404 (the route never made it into the table).
+- **What landed (in `bun/src/runtime/tsp/`):**
+  - `router.rs`: `RouteTable` is now `Arc<Mutex<Vec<Route>>>`
+    so the watcher thread can add/remove routes while
+    requests are in flight. New methods: `add(Route)`,
+    `remove_by_path(&str)`, `paths()`, `get_by_path(&str)`.
+    New `RouterError::DuplicatePath` variant for the
+    duplicate-add case. `MatchResult` now owns `Route` (not
+    `&Route`) because the lock guard cannot outlive the
+    `lookup` call.
+  - `generation.rs`: `PageRegistry::unregister(&PageRef)`,
+    `unregister_path(&str)`, `register_route(&Route)`. Used
+    by the watcher's reconcile path and by the boot-time
+    builder (which now goes through `register_route` too,
+    for consistency).
+  - `watcher.rs`: `poll_once` takes a `table: &RouteTable`
+    argument and runs a `reconcile_routes` after the
+    source-hash diff. Adds call `register_route` +
+    `mark_dirty`; removes call `remove_by_path` +
+    `unregister_path`. New `PollStats` fields
+    `routes_added`, `routes_removed`, `reconcile_error`.
+  - `host.rs`: `serve` accepts `Arc<RouteTable>` (owned);
+    each connection thread clones it. `handle_connection`
+    takes `&Arc<RouteTable>`.
+  - `bin/tspserver_v2.rs`: `Box::leak(table)` removed -- the
+    table is now `Arc<RouteTable>`, the bin holds one Arc
+    and clones it for the watcher and the host.
+- **Verify:** 50 lib tests pass (was 47; 3 new:
+  `add_and_remove_by_path_round_trip`,
+  `unregister_path_drops_all_method_slots`,
+  `unregister_one_page_ref_does_not_drop_siblings`).
+  E2E end-to-end:
+  ```
+  GET /                    -> 200
+  HEAD /                   -> 200 (empty body)
+  OPTIONS /                -> 204 with Allow
+  GET /nope                -> 404
+  POST /                   -> 405
+  create routes/about.tsp   -> GET /about returns 200
+  delete routes/index.tsp  -> GET / returns 404
+  GET /about (untouched)   -> 200
+  server log: 'TSPv2PoC1: watch: removed route / (dropped 1 slot(s))'
+  ```
+- **Design note (preserved request pinning):** when a
+  route is removed, the registry drops the `PageSlot`
+  (and the `Generation` payload), but a request that had
+  already pinned a generation's `Arc<String>` continues to
+  serve that body until the response is written. This is
+  the spec sect.33.5 "in-flight requests already pinned MAY
+  complete" clause, satisfied for free by the slice 12
+  `Arc<String>` payload refcount.
+- **Out of slice 15a (still deferred):**
+  - Precise per-module dirty (plan sect.22.1 reverse-graph
+    walk) -- the watcher still does "any change dirties
+    every slot" for the dirty marking half. The new
+    reconcile path handles add/remove correctly but does
+    not improve the granularity of `mark_dirty`.
+  - ModuleGraph hot-reload (a future slice -- the graph
+    is still frozen at boot; only the `RouteTable` and
+    `PageRegistry` are hot).
+  - Phase 5+ feature work (Context bridge, dynamic
+    routes, fragments, etc.).
+- **Next:** candidates: slice 15b (precise dirty via
+  `ModuleGraph.importers_of` + a registry reverse map);
+  slice 15c (ModuleGraph hot-reload); or move to Phase 5
+  feature work. Sol to pick.
+
 ## Realistic next-step options (post-Slice 7)
 
 The in-process bridge is genuinely multi-session work. Other
