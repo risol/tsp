@@ -3,10 +3,10 @@ name = "bun_runtime_tsp"
 version.workspace = true
 edition.workspace = true
 
-# TSP v2 native host (see `tsp-v2-plan.md` §26).
+# TSP v2 native host (see `tsp-v2-plan.md` sect.26).
 #
 # v1 `src/main.ts` is unchanged. This crate is the side-by-side v2 runtime
-# entry point; PoC 1 (plan §70) is the 7-step vertical slice
+# entry point; PoC 1 (plan sect.70) is the 7-step vertical slice
 # (HTTP -> routes/index.tsp -> TSX transpile -> JSC -> GET -> response)
 # and lives behind `bin/tspserver_v2.rs`. Library code is the same source
 # the bin re-uses so future tests and embedded callers can drive it.
@@ -20,5 +20,15 @@ path = "bin/tspserver_v2.rs"
 [lints]
 workspace = true
 
-# Slice 1: zero external deps. JSC + transpiler land in Slice 4.
+# Slice 4: pull in Bun's JSC binding + transpiler so the route table can
+# actually execute `routes/index.tsp`. These two crates re-export
+# everything the host needs:
+# - `bun_jsc`     - raw JSC VM, JSCell, JSValue, host functions, GC
+# - `bun_transpiler` - TS/TSX -> JS via `bun_bundler::transpiler::Transpiler`
+#
+# The transitive dep graph is large (bun_bundler alone is most of the
+# Bun bundler); slice 4's first cargo build is the cold one and will
+# take 15-30 minutes. The subsequent slice-5 work uses the warm cache.
 [dependencies]
+bun_jsc = { workspace = true }
+bun_transpiler = { workspace = true }
