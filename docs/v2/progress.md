@@ -37,10 +37,36 @@ is green.
 - **Next:** Slice 2 adds the HTTP listener on port 3000 with a stub
   404 response. No routing yet.
 
-### Slices 2..N (planned, not started)
+### Slice 2 — stdlib TCP listener + 404 (done, commit `a0f5ffd5`)
 
-- **Slice 2 — HTTP listener.** uWS-based listener on port 3000. Returns
-  a hand-written 404 body for every request. No router, no JSC.
+- **Why:** prove the binary can hold open a TCP port, accept HTTP/1.1
+  in real life, and answer with a structured 404 — without yet wiring
+  any router or JSC. Plan §61 Phase 1's "native HTTP listener" milestone
+  in the smallest possible form.
+- **What landed:**
+  - `bun/src/runtime/tsp/host.rs` — stdlib `TcpListener` on
+    `0.0.0.0:<port>`, thread-per-connection, hand-written 404. `HostError`
+    with `Bind / Accept / Connection` variants (no `unwrap`, no `todo`).
+    `resolve_port()` reads `TSP_PORT` or falls back to 3000.
+  - `bin/tspserver_v2.rs` — calls `host::serve` and exits non-zero on
+    bind/port-parse failure.
+  - `lib.rs` — `pub mod host;`
+- **Verify:** `cargo build -p bun_runtime_tsp` in 2.45s; running the
+  binary prints `TSPv2PoC1: listening on http://0.0.0.0:3000`. A `curl
+  http://localhost:3000/` returns HTTP/1.1 404 with body `TSP v2 PoC 1
+  slice 2: route scanner not wired yet (path = /)`. Query strings are
+  stripped from the parsed path.
+- **Why stdlib, not uWS / tokio / axum:** the first HTTP slice must
+  compile in seconds so each subsequent slice's failure modes stay
+  isolable. Plan §25.3 reserves the production HTTP path (uWS + async)
+  for slice 7+ when Context/Request/Response bridge lands and JSC
+  interop needs an event loop.
+- **Next:** Slice 3 reads the `routes/` directory, matches `/` against
+  `routes/index.tsp`, and returns a stub "route matched, no JSC yet"
+  body for that path while every other path still 404s.
+
+### Slices 3..N (planned, not started)
+
 - **Slice 3 — Route scanner + matcher.** Read `routes/` directory, build
   a linear matcher (PoC 1: only `/` via `routes/index.tsp`). Return a
   stub "route matched but no JSC yet" body for `/`; 404 elsewhere.
