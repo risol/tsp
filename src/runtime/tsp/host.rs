@@ -67,7 +67,7 @@ static STOP: AtomicBool = AtomicBool::new(false);
 pub fn serve(
     host: &str,
     port: u16,
-    routes: &'static RouteTable,
+    routes: Arc<RouteTable>,
     registry: &'static PageRegistry,
     bun: &'static BunRuntime,
 ) -> Result<(), HostError> {
@@ -91,8 +91,9 @@ pub fn serve(
             }
         };
         eprintln!("TSPv2PoC1: accepted {peer}");
+        let routes_for_thread = Arc::clone(&routes);
         thread::spawn(move || {
-            if let Err(e) = handle_connection(stream, routes, registry, bun) {
+            if let Err(e) = handle_connection(stream, &routes_for_thread, registry, bun) {
                 eprintln!("TSPv2PoC1: {e}");
             }
         });
@@ -102,7 +103,7 @@ pub fn serve(
 
 fn handle_connection(
     mut stream: TcpStream,
-    routes: &RouteTable,
+    routes: &Arc<RouteTable>,
     registry: &PageRegistry,
     bun: &BunRuntime,
 ) -> Result<(), HostError> {
@@ -124,7 +125,7 @@ fn handle_connection(
                     route: route.path.clone(),
                     method: req_method,
                 };
-                render_for_route(route, req_method, &page_ref, registry, bun)
+                render_for_route(&route, req_method, &page_ref, registry, bun)
             }
             MatchResult::FoundHeadOverGet { route } => {
                 // Spec sect.6.5: HEAD with no explicit HEAD export.
@@ -137,7 +138,7 @@ fn handle_connection(
                     method: HttpMethod::Get,
                 };
                 let (_status, _ct, _allow, _body) = render_for_route(
-                    route, HttpMethod::Get, &page_ref, registry, bun,
+                    &route, HttpMethod::Get, &page_ref, registry, bun,
                 );
                 (
                     "HTTP/1.1 200 OK",
@@ -165,8 +166,8 @@ fn handle_connection(
                 } else {
                 // Slice-5 path: 405 with real Allow header from
                 // the static method detector (no registry needed).
-                let prepared = crate::page::prepare(route);
-                let (allow, body) = render_405_body(route, requested, prepared);
+                let prepared = crate::page::prepare(&route);
+                let (allow, body) = render_405_body(&route, requested, prepared);
                 (
                     "HTTP/1.1 405 Method Not Allowed",
                     "text/plain; charset=utf-8",

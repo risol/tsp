@@ -20,6 +20,7 @@
 //! "all standard methods present" so 405 requires a future refinement.
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 /// Standard HTTP methods the v2 page protocol recognises (plan sect.4.2,
 /// spec sect.6.1/6.5/6.6).
@@ -125,17 +126,17 @@ pub struct Route {
 /// `PartialEq` only (not `Eq`) on stable, and `&'a Route` is
 /// `PartialEq` by pointer not by value. Tests use `matches!` instead
 /// of `assert_eq!` to sidestep the derive constraint.
-#[derive(Debug, Clone, Copy)]
-pub enum MatchResult<'a> {
-    Found { route: &'a Route, method: HttpMethod },
+#[derive(Debug, Clone)]
+pub enum MatchResult {
+    Found { route: Route, method: HttpMethod },
     /// The request verb was `HEAD` and the route exports `GET` but no
     /// explicit `HEAD`. Per spec sect.6.5, the host must run the GET
     /// handler and emit a body-less 200 with the GET response's
     /// Content-Length (and any headers, but no body). The host treats
     /// this the same as a `Found { method: Get }` except the response
     /// writer drops the body.
-    FoundHeadOverGet { route: &'a Route },
-    MethodNotAllowed { route: &'a Route, requested: HttpMethod },
+    FoundHeadOverGet { route: Route },
+    MethodNotAllowed { route: Route, requested: HttpMethod },
     NotFound,
 }
 
@@ -152,6 +153,14 @@ pub enum RouterError {
     /// The runtime refuses to start with an unknown shape -- silently
     /// ignoring it would let a typo'd dynamic segment 404 forever.
     UnsupportedShape { path: PathBuf, reason: &'static str },
+    /// The watcher tried to add a route whose URL path is already
+    /// in the table. Should not happen in normal operation
+    /// (the routes dir cannot contain two files that produce
+    /// the same URL path -- the boot-time scan would have
+    /// failed). Reaching here means a race between two watcher
+    /// ticks or a stale `last_seen`. Surface it as an error
+    /// so the operator notices.
+    DuplicatePath { path: String },
 }
 
 impl std::fmt::Display for RouterError {
@@ -168,6 +177,9 @@ impl std::fmt::Display for RouterError {
                 "unsupported route shape at {}: {reason}",
                 path.display()
             ),
+            Self::DuplicatePath { path } => {
+                write!(f, "duplicate route path: {path}")
+            }
         }
     }
 }
@@ -176,11 +188,21 @@ impl std::error::Error for RouterError {}
 
 use std::io;
 
-/// In-memory route table. Slice 3 is a `Vec<Route>`; later slices swap
-/// the backing store for a radix tree without changing this surface.
+/// In-memory route table. Slice 3 was a `Vec<Route>`; slice 15a
+/// wraps the vec in a `Mutex` so the watcher (a different
+/// thread from the request threads) can add and remove routes
+/// while requests are in flight. The mutex is held only for the
+/// duration of `lookup` / `add` / `remove`; the host's request
+/// path does not hold the guard past the function call.
+///
+/// Cheap to clone (it's a `Clone` of `Arc<Mutex<...>>`), so the
+/// host thread and the watcher thread can each hold an
+/// independent handle to the same backing storage without a
+/// `Box::leak` (the slice 10b pattern). The `Send + Sync`
+/// requirement for cross-thread use is automatic via `Mutex`.
 #[derive(Debug, Default, Clone)]
 pub struct RouteTable {
-    routes: Vec<Route>,
+    routes: Arc<Mutex<Vec<Route>>>,
 }
 
 impl RouteTable {
@@ -191,21 +213,28 @@ impl RouteTable {
     /// Number of routes currently in the table. Useful for the boot
     /// banner (`scanned N routes`) and for the dev inspector later.
     pub fn len(&self) -> usize {
-        self.routes.len()
+        self.routes.lock().expect("route table lock poisoned").len()
     }
 
     /// Whether the table is empty. Tests use this; production code does
     /// not because the table is populated once at boot.
     pub fn is_empty(&self) -> bool {
-        self.routes.is_empty()
+        self.routes.lock().expect("route table lock poisoned").is_empty()
     }
 
     /// Iterate over all routes. Used by the boot-time
     /// `PageRegistry` builder to register one slot per
     /// (route, method) pair without forcing the caller to
     /// know the internal storage layout.
-    pub fn iter(&self) -> impl Iterator<Item = &Route> {
-        self.routes.iter()
+    /// Iterate over a snapshot of all routes. The returned
+    /// iterator borrows from the lock guard, so the guard is
+    /// held for the lifetime of the iteration. Callers should
+    /// collect into a `Vec` if they need the data outside the
+    /// iterator (e.g. for the boot-time `PageRegistry`
+    /// builder, which wants to drop the lock before doing the
+    /// I/O-heavy `page::prepare`).
+    pub fn iter(&self) -> Vec<Route> {
+        self.routes.lock().expect("route table lock poisoned").clone()
     }
 
     /// Walk `routes_dir` recursively, collect every `.tsp` file, and
@@ -238,15 +267,83 @@ impl RouteTable {
         // at most one route so this is a no-op in practice; the sort
         // becomes load-bearing once slice 3+ adds real files.
         routes.sort_by(|a, b| a.path.cmp(&b.path));
-        Ok(Self { routes })
+        Ok(Self {
+            routes: Arc::new(Mutex::new(routes)),
+        })
+    }
+
+    /// Add a new route at runtime. The watcher's slice-15a
+    /// path uses this to register `.tsp` files that appeared
+    /// in the routes dir after boot. Duplicate paths are
+    /// rejected (a 500 in the watcher's caller; we keep the
+    /// API strict so a misbehaving watcher is loud, not
+    /// silent).
+    pub fn add(&self, route: Route) -> Result<(), RouterError> {
+        let mut guard = self.routes.lock().expect("route table lock poisoned");
+        if guard.iter().any(|r| r.path == route.path) {
+            return Err(RouterError::DuplicatePath { path: route.path });
+        }
+        guard.push(route);
+        // Re-sort so lookup order stays deterministic. The set
+        // is small (one entry added) so this is cheap.
+        guard.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(())
+    }
+
+    /// Remove a route by URL path. No-op if the path is not
+    /// in the table. The watcher's slice-15a path uses this
+    /// when a `.tsp` file disappears. In-flight requests that
+    /// already pinned this route's generation continue to
+    /// serve from the LKG / current; new requests get a 404
+    /// (spec sect.33.5).
+    pub fn remove_by_path(&self, url_path: &str) -> bool {
+        let mut guard = self.routes.lock().expect("route table lock poisoned");
+        let before = guard.len();
+        guard.retain(|r| r.path != url_path);
+        before != guard.len()
+    }
+
+    /// Snapshot all URL paths currently in the table. The
+    /// watcher uses this to compute the add/remove diff
+    /// against the filesystem snapshot.
+    pub fn paths(&self) -> Vec<String> {
+        self.routes
+            .lock()
+            .expect("route table lock poisoned")
+            .iter()
+            .map(|r| r.path.clone())
+            .collect()
+    }
+
+    /// Look up the `Route` for a URL path. Returns a clone so
+    /// the caller can take ownership without contending on
+    /// the table lock. Used by the watcher's slice 15a
+    /// reconcile path to fetch the freshly-scanned `Route`
+    /// for each added path before `add`ing it to the live
+    /// table.
+    pub fn get_by_path(&self, url_path: &str) -> Option<Route> {
+        self.routes
+            .lock()
+            .expect("route table lock poisoned")
+            .iter()
+            .find(|r| r.path == url_path)
+            .cloned()
     }
 
     /// Look up `(path, method)`. Returns the most specific match; for
     /// the slice-3 linear table that's just the first hit. Future
     /// slices (radix tree) will encode priority explicitly per
     /// plan sect.6.5.
-    pub fn lookup(&self, path: &str, method: HttpMethod) -> MatchResult<'_> {
-        let Some(route) = self.routes.iter().find(|r| r.path == path) else {
+    pub fn lookup(&self, path: &str, method: HttpMethod) -> MatchResult {
+        // Lock the table briefly. The match arms hold a
+        // reference into the lock guard; we copy the matched
+        // `Route` into a local before returning so the guard
+        // can drop without affecting the borrow. `MatchResult`
+        // borrows for `'static` because the `Route` is owned
+        // by this function (via the local copy), not by the
+        // table itself.
+        let guard = self.routes.lock().expect("route table lock poisoned");
+        let Some(route) = guard.iter().find(|r| r.path == path).cloned() else {
             return MatchResult::NotFound;
         };
         if route.methods.contains(&method) {
@@ -403,11 +500,11 @@ mod tests {
     #[test]
     fn lookup_found() {
         let table = RouteTable {
-            routes: vec![Route {
+            routes: Arc::new(Mutex::new(vec![Route {
                 path: "/".to_string(),
                 source: PathBuf::from("routes/index.tsp"),
                 methods: HttpMethod::REAL.to_vec(),
-            }],
+            }])),
         };
         let m = table.lookup("/", HttpMethod::Get);
         assert!(matches!(m, MatchResult::Found { .. }));
@@ -416,11 +513,11 @@ mod tests {
     #[test]
     fn lookup_not_found() {
         let table = RouteTable {
-            routes: vec![Route {
+            routes: Arc::new(Mutex::new(vec![Route {
                 path: "/".to_string(),
                 source: PathBuf::from("routes/index.tsp"),
                 methods: HttpMethod::REAL.to_vec(),
-            }],
+            }])),
         };
         assert!(matches!(table.lookup("/nope", HttpMethod::Get), MatchResult::NotFound));
     }
@@ -428,13 +525,39 @@ mod tests {
     #[test]
     fn lookup_method_not_allowed() {
         let table = RouteTable {
-            routes: vec![Route {
+            routes: Arc::new(Mutex::new(vec![Route {
                 path: "/".to_string(),
                 source: PathBuf::from("routes/index.tsp"),
                 methods: vec![HttpMethod::Get], // POST not present
-            }],
+            }])),
         };
         let m = table.lookup("/", HttpMethod::Post);
         assert!(matches!(m, MatchResult::MethodNotAllowed { .. }));
+    }
+
+    #[test]
+    fn add_and_remove_by_path_round_trip() {
+        let table = RouteTable::empty();
+        assert_eq!(table.len(), 0);
+        let r = Route {
+            path: "/x".to_string(),
+            source: PathBuf::from("routes/x.tsp"),
+            methods: HttpMethod::REAL.to_vec(),
+        };
+        table.add(r.clone()).expect("first add");
+        assert_eq!(table.len(), 1);
+        assert_eq!(table.paths(), vec!["/x".to_string()]);
+        // get_by_path returns the cloned Route.
+        let got = table.get_by_path("/x").expect("get");
+        assert_eq!(got.path, "/x");
+        // Duplicate add fails with RouterError::DuplicatePath.
+        let dup = table.add(r.clone());
+        assert!(matches!(dup, Err(RouterError::DuplicatePath { .. })));
+        // remove_by_path returns true on the first remove, false
+        // on the second (idempotent no-op).
+        assert!(table.remove_by_path("/x"));
+        assert!(!table.remove_by_path("/x"));
+        assert_eq!(table.len(), 0);
+        assert!(table.get_by_path("/x").is_none());
     }
 }

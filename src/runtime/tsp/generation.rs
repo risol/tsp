@@ -239,6 +239,46 @@ impl PageRegistry {
             .or_insert_with(|| PageSlot::new_unloaded(page, source));
     }
 
+    /// Remove a slot. Used by the watcher (slice 15a) when a
+    /// `.tsp` file disappears -- the route goes away from the
+    /// `RouteTable`, and the corresponding `PageSlot` must go
+    /// away from the `PageRegistry` too. Idempotent: removing
+    /// a non-existent slot is a no-op. Returns `true` if a
+    /// slot was actually removed, `false` otherwise.
+    pub fn unregister(&self, page: &PageRef) -> bool {
+        let mut inner = self.inner.lock().expect("registry lock poisoned");
+        inner.slots.remove(page).is_some()
+    }
+
+    /// Register a page from a single `Route` (the watcher's
+    /// slice-15a add path). Reads the source, runs the slice 5
+    /// detector, and registers one slot per HTTP method the
+    /// file exports. This is the runtime side of the slice 3
+    /// boot-time `build_registry`; both call the same
+    /// `page::prepare` so the methods list stays consistent.
+    pub fn register_route(&self, route: &crate::router::Route) {
+        let source = crate::module_graph::ModuleId::from_path(&route.source);
+        for &method in &route.methods {
+            let page_ref = PageRef {
+                route: route.path.clone(),
+                method,
+            };
+            self.register(page_ref, source.clone());
+        }
+    }
+
+    /// Unregister every slot whose `route` field matches the
+    /// given URL path. Used by the watcher (slice 15a) when a
+    /// `.tsp` file disappears. The route has multiple slots
+    /// (one per HTTP method), all of which must go away.
+    /// Returns the number of slots removed.
+    pub fn unregister_path(&self, route_path: &str) -> usize {
+        let mut inner = self.inner.lock().expect("registry lock poisoned");
+        let before = inner.slots.len();
+        inner.slots.retain(|page_ref, _| page_ref.route != route_path);
+        before - inner.slots.len()
+    }
+
     /// Look up a slot by page reference. Returns a snapshot
     /// of the slot's `state` + `current` / `last_known_good`
     /// ids so the request hot path can decide "serve from
@@ -975,5 +1015,43 @@ mod tests {
         // LKG is intact.
         let lkg = r.read_lkg_arc(&p).unwrap();
         assert_eq!(*lkg, "lkg-body");
+    }
+
+    #[test]
+    fn unregister_path_drops_all_method_slots() {
+        use crate::router::{HttpMethod, Route};
+        let r = PageRegistry::new();
+        let route = Route {
+            path: "/x".to_string(),
+            source: PathBuf::from("routes/x.tsp"),
+            methods: vec![HttpMethod::Get, HttpMethod::Post],
+        };
+        r.register_route(&route);
+        assert_eq!(r.all_page_refs().len(), 2);
+        let removed = r.unregister_path("/x");
+        assert_eq!(removed, 2);
+        assert_eq!(r.all_page_refs().len(), 0);
+        // Idempotent: removing again is a no-op.
+        assert_eq!(r.unregister_path("/x"), 0);
+    }
+
+    #[test]
+    fn unregister_one_page_ref_does_not_drop_siblings() {
+        use crate::router::{HttpMethod, Route};
+        let r = PageRegistry::new();
+        let route = Route {
+            path: "/x".to_string(),
+            source: PathBuf::from("routes/x.tsp"),
+            methods: vec![HttpMethod::Get, HttpMethod::Post],
+        };
+        r.register_route(&route);
+        let get_ref = PageRef { route: "/x".to_string(), method: HttpMethod::Get };
+        let post_ref = PageRef { route: "/x".to_string(), method: HttpMethod::Post };
+        assert!(r.unregister(&get_ref));
+        // The Post slot survives.
+        assert_eq!(r.all_page_refs().len(), 1);
+        assert!(r.unregister(&get_ref) == false);
+        assert!(r.unregister(&post_ref));
+        assert_eq!(r.all_page_refs().len(), 0);
     }
 }

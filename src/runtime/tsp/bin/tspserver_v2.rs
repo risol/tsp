@@ -14,6 +14,14 @@
 //! the routes root mark all slots dirty, and the next request rebuilds
 //! the page (lazy reload). The watcher handle is kept alive for the
 //! lifetime of `serve`; its Drop impl stops + joins the thread.
+//!
+//! Slice 15a extends the watcher with hot-reload of the route table:
+//! when a `.tsp` file is added or removed under the routes root, the
+//! watcher diffs the freshly-scanned view against the live
+//! `RouteTable` and `PageRegistry`, applying additions and removals
+//! (spec sect.12 + sect.33.5). Both the host and the watcher hold
+//! independent `Arc<RouteTable>` handles into the same backing
+//! storage; the bin no longer needs to `Box::leak` the table.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -37,8 +45,14 @@ fn main() -> ExitCode {
 
     let routes_dir = resolve_routes_dir();
     eprintln!("TSPv2PoC1: scanning routes from {}", routes_dir.display());
-    let routes: &'static RouteTable = match RouteTable::scan(&routes_dir) {
-        Ok(table) => leak_table(table),
+    // Slice 15a: the RouteTable is now Arc<Mutex<...>> under
+    // the hood so the watcher can add/remove routes while
+    // requests are in flight. We keep the boot-time scan
+    // result in an Arc; the host and the watcher each
+    // receive a clone of that Arc (cheap, since the inner
+    // Arc<Mutex<...>> is shared).
+    let routes: Arc<RouteTable> = match RouteTable::scan(&routes_dir) {
+        Ok(table) => Arc::new(table),
         Err(e) => {
             eprintln!("TSPv2PoC1: {e}");
             return ExitCode::from(2);
@@ -51,7 +65,7 @@ fn main() -> ExitCode {
     // exports. Register one PageSlot per (route, method) pair
     // in the PageRegistry. The host then consults the registry
     // per request instead of re-detecting on every call.
-    let registry: &'static PageRegistry = match build_registry(routes) {
+    let registry: &'static PageRegistry = match build_registry(&routes) {
         Ok(r) => leak_registry(r),
         Err(e) => {
             eprintln!("TSPv2PoC1: {e}");
@@ -82,11 +96,12 @@ fn main() -> ExitCode {
         }
     });
     let registry_arc = Arc::new(registry.clone());
+    let routes_for_watcher = Arc::clone(&routes);
     let watch_config = WatchConfig {
         routes_root: routes_dir.clone(),
         poll_ms: watcher::DEFAULT_POLL_MS,
     };
-    let watcher_handle = watcher::spawn(watch_config, graph, registry_arc);
+    let watcher_handle = watcher::spawn(watch_config, graph, routes_for_watcher, registry_arc);
     eprintln!(
         "TSPv2PoC1: watcher polling {} every {}ms",
         routes_dir.display(),
@@ -117,7 +132,7 @@ fn resolve_routes_dir() -> PathBuf {
 fn build_registry(routes: &RouteTable) -> Result<PageRegistry, String> {
     let registry = PageRegistry::new();
     for route in routes.iter() {
-        let source = match bun_runtime_tsp::page::prepare(route) {
+        let source = match bun_runtime_tsp::page::prepare(&route) {
             Ok(s) => s,
             Err(e) => return Err(format!("prepare {}: {e}", route.source.display())),
         };
@@ -135,9 +150,6 @@ fn build_registry(routes: &RouteTable) -> Result<PageRegistry, String> {
     Ok(registry)
 }
 
-fn leak_table(table: RouteTable) -> &'static RouteTable {
-    Box::leak(Box::new(table))
-}
 fn leak_registry(r: PageRegistry) -> &'static PageRegistry {
     Box::leak(Box::new(r))
 }

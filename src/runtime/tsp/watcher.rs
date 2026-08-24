@@ -49,6 +49,7 @@ use std::time::Duration;
 
 use crate::generation::{MarkDirtyResult, PageRegistry};
 use crate::module_graph::SourceHash;
+use crate::router::RouteTable;
 
 /// Default poll interval. 500ms is long enough that editor atomic
 /// saves (write-tmp-then-rename) settle before we read, and short
@@ -118,6 +119,16 @@ pub struct PollStats {
     pub already_dirty: usize,
     pub build_in_flight: usize,
     pub unknown_page: usize,
+    /// Routes added to `RouteTable` + `PageRegistry` this poll
+    /// (slice 15a: spec sect.12 route file creation).
+    pub routes_added: usize,
+    /// Routes removed from `RouteTable` + `PageRegistry` this
+    /// poll (slice 15a: spec sect.33.5 deleted route).
+    pub routes_removed: usize,
+    /// A `reconcile_routes` error -- the watcher prints it
+    /// and leaves the table unchanged. The next poll will
+    /// retry the scan.
+    pub reconcile_error: Option<String>,
 }
 
 /// A poll cycle. Reads every source file under `root` (route +
@@ -128,9 +139,92 @@ pub struct PollStats {
 /// `last_seen` is threaded through the call because the loop owns
 /// it; it is not stored in the struct so the watcher stays
 /// stateless and tests can feed a fresh `last_seen` on each call.
+/// Reconcile the live `RouteTable` and `PageRegistry` with a
+/// freshly-scanned view of the routes dir. Returns (added,
+/// removed) counts for the `PollStats`. New files in the
+/// routes dir produce a fresh `Route` and one slot per
+/// method; removed files drop both the table entry and the
+/// registry slots.
+///
+/// The `RouteTable::scan` call may fail (a `.tsp` file with
+/// an unsupported shape, or a permission error on a
+/// subdirectory). In that case we return the error and
+/// leave the existing table + registry untouched -- a
+/// half-applied reconciliation would be worse than
+/// rejecting the whole tick.
+fn reconcile_routes(
+    root: &Path,
+    table: &RouteTable,
+    registry: &PageRegistry,
+) -> Result<(usize, usize), String> {
+    let desired = match RouteTable::scan(root) {
+        Ok(t) => t,
+        Err(e) => return Err(format!("scan failed: {e}")),
+    };
+    let desired_paths: std::collections::HashSet<String> =
+        desired.paths().into_iter().collect();
+    let actual_paths: std::collections::HashSet<String> =
+        table.paths().into_iter().collect();
+
+    let added: Vec<String> = desired_paths.difference(&actual_paths).cloned().collect();
+    let removed: Vec<String> = actual_paths.difference(&desired_paths).cloned().collect();
+
+    // Apply additions first. `register_route` runs
+    // `page::prepare` (file I/O); if a file disappears
+    // between the scan and the register we ignore the
+    // result (the next poll will re-resolve it).
+    for path in &added {
+        let route = match desired.get_by_path(path) {
+            Some(r) => r.clone(),
+            None => continue,
+        };
+        if let Err(e) = table.add(route.clone()) {
+            // Duplicate path: race with another watcher
+            // tick, or the same path was added between the
+            // scan and now. Log + continue.
+            eprintln!(
+                "TSPv2PoC1: watch: skipped add {}: {e}",
+                route.source.display()
+            );
+            continue;
+        }
+        registry.register_route(&route);
+        // Mark the freshly-registered slots dirty so the
+        // next request triggers a build (the slot starts
+        // in Unloaded state which already triggers build
+        // on first request, but mark_dirty is explicit and
+        // keeps the watcher the single owner of dirty
+        // state).
+        for &method in &route.methods {
+            let page_ref = crate::generation::PageRef {
+                route: route.path.clone(),
+                method,
+            };
+            let _ = registry.mark_dirty(&page_ref);
+        }
+    }
+
+    // Apply removals. `unregister_path` drops every slot
+    // with the matching route field; in-flight requests
+    // already pinned to those slots continue to serve
+    // from the LKG / current generation they pinned
+    // (the slot's data is dropped but the pinned
+    // `Arc<String>` is still held by the request).
+    for path in &removed {
+        table.remove_by_path(path);
+        let n = registry.unregister_path(path);
+        eprintln!(
+            "TSPv2PoC1: watch: removed route {path} (dropped {n} slot(s))"
+        );
+    }
+
+    Ok((added.len(), removed.len()))
+}
+
 pub fn poll_once(
     root: &Path,
-    graph: &crate::module_graph::ModuleGraph,
+    _graph: &crate::module_graph::ModuleGraph,
+    table: &RouteTable,
     registry: &PageRegistry,
     last_seen: &mut HashMap<PathBuf, SourceHash>,
 ) -> PollStats {
@@ -153,6 +247,21 @@ pub fn poll_once(
         }
     }
 
+    // Reconcile the live RouteTable + PageRegistry with the
+    // freshly-scanned view of the routes dir. A failure
+    // here (e.g. an unsupported file shape) leaves the
+    // table + registry untouched and surfaces the error
+    // in PollStats so the watcher's outer loop can log it.
+    match reconcile_routes(root, table, registry) {
+        Ok((added, removed)) => {
+            stats.routes_added = added;
+            stats.routes_removed = removed;
+        }
+        Err(msg) => {
+            stats.reconcile_error = Some(msg);
+        }
+    }
+
     // For each changed file, mark the affected page slots dirty.
     //
     // Slice 11's granularity is "any change dirties every page
@@ -164,11 +273,6 @@ pub fn poll_once(
     // with the precise source->PageRef index (via
     // `ModuleGraph.importers_of` + a registry reverse map) so
     // only truly-affected pages rebuild.
-    //
-    // The `graph` parameter is unused at this granularity but
-    // kept in the signature so slice 12 can plug the precise
-    // path in without changing the callers.
-    let _ = graph;
     if !stats.changed_files.is_empty() {
         for page_ref in registry.all_page_refs() {
             match registry.mark_dirty(&page_ref) {
@@ -243,6 +347,7 @@ fn collect_sources(
 pub fn spawn(
     config: WatchConfig,
     graph: Arc<crate::module_graph::ModuleGraph>,
+    table: Arc<RouteTable>,
     registry: Arc<PageRegistry>,
 ) -> WatcherHandle {
     let stop = Arc::new(AtomicBool::new(false));
@@ -264,6 +369,7 @@ pub fn spawn(
                 let changed = poll_once(
                     &config.routes_root,
                     &graph,
+                    &table,
                     &registry,
                     &mut last_seen,
                 );
@@ -289,6 +395,7 @@ mod tests {
     use super::*;
     use crate::generation::PageRegistry;
     use crate::module_graph::ModuleGraph;
+    use std::sync::Arc;
 
     fn temp_dir() -> PathBuf {
         let mut p = std::env::temp_dir();
@@ -322,16 +429,16 @@ mod tests {
         collect_sources(&dir, &mut last_seen, &mut PollStats::default());
 
         // First poll (unchanged): no changes.
-        let s1 = poll_once(&dir, &ModuleGraph::new(), &registry, &mut last_seen);
+        let s1 = poll_once(&dir, &ModuleGraph::new(), &RouteTable::empty(), &registry, &mut last_seen);
         assert!(s1.changed_files.is_empty(), "unchanged poll should report nothing, got {:?}", s1.changed_files);
 
         // Second poll (unchanged): still no changes.
-        let s2 = poll_once(&dir, &ModuleGraph::new(), &registry, &mut last_seen);
+        let s2 = poll_once(&dir, &ModuleGraph::new(), &RouteTable::empty(), &registry, &mut last_seen);
         assert!(s2.changed_files.is_empty());
 
         // Change the file.
         fs::write(&idx, "<h1>two</h1>").unwrap();
-        let s3 = poll_once(&dir, &ModuleGraph::new(), &registry, &mut last_seen);
+        let s3 = poll_once(&dir, &ModuleGraph::new(), &RouteTable::empty(), &registry, &mut last_seen);
         assert_eq!(s3.changed_files, vec![idx.clone()], "changed file should be detected");
 
         fs::remove_dir_all(&dir).unwrap();
@@ -342,11 +449,11 @@ mod tests {
         let dir = temp_dir();
         let mut last_seen = HashMap::new();
         let registry = PageRegistry::new();
-        poll_once(&dir, &ModuleGraph::new(), &registry, &mut last_seen);
+        poll_once(&dir, &ModuleGraph::new(), &RouteTable::empty(), &registry, &mut last_seen);
 
         let new_file = dir.join("new.tsp");
         fs::write(&new_file, "<p>hello</p>").unwrap();
-        let s = poll_once(&dir, &ModuleGraph::new(), &registry, &mut last_seen);
+        let s = poll_once(&dir, &ModuleGraph::new(), &RouteTable::empty(), &registry, &mut last_seen);
         assert!(s.changed_files.contains(&new_file));
 
         fs::remove_dir_all(&dir).unwrap();
@@ -359,10 +466,10 @@ mod tests {
         fs::write(&idx, "<h1>x</h1>").unwrap();
         let mut last_seen = HashMap::new();
         let registry = PageRegistry::new();
-        poll_once(&dir, &ModuleGraph::new(), &registry, &mut last_seen);
+        poll_once(&dir, &ModuleGraph::new(), &RouteTable::empty(), &registry, &mut last_seen);
 
         fs::remove_file(&idx).unwrap();
-        let s = poll_once(&dir, &ModuleGraph::new(), &registry, &mut last_seen);
+        let s = poll_once(&dir, &ModuleGraph::new(), &RouteTable::empty(), &registry, &mut last_seen);
         assert!(s.changed_files.contains(&idx), "deleted file should be reported as changed");
 
         fs::remove_dir_all(&dir).unwrap();
@@ -381,6 +488,7 @@ mod tests {
                 poll_ms: 100,
             },
             graph,
+            Arc::new(RouteTable::empty()),
             registry,
         );
         assert!(handle.is_running());
