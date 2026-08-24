@@ -917,6 +917,88 @@ is green.
 - **Next:** slice 16d = `ctx.request` body + `ctx.signal`
   (spec sect.13.3/13.7) -- the last Phase 7 Context gap.
 
+### Slice 16d -- ctx.request body + ctx.signal (full Context shape) (done, bun commit `baef11b0`)
+
+- **Why:** slice 16c's "Next" names 16d as the last Phase 7
+  Context gap: spec sect.13.3 (`ctx.request` Web Request with
+  `text()` / `json()` / `formData()`) and sect.13.7
+  (`ctx.signal` AbortSignal). FREEZE item 6's full Context
+  shape also requires `ctx.url` (Web `URL`, spec sect.13.4)
+  and `ctx.query` as `URLSearchParams` (spec sect.13.5) --
+  slice 16a had delivered raw-string query and no url. 16d
+  closes the whole gap at once.
+- **What landed (in `bun/src/runtime/tsp/`):**
+  - `host.rs` -- `Context` gains `body: String` + `headers:
+    Vec<(String, String)>`; `to_json` emits them. New
+    `read_request` reads the header block up to CRLFCRLF
+    (capped at `MAX_HEADER_BYTES`), parses `Content-Length`,
+    then reads exactly that many body bytes; a body over
+    `TSP_MAX_BODY_BYTES` (default 1 MiB, spec sect.14.2)
+    returns `ReadOutcome::BodyTooLarge` and the connection
+    answers `413 Payload Too Large` before the page runs.
+    `parse_headers` lower-cases names and folds duplicates
+    with ", ". New `render_per_request` builds pages that
+    carry query or body without touching the generation
+    cache -- the registry keys on (route, method), so a
+    cached payload would replay the FIRST request's query /
+    body echo to every later request on the same route. The
+    envelope `Legacy` branch now falls back to the host's
+    status line (405/500) instead of always 200.
+  - `jsx.rs` -- the preamble now decorates the parsed
+    context with a real `new URL` (host header + path +
+    query), `ctx.query = url.searchParams`, a real Web
+    `Request` (Bun's native class; body attached only for
+    non-GET/HEAD, page `content-length` dropped since the
+    host owns it), and `ctx.signal = new AbortController()
+    .signal` (host never aborts -- no timeout / disconnect
+    detection yet; listeners still work). The handler call
+    is now `await`ed inside the async IIFE, so async pages
+    (which `ctx.request.text()` forces) work. Fixed the
+    double-escape bug: the ctx JSON is embedded via `{:?}`
+    Debug formatting WITHOUT a manual `replace('\\', ...)`,
+    which previously doubled backslashes and broke
+    `JSON.parse` for bodies containing quotes.
+  - `jsc_bridge.rs` -- the `TSP_CONTEXT_JSON` env var now
+    carries `ctx_json_for_env` (body stripped) because env
+    blocks on Windows cap at ~32 KiB while bodies may reach
+    1 MiB; the body rides in the embedded literal instead.
+- **Verify:** 70 lib tests pass (was 60; +10: parse_headers
+  folding, content-length, read_request split / over-limit /
+  split-across-reads, ctx_json_for_env strip, serialize
+  round-trip, to_json body+headers, 2 new jsx wrap tests).
+  E2E:
+  ```
+  GET /                    -> 200, url=http://localhost:9066/,
+                              q= (URLSearchParams), signal=pending
+  GET /?q=hi&p=2           -> 200, url=.../?q=hi&p=2, q=q=hi&p=2
+                              (query reaches the page; cache bypass)
+  POST {"a":1,"b":"x"}     -> 201, echo:{"a":1,"b":"x"}, x-method: POST
+  POST second=payload      -> 201, echo:second=payload (no replay)
+  POST w/ TSP_MAX_BODY_BYTES=8 -> 413 Payload Too Large
+  ```
+  The `"<h1>..."` quote noise in GET is the slice-6 inline
+  JSX shim stringifying the standard `<h1>` tag (pre-existing,
+  tracked; full JSX lands later).
+- **Out of slice 16d (deferred to 16e / Phase 8+):**
+  - `ctx.signal` abort triggers -- the runtime has no
+    timeout / disconnect detection yet, so the signal is a
+    live never-aborted AbortSignal (spec sect.13.7's abort
+    condition is present but nothing fires it).
+  - `request.formData()` for multipart -- Bun's native
+    `Request.formData()` handles it today, but the host body
+    path is UTF-8-lossy; binary multipart payloads need a
+    raw-bytes transport slice.
+  - `ctx.cookies` (Phase 8 / slice 18).
+  - spec sect.13 per-request `url` origin: currently
+    `http://<host-header>`; TLS termination and `x-forwarded-*`
+    handling are a later slice.
+- **Next:** slice 16e = per the plan order, the remaining
+  Phase 7 items (spec sect.18 helpers `redirect()` / `json()`
+  are already expressible via `new Response`, so the next
+  gap is likely spec sect.6.3 typed error codes TSP3xxx or
+  Phase 8 (session / cookies). Read plan sect.61 and the
+  Phase 8 queue before starting.
+
 ## Realistic next-step options (post-Slice 7) -- STALE
 
 > Note (2026-08-24): the in-process JSC bridge was closed
