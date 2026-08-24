@@ -305,11 +305,47 @@ is green.
   (was 22); `cargo build -p bun_runtime_tsp` 2.57s incremental;
   slice-6 binary regress-tested clean (`curl /` still returns
   `<h1>Hello from TSP v2</h1>`).
-- **Next:** slice 10 = plan sect.20.3-20.4 + sect.21
-  (Generation + PageSlot + PageState). Data structures
-  first, then the atomic-publish / LKG / request-pinning
-  semantics. Sub-sliced so each commit is a clean
+- **Next:** slice 10a = plan sect.20.3-20.4 + sect.21 data
+  structures (Generation + PageSlot + PageState); 10b = the
+  host's request flow uses the registry (sync build on
+  request, no in-flight dedup yet); 10c = in-flight dedup +
+  request pinning. Sub-sliced so each commit is a clean
   verification step.
+
+### Slice 10a -- Generation + PageSlot + state machine (done, bun commit `d085ca67`)
+
+- **Why:** the data foundation for Phase 5 (Generation +
+  Atomic Reload + LKG) per plan sect.21. The state machine
+  has to exist before any request flow can use it.
+- **What landed (in `bun/src/runtime/tsp/generation.rs`):**
+  - `Generation { id, page, dependencies, created_at, build_result }`
+    per plan sect.21.2.
+  - `GenerationId(u64)` with a process-monotonic counter.
+  - `PageRef { route, method }` -- one entry per HTTP method
+    per `.tsp` file.
+  - `PageState` enum (Unloaded / Clean / Dirty / Building /
+    Failed) per plan sect.20.4.
+  - `PageSlot { page, source, current, last_known_good, state }`
+    per plan sect.20.3.
+  - `PageRegistry` (cheap-to-clone via `Arc<Mutex<RegistryInner>>`):
+    `register`, `snapshot`, `mark_dirty`, `begin_build`.
+  - `PublishGuard` RAII: `commit(Ok)` or `fail(message)`, with
+    Drop rollback to Unloaded/Dirty.
+  - LKG semantics = "last successful build":
+    - First commit: LKG = candidate (the new current).
+    - Subsequent successful commit: LKG = previous current.
+    - Failed commit: LKG and current unchanged.
+  - 8 unit tests cover the full state machine.
+  - Also added `ModuleId::from_canonical_path` to
+    `module_graph.rs` for callers that already have a
+    canonicalised path.
+- **Out of slice 10a (deferred to slice 10b+):** the actual
+  build pipeline (transpile + evaluate) that fills the
+  candidate; the host wiring so a request for a Dirty slot
+  triggers `begin_build`; in-flight dedup and request
+  pinning.
+- **Verify:** `cargo test -p bun_runtime_tsp --lib` 38 passed
+  (was 29).
 
 ## Realistic next-step options (post-Slice 7)
 
