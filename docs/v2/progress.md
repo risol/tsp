@@ -1271,6 +1271,136 @@ is green.
   on which slice the next application work needs.
   Read plan sect.61 + spec sect.6.3 / 13.7 to decide.
 
+### Slice 16h -- spec sect.6.3 typed error codes (TSP-NNNN) (done, bun commit `1dfd705e`)
+
+- **Why:** spec sect.6.3 / sect.37 ask for "stable error
+  code + error phase + route" on every dev diagnostic.
+  Through 16g the host returned plain "TSP v2 PoC 1
+  slice N: ..." text without a stable code -- a
+  fixing-the-paragraph-then-asking-the-customer kind
+  of API. Spec sect.37 even gives the canonical
+  conceptual example `TSP-E-TRANSPILE` /
+  `TSP-E-EXPORT` / `TSP-E-RENDER`. 16h threads a real
+  `TSP-NNNN` code into every 4xx / 5xx / 413 body so
+  tooling can grep for the prefix without parsing the
+  human description.
+- **What landed (in `bun/src/runtime/tsp/`):**
+  - `host.rs` -- new `TspError` enum + `format_error_body`
+    / `format_error_body_raw` helpers. The enum models
+    the **host-side** failures (route config, request
+    input, host state machine) and the raw variant
+    takes code + description strings for the build
+    pipeline (where the bridge layer owns the code).
+    Every error point in `handle_connection` and
+    `render_*` now emits `[TSP-NNNN] <description>` on
+    the first line of the body, with the pre-16h
+    "TSP v2 PoC 1 slice N: ..." detail line preserved
+    so existing dev tooling that greps for `slice 12`
+    etc. continues to work.
+  - `router.rs` -- `RouterError::code()` covers the
+    1xxx range (`TSP1001`-`TSP1004`). The boot-time
+    `bin/tspserver_v2.rs` scan path can now surface a
+    `TSP1004` body for ambiguous or duplicate routes
+    (FREEZE item 14 referenced `TSP1004`).
+  - `jsc_bridge.rs` -- `JscError::code()` / `describe()`
+    cover the bridge internals (`TSP3002` JSX
+    transform, `TSP3010` bun not found, `TSP3011`
+    spawn fail, `TSP3012` subprocess non-zero,
+    `TSP3013` empty stdout, `TSP3014` write temp
+    fail). The host's `render_per_request` / `render_for_route`
+    build-error 500 body uses these directly via
+    `format_error_body_raw`, so the wire prefix the
+    dev sees matches the bridge's own contract.
+  - `pipeline.rs` -- `BuildError::code()` delegates to
+    the inner `Prepare` (TSP3001) or `Jsc` (one of
+    the bridge codes). The host's build-error body
+    threads both layers' codes through the same
+    formatter.
+- **Verify:** 93 lib tests pass (was 86; +7:
+  `tsp_error_codes_are_stable` (host) /
+  `format_error_body_typed_form` /
+  `format_error_body_raw_passes_arbitrary_code` /
+  `format_error_body_adds_trailing_newline_if_missing`
+  / `router_error_codes_are_stable` /
+  `jsc_error_codes_are_stable` /
+  `build_error_codes_are_stable`). E2E:
+  ```
+  GET /nope    -> 404 [TSP2003] no route matches
+                  TSP v2 PoC 1 slice 10b: no route matches
+                  path=/nope (table has 3 route(s))
+  DELETE /     -> 405 [TSP2004] method not exported by route
+                  Allow: GET, POST
+                  TSP v2 PoC 1 slice 12: method DELETE not exported
+                  by D:/GitHub/tsp/routes\index.tsp
+  ```
+- **Code table (16h):**
+  ```
+  TSP1001  routes directory not found
+  TSP1002  unsupported route shape
+  TSP1003  duplicate route path
+  TSP1004  route filesystem error
+  TSP2001  malformed request line
+  TSP2002  request body exceeds limit (413)
+  TSP2003  no route matches (404)
+  TSP2004  method not exported by route (405)
+  TSP3001  page prepare error
+  TSP3002  jsx transform error
+  TSP3006  clean slot has no payload
+  TSP3007  page never built successfully
+  TSP3008  page not registered
+  TSP3010  bun binary not found
+  TSP3011  bun subprocess spawn failed
+  TSP3012  bun subprocess exited non-zero
+  TSP3013  bun produced no stdout
+  TSP3014  writing bun temp file failed
+  ```
+  The 3xxx range includes the host enum (3001 / 3006 /
+  3007 / 3008) and the bridge codes (3002 / 3010-3014).
+  Gaps in the 3xxx range (3003-3005) are reserved for
+  future slices (e.g. 3003 = invalid return value
+  when a page returns a `Date` or other non-`Response`
+  non-string; 3004 = empty handler output; 3005 =
+  LKG missing). The current 16h surfaces those through
+  the closest host variant (PagePrepareError) so the
+  dev always sees a code.
+- **Out of slice 16h (deferred to 16i+ / Phase 8):**
+  - `ctx.signal` abort triggers (16d deferred; the
+    remaining Phase 7 item from the 16g progress
+    note's "two real gaps" summary).
+  - TSP3xxx: spec sect.6.3 also lists the **error
+    phase** and the **route** alongside the code. The
+    phase is implicit in the prefix (1xxx = routing,
+    2xxx = request, 3xxx = build) so the wire form
+    already carries it; the route is not currently
+    threaded into the 4xx / 5xx body. 16h does not
+    add the route because the existing detail line
+    already includes the path / source, and adding
+    structured `key: value` fields risks breaking
+    pre-16h `slice 12: ...` greps. A future slice can
+    add a structured `route=...` line below the
+    `TSP-NNNN` line.
+  - URL percent-decode on dynamic segment values
+    (spec sect.11.8) -- 16e deferred.
+  - Cookie full `CookieOptions` interface (16f
+    deferred).
+  - File upload multipart (16g deferred -- Bun 1.4
+    parser hang).
+  - `ctx.session` (Phase 8).
+- **Next:** slice 16i = `ctx.signal` abort triggers
+  (spec sect.13.7). The runtime needs per-request
+  book-keeping: spawn the abort controller when the
+  request starts, fire it on TCP disconnect (poll
+  the stream for half-close) and on a configurable
+  timeout (`TSP_TIMEOUT_MS` env var, default 30s),
+  and thread the abort through the bun subprocess
+  (either via a `request.signal` hook the wrap
+  preamble reads, or by killing the subprocess when
+  the abort fires). Plan §61 Phase 7 / spec
+  sect.13.7 are the only remaining Phase 7 line
+  items; the next phase (Phase 8) is ServiceRegistry
+  + sessions + persistent services, which depends
+  on the abort plumbing being sane.
+
 ## Realistic next-step options (post-Slice 7) -- STALE
 
 > Note (2026-08-24): the in-process JSC bridge was closed
