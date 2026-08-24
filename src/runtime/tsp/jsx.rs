@@ -278,7 +278,43 @@ pub fn wrap_for_bun_cli(
              \x20 __tspReqInit.body = __tspContext.body;\n\
              }\n\
              __tspContext.request = new Request(__tspReqUrl, __tspReqInit);\n\
-             __tspContext.signal = new AbortController().signal;\n"
+             __tspContext.signal = new AbortController().signal;\n\
+             // Slice 16f: ctx.cookies (spec sect.15). Parse the\n\
+             // request's Cookie header (form: `a=b; c=d`) into a\n\
+             // tiny read-only map, then expose read methods. The\n\
+             // `__tspCookieWrites` buffer collects Set-Cookie\n\
+             // lines the page emits via `ctx.cookies.set` / `.delete`;\n\
+             // the async IIFE below merges them into the response\n\
+             // header array.\n\
+             const __tspCookieMap__ = new Map();\n\
+             const __tspCookieRaw__ = __tspReqHeaders.get('cookie') || '';\n\
+             for (const __pair__ of __tspCookieRaw__.split(';')) {\n\
+             \x20 const __trimmed__ = __pair__.trim();\n\
+             \x20 if (!__trimmed__) continue;\n\
+             \x20 const __eq__ = __trimmed__.indexOf('=');\n\
+             \x20 if (__eq__ < 0) continue;\n\
+             \x20 const __ckName__ = __trimmed__.slice(0, __eq__).trim();\n\
+             \x20 const __ckValue__ = __trimmed__.slice(__eq__ + 1).trim();\n\
+             \x20 if (__ckName__) __tspCookieMap__.set(__ckName__, __ckValue__);\n\
+             }\n\
+             const __tspCookieWrites = [];\n\
+             function __tspFormatCookie__(__name__, __value__, __options__) {\n\
+             \x20 let __line__ = __name__ + '=' + __value__;\n\
+             \x20 const __opts__ = __options__ || {};\n\
+             \x20 if (__opts__.path) __line__ += '; Path=' + __opts__.path;\n\
+             \x20 if (typeof __opts__.maxAge === 'number') __line__ += '; Max-Age=' + __opts__.maxAge;\n\
+             \x20 if (__opts__.domain) __line__ += '; Domain=' + __opts__.domain;\n\
+             \x20 if (__opts__.httpOnly) __line__ += '; HttpOnly';\n\
+             \x20 if (__opts__.secure) __line__ += '; Secure';\n\
+             \x20 if (__opts__.sameSite) __line__ += '; SameSite=' + __opts__.sameSite;\n\
+             \x20 return __line__;\n\
+             }\n\
+             __tspContext.cookies = {\n\
+             \x20 get(__n__) { return __tspCookieMap__.has(__n__) ? __tspCookieMap__.get(__n__) : undefined; },\n\
+             \x20 has(__n__) { return __tspCookieMap__.has(__n__); },\n\
+             \x20 set(__n__, __v__, __o__) { __tspCookieWrites.push(__tspFormatCookie__(__n__, __v__, __o__)); },\n\
+             \x20 delete(__n__, __o__) { const __optDel__ = Object.assign({maxAge: 0}, __o__ || {}); __tspCookieWrites.push(__tspFormatCookie__(__n__, '', __optDel__)); },\n\
+             };\n"
         );
     }
     // Existence check + invocation + envelope emission.
@@ -298,8 +334,20 @@ pub fn wrap_for_bun_cli(
         format!("const __tspResultPromise__ = {method}();\n")
     };
     out.push_str(&call);
+    // Slice 16f: the wrap preamble now (a) builds
+    // `ctx.cookies` with read methods and a write-buffer
+    // (`__tspCookieWrites`), and (b) emits the response
+    // envelope with `headers` as an ARRAY of `[name, value]`
+    // pairs (preserving multi-value `Set-Cookie` lines
+    // per spec sect.15: "preserve all valid cookie header
+    // lines rather than comma-joining them"). The host's
+    // `parse_envelope` accepts the array shape and the
+    // writer emits one wire line per entry, so a Response
+    // that calls `ctx.cookies.set('a', 'v1')` followed by
+    // `ctx.cookies.set('b', 'v2')` surfaces as two
+    // `Set-Cookie:` wire lines, not one comma-joined line.
     out.push_str(
-        "(async () => {\n         \x20let __tspBody__, __tspStatus__, __tspHeaders__, __tspType__;\n         \x20const __tspResult__ = await __tspResultPromise__;\n         \x20if (__tspResult__ instanceof Response) {\n         \x20\x20__tspType__ = 'response';\n         \x20\x20__tspStatus__ = __tspResult__.status;\n         \x20\x20__tspHeaders__ = {};\n         \x20\x20for (const [__k__, __v__] of __tspResult__.headers) __tspHeaders__[__k__] = __v__;\n         \x20\x20__tspBody__ = await __tspResult__.text();\n         \x20} else if (typeof __tspResult__ === 'string') {\n         \x20\x20__tspType__ = 'html';\n         \x20\x20__tspStatus__ = 200;\n         \x20\x20__tspHeaders__ = {};\n         \x20\x20__tspBody__ = __tspResult__;\n         \x20} else {\n         \x20\x20throw new Error('page returned invalid value (expected string or Response, got ' + (typeof __tspResult__) + ')');\n         \x20}\n         \x20const __tspEnvelope__ = JSON.stringify({type: __tspType__, status: __tspStatus__, headers: __tspHeaders__, body: __tspBody__});\n         \x20__tspConsoleLog('__TSP_OUT_V1__' + '\\n' + __tspEnvelope__);\n         })().catch((e) => { console.error(String(e && e.stack || e)); process.exit(1); });\n"
+        "(async () => {\n         \x20let __tspBody__, __tspStatus__, __tspHeaders__, __tspType__;\n         \x20const __tspResult__ = await __tspResultPromise__;\n         \x20__tspHeaders__ = [];\n         \x20if (__tspResult__ instanceof Response) {\n         \x20\x20__tspType__ = 'response';\n         \x20\x20__tspStatus__ = __tspResult__.status;\n         \x20\x20for (const [__k__, __v__] of __tspResult__.headers) __tspHeaders__.push([__k__, __v__]);\n         \x20\x20__tspBody__ = await __tspResult__.text();\n         \x20} else if (typeof __tspResult__ === 'string') {\n         \x20\x20__tspType__ = 'html';\n         \x20\x20__tspStatus__ = 200;\n         \x20\x20__tspBody__ = __tspResult__;\n         \x20} else {\n         \x20\x20throw new Error('page returned invalid value (expected string or Response, got ' + (typeof __tspResult__) + ')');\n         \x20}\n         \x20// Merge runtime cookie writes into the outgoing headers\n         \x20// (spec sect.15: cookie writes MUST be reflected even when\n         \x20// the handler returns an HtmlNode). Each write becomes a\n         \x20// separate Set-Cookie line so multiple cookies on one\n         \x20// request don't collapse via the response's flatten loop.\n         \x20if (Array.isArray(__tspCookieWrites)) {\n         \x20\x20for (const __cookieLine__ of __tspCookieWrites) {\n         \x20\x20\x20__tspHeaders__.push(['Set-Cookie', __cookieLine__]);\n         \x20\x20}\n         \x20}\n         \x20const __tspEnvelope__ = JSON.stringify({type: __tspType__, status: __tspStatus__, headers: __tspHeaders__, body: __tspBody__});\n         \x20__tspConsoleLog('__TSP_OUT_V1__' + '\\n' + __tspEnvelope__);\n         })().catch((e) => { console.error(String(e && e.stack || e)); process.exit(1); });\n"
     );
     out.push_str(transformed);
     out
@@ -405,6 +453,31 @@ mod tests {
         // The GET branch skips attaching a body; verify the
         // method-check guard is present in the preamble.
         assert!(wrapped.contains("__tspContext.method !== 'GET'"), "got: {wrapped}");
+    }
+
+    #[test]
+    fn wrap_builds_cookies_with_read_and_write_methods() {
+        // Slice 16f: the preamble parses the request's Cookie
+        // header into ctx.cookies (get/has) and exposes set
+        // /delete that push lines into a writes buffer the
+        // async IIFE merges into the response.
+        let body = "function GET(ctx) { ctx.cookies.set('sid', 'abc'); return ''; }\n";
+        let json = r#"{"method":"GET","path":"/","query":"","headers":{"cookie":"a=1; sid=old; c=3"},"body":""}"#;
+        let wrapped = wrap_for_bun_cli(body, "GET", Some(json));
+        // Cookie parsing: split on ';' and read from headers.
+        assert!(wrapped.contains("__tspCookieMap__"), "got: {wrapped}");
+        assert!(wrapped.contains("__tspCookieWrites"), "got: {wrapped}");
+        // Read API: get/has.
+        assert!(wrapped.contains("get(__n__)"), "got: {wrapped}");
+        assert!(wrapped.contains("has(__n__)"), "got: {wrapped}");
+        // Write API: set/delete push formatted lines.
+        assert!(wrapped.contains("__tspFormatCookie__"), "got: {wrapped}");
+        // Async IIFE merges writes into the response header
+        // array (Set-Cookie entries).
+        assert!(wrapped.contains("['Set-Cookie', __cookieLine__]"), "got: {wrapped}");
+        // Header wire shape: array of [k, v] pairs (16f),
+        // not the slice 16c flat object.
+        assert!(wrapped.contains("__tspHeaders__.push([__k__, __v__])"), "got: {wrapped}");
     }
 
     #[test]

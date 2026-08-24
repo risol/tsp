@@ -445,7 +445,16 @@ impl<'a> JsonParser<'a> {
 /// Envelope wire shape (one line): `__TSP_OUT_V1__\n{json}`.
 /// The JSON is a flat object:
 ///   {"type":"html","body":"..."}              (slice 6 / 16a)
-///   {"type":"response","status":201,"headers":{"x-foo":"bar"},"body":"..."}
+///   {"type":"response","status":201,"headers":[...],"body":"..."}
+///
+/// `headers` accepts two shapes for compatibility with
+/// older wrap scripts and for the array form introduced in
+/// slice 16f:
+///   * array of `[name, value]` pairs (slice 16f+,
+///     preserves multi-value `Set-Cookie` lines per
+///     spec sect.15);
+///   * flat `{name: value}` object (slice 16c; comma-folded
+///     when the same name appears more than once).
 fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
     // The first line must be the envelope tag; the rest is
     // the JSON body.
@@ -470,14 +479,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
                     _ => EnvelopeKind::Legacy,
                 };
                 let body = obj.get("body").and_then(JsonValue::as_str).unwrap_or("").to_string();
-                let mut headers: Vec<(String, String)> = Vec::new();
-                if let Some(JsonValue::Object(hs)) = obj.get("headers") {
-                    for (k, v) in hs {
-                        if let Some(s) = v.as_str() {
-                            headers.push((k.clone(), s.to_string()));
-                        }
-                    }
-                }
+                let headers = parse_envelope_headers(obj.get("headers"));
                 match kind {
                     EnvelopeKind::Html => EnvelopeOutcome {
                         kind,
@@ -536,6 +538,44 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
         status_line,
         body,
         headers,
+    }
+}
+
+/// Extract the response `headers` field from the envelope
+/// JSON. Slice 16f accepts the array form `[[k,v], ...]`
+/// (preserves multi-value `Set-Cookie`); the slice 16c
+/// flat-object form is still accepted for backward compat
+/// with pages written before 16f. Unknown shapes yield an
+/// empty list (the writer skips the loop in that case).
+fn parse_envelope_headers(v: Option<&JsonValue>) -> Vec<(String, String)> {
+    let Some(v) = v else { return Vec::new() };
+    match v {
+        JsonValue::Array(items) => {
+            let mut out = Vec::new();
+            for item in items {
+                if let JsonValue::Array(pair) = item {
+                    if pair.len() == 2 {
+                        if let (Some(k), Some(val)) = (pair[0].as_str(), pair[1].as_str()) {
+                            out.push((k.to_string(), val.to_string()));
+                        }
+                    }
+                }
+            }
+            out
+        }
+        JsonValue::Object(entries) => {
+            // Legacy slice-16c shape. Duplicates are not
+            // possible in a flat object, so multi-value
+            // Set-Cookie lines from the page are NOT
+            // preserved here -- they collapse to a single
+            // entry. Pages that need multi-value Set-Cookie
+            // must upgrade to the 16f wrap shape.
+            entries
+                .iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -1661,5 +1701,43 @@ mod tests {
             "__TSP_OUT_V1__\n{\"type\":\"response\",\"status\":200,\"headers\":{\"x-quote\":\"say \\\"hi\\\"\"},\"body\":\"ok\"}",
         );
         assert!(out.headers.contains(&("x-quote".to_string(), "say \"hi\"".to_string())));
+    }
+
+    #[test]
+    fn envelope_parses_array_headers_preserving_multi_value() {
+        // Slice 16f: the wrap script emits `headers` as an
+        // array of [name, value] pairs so multi-value
+        // Set-Cookie lines are preserved verbatim. Two
+        // Set-Cookie entries with the same name must
+        // both reach the writer -- they do NOT collapse
+        // to a single entry the way the slice 16c flat
+        // object would.
+        let out = parse_envelope(
+            "__TSP_OUT_V1__\n{\"type\":\"response\",\"status\":200,\"headers\":[[\"Set-Cookie\",\"a=1; Path=/\"],[\"Set-Cookie\",\"b=2; Path=/\"],[\"content-type\",\"text/plain\"]],\"body\":\"ok\"}",
+        );
+        assert_eq!(out.kind, EnvelopeKind::Response);
+        assert_eq!(out.content_type, "text/plain");
+        let set_cookie: Vec<&str> = out
+            .headers
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("set-cookie"))
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(set_cookie.len(), 2, "got: {:?}", out.headers);
+        assert!(set_cookie.contains(&"a=1; Path=/"));
+        assert!(set_cookie.contains(&"b=2; Path=/"));
+    }
+
+    #[test]
+    fn envelope_rejects_malformed_array_header_entries() {
+        // A non-pair array element (string, number, single
+        // element array, 3+ tuple) is skipped, not fatal --
+        // the wrap script can never produce these, but the
+        // parser must be defensive.
+        let out = parse_envelope(
+            "__TSP_OUT_V1__\n{\"type\":\"response\",\"status\":200,\"headers\":[[\"x-ok\",\"yes\"],\"garbage\",[\"only-one\"],[\"a\",\"b\",\"c\"]],\"body\":\"ok\"}",
+        );
+        assert_eq!(out.headers.len(), 1, "got: {:?}", out.headers);
+        assert!(out.headers.contains(&("x-ok".to_string(), "yes".to_string())));
     }
 }
