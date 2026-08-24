@@ -21,11 +21,17 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Standard HTTP methods the v2 page protocol recognises (plan sect.4.2).
-/// `HEAD` is intentionally absent: when a page exports `GET` but no
-/// explicit `HEAD`, the runtime synthesises a body-less HEAD from the
-/// `GET` response (plan sect.42). `OPTIONS` is also synthesized when the
-/// page omits it (plan sect.42).
+/// Standard HTTP methods the v2 page protocol recognises (plan sect.4.2,
+/// spec sect.6.1/6.5/6.6).
+///
+/// `HEAD` is the synthetic-fallback case: when a page exports `GET` but
+/// no explicit `HEAD`, the runtime synthesises a body-less HEAD from
+/// the `GET` response (spec sect.6.5, plan sect.42). The router
+/// detects this in `lookup` and returns `FoundHeadOverGet`; the host
+/// then runs the GET path and drops the body. An explicit `HEAD`
+/// export would short-circuit this -- but PoC 1's slice-5 detector
+/// only looks at the file's own export set, and the spec does not
+/// require a `.tsp` author to declare `HEAD` separately.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HttpMethod {
     Get,
@@ -34,6 +40,7 @@ pub enum HttpMethod {
     Patch,
     Delete,
     Options,
+    Head,
 }
 
 impl HttpMethod {
@@ -48,6 +55,7 @@ impl HttpMethod {
             "PATCH" => Some(Self::Patch),
             "DELETE" => Some(Self::Delete),
             "OPTIONS" => Some(Self::Options),
+            "HEAD" => Some(Self::Head),
             _ => None,
         }
     }
@@ -61,19 +69,39 @@ impl HttpMethod {
             Self::Patch => "PATCH",
             Self::Delete => "DELETE",
             Self::Options => "OPTIONS",
+            Self::Head => "HEAD",
         }
     }
 
     /// All standard methods. Used for the `Allow:` header on 405 and as
     /// the default for a freshly scanned route before JSC validates the
     /// actual exports.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Get,
         Self::Post,
         Self::Put,
         Self::Patch,
         Self::Delete,
         Self::Options,
+        Self::Head,
+    ];
+
+    /// The methods a `.tsp` file can export directly. Excludes
+    /// `Head` and `Options`, which are fallback-handled by the
+    /// host (spec sect.6.5 / 6.6): the slice 5 detector parses
+    /// the file's own export set against this list, and the
+    /// router marks the route as "exports X" only if `export
+    /// function X` appears in the source. `Head` and `Options`
+    /// are never exported directly; the host synthesises them
+    /// when the request verb is one of those two and the
+    /// corresponding real method is present (HEAD -> GET,
+    /// OPTIONS -> auto-Allow response).
+    pub const REAL: [Self; 5] = [
+        Self::Get,
+        Self::Post,
+        Self::Put,
+        Self::Patch,
+        Self::Delete,
     ];
 }
 
@@ -97,9 +125,16 @@ pub struct Route {
 /// `PartialEq` only (not `Eq`) on stable, and `&'a Route` is
 /// `PartialEq` by pointer not by value. Tests use `matches!` instead
 /// of `assert_eq!` to sidestep the derive constraint.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum MatchResult<'a> {
     Found { route: &'a Route, method: HttpMethod },
+    /// The request verb was `HEAD` and the route exports `GET` but no
+    /// explicit `HEAD`. Per spec sect.6.5, the host must run the GET
+    /// handler and emit a body-less 200 with the GET response's
+    /// Content-Length (and any headers, but no body). The host treats
+    /// this the same as a `Found { method: Get }` except the response
+    /// writer drops the body.
+    FoundHeadOverGet { route: &'a Route },
     MethodNotAllowed { route: &'a Route, requested: HttpMethod },
     NotFound,
 }
@@ -216,6 +251,14 @@ impl RouteTable {
         };
         if route.methods.contains(&method) {
             MatchResult::Found { route, method }
+        } else if method == HttpMethod::Head
+            && route.methods.contains(&HttpMethod::Get)
+        {
+            // Spec sect.6.5: HEAD with no explicit HEAD export -> use
+            // GET, drop the body. We do not look at a separate "head
+            // exports" set here; the slice 5 detector treats any page
+            // without `export function HEAD` as no explicit HEAD.
+            MatchResult::FoundHeadOverGet { route }
         } else {
             MatchResult::MethodNotAllowed {
                 route,
@@ -261,7 +304,7 @@ fn scan_recursive(
         out.push(Route {
             path: url_path,
             source: path,
-            methods: HttpMethod::ALL.to_vec(),
+            methods: HttpMethod::REAL.to_vec(),
         });
     }
     Ok(())
@@ -363,7 +406,7 @@ mod tests {
             routes: vec![Route {
                 path: "/".to_string(),
                 source: PathBuf::from("routes/index.tsp"),
-                methods: HttpMethod::ALL.to_vec(),
+                methods: HttpMethod::REAL.to_vec(),
             }],
         };
         let m = table.lookup("/", HttpMethod::Get);
@@ -376,7 +419,7 @@ mod tests {
             routes: vec![Route {
                 path: "/".to_string(),
                 source: PathBuf::from("routes/index.tsp"),
-                methods: HttpMethod::ALL.to_vec(),
+                methods: HttpMethod::REAL.to_vec(),
             }],
         };
         assert!(matches!(table.lookup("/nope", HttpMethod::Get), MatchResult::NotFound));

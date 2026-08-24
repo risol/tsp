@@ -126,7 +126,43 @@ fn handle_connection(
                 };
                 render_for_route(route, req_method, &page_ref, registry, bun)
             }
+            MatchResult::FoundHeadOverGet { route } => {
+                // Spec sect.6.5: HEAD with no explicit HEAD export.
+                // Run the GET handler, then strip the body. We
+                // intentionally do NOT preserve Content-Length --
+                // see the slice 14a note in progress.md for the
+                // proper Content-Length-preserving refactor.
+                let page_ref = PageRef {
+                    route: route.path.clone(),
+                    method: HttpMethod::Get,
+                };
+                let (_status, _ct, _allow, _body) = render_for_route(
+                    route, HttpMethod::Get, &page_ref, registry, bun,
+                );
+                (
+                    "HTTP/1.1 200 OK",
+                    "text/html; charset=utf-8",
+                    None,
+                    String::new(),
+                )
+            }
             MatchResult::MethodNotAllowed { route, requested } => {
+                // Spec sect.6.6: OPTIONS with no explicit OPTIONS
+                // export -> automatic 204 with Allow. Only applies
+                // when the route exports other methods (so the
+                // Allow list is non-empty -- a route that exports
+                // only OPTIONS still 405s).
+                if requested == HttpMethod::Options
+                    && route.methods.iter().any(|m| *m != HttpMethod::Options)
+                {
+                    let allow = build_allow_header(&route.methods);
+                    (
+                        "HTTP/1.1 204 No Content",
+                        "text/plain; charset=utf-8",
+                        Some(allow),
+                        String::new(),
+                    )
+                } else {
                 // Slice-5 path: 405 with real Allow header from
                 // the static method detector (no registry needed).
                 let prepared = crate::page::prepare(route);
@@ -137,6 +173,7 @@ fn handle_connection(
                     Some(allow),
                     body,
                 )
+                }
             }
             MatchResult::NotFound => (
                 "HTTP/1.1 404 Not Found",
