@@ -96,9 +96,10 @@ pub fn execute(
     bun: &BunRuntime,
     source: &str,
     method: HttpMethod,
+    ctx_json: Option<&str>,
 ) -> Result<String, JscError> {
     let js_body = jsx::tsx_to_js(source).map_err(JscError::Jsx)?;
-    let wrapped = jsx::wrap_for_bun_cli(&js_body, method.as_str());
+    let wrapped = jsx::wrap_for_bun_cli(&js_body, method.as_str(), ctx_json);
 
     // Use a per-call temp file. On Windows `std::env::temp_dir()` is
     // `%TEMP%`; the unique suffix avoids collisions under concurrent
@@ -115,11 +116,19 @@ pub fn execute(
     tempfile.push(suffix);
     fs::write(&tempfile, &wrapped).map_err(JscError::WriteTemp)?;
 
-    let output = Command::new(&bun.bin)
-        .arg("run")
-        .arg(&tempfile)
-        .output()
-        .map_err(JscError::Spawn)?;
+    let mut cmd = Command::new(&bun.bin);
+    cmd.arg("run").arg(&tempfile);
+    if let Some(json) = ctx_json {
+        // The env var is the side-channel the JS side reads in
+        // the wrap preamble. We embed the same JSON as a
+        // literal in the JS too (so a page that does not use
+        // the env var directly still gets the Context); the
+        // env var is here for completeness so JS code that
+        // wants the raw JSON (e.g. for streaming, or for
+        // debug) can read it.
+        cmd.env("TSP_CONTEXT_JSON", json);
+    }
+    let output = cmd.output().map_err(JscError::Spawn)?;
 
     // Best-effort cleanup. Don't propagate a cleanup failure -- the
     // request has already succeeded or failed on its own merits.

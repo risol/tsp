@@ -48,7 +48,20 @@ impl std::error::Error for BuildError {}
 /// `bun`, return the rendered HTTP body. The body is what the
 /// `HttpResponse` field of the `Generation` carries to the
 /// request handler.
-pub fn build(route: &Route, method: HttpMethod, bun: &BunRuntime) -> Result<String, BuildError> {
+///
+/// `ctx_json` is the JSON-serialised `Context` the host built
+/// for the request (spec sect.13, plan sect.8). It is passed
+/// through to `jsc_bridge::execute` which sets it as the
+/// `TSP_CONTEXT_JSON` env var and embeds the same JSON as a
+/// literal in the wrapped JS preamble. The page handler
+/// receives the parsed object as its single argument.
+pub fn build(
+    route: &Route,
+    method: HttpMethod,
+    bun: &BunRuntime,
+    ctx_json: &str,
+) -> Result<String, BuildError> {
     let source = page::prepare(route).map_err(BuildError::Prepare)?;
-    jsc_bridge::execute(bun, &source.text, method).map_err(BuildError::Jsc)
+    jsc_bridge::execute(bun, &source.text, method, Some(ctx_json))
+        .map_err(BuildError::Jsc)
 }

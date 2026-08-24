@@ -37,6 +37,93 @@ use crate::pipeline;
 use crate::router::{HttpMethod, MatchResult, RouteTable};
 use std::sync::Arc;
 
+/// Per-request Context exposed to the `.tsp` page handler
+/// (spec sect.13, plan sect.8). The slice 16a surface is the
+/// minimum useful subset: HTTP method, URL path, raw query
+/// string. `params` is an empty object for now -- dynamic
+/// route segments (spec sect.11.3) land in a later slice.
+/// `signal` (AbortSignal) and `body` (Web Request) are slice
+/// 16b/c; `cookies` is Phase 8.
+#[derive(Debug, Clone)]
+pub struct Context {
+    /// HTTP method the request came in with (uppercase).
+    pub method: HttpMethod,
+    /// URL path the route matched (e.g. `/`, `/about`).
+    pub path: String,
+    /// Raw query string without the leading `?`, or empty
+    /// when the request had no query. The page can parse it
+    /// via `new URLSearchParams(ctx.query)` (the JS API
+    /// does the percent-decoding for us).
+    pub query: String,
+    /// Route parameters from file-system routing (spec
+    /// sect.11.3). Empty for slice 16a because dynamic
+    /// segments are not implemented yet.
+    pub params: std::collections::HashMap<String, String>,
+}
+
+impl Context {
+    /// Serialise to a JSON string the JS side parses via
+    /// `JSON.parse(...)`. The format is intentionally
+    /// minimal: top-level keys are method / path / query /
+    /// params. Adding more fields here is a contract
+    /// change for `.tsp` page authors.
+    pub fn to_json(&self) -> String {
+        // Hand-rolled to avoid pulling in a JSON crate. The
+        // method comes from `HttpMethod::as_str` (one of
+        // GET / POST / ...) so it is always ASCII without
+        // escaping; the path and query are read straight
+        // from the HTTP request line so they may contain
+        // percent-encoded bytes that we surface verbatim.
+        // `.tsp` authors that want decoded forms parse
+        // them on the JS side via `decodeURIComponent` /
+        // `URLSearchParams`.
+        let mut out = String::with_capacity(64 + self.path.len() + self.query.len());
+        out.push_str("{\"method\":");
+        json_string(&mut out, self.method.as_str());
+        out.push_str(",\"path\":");
+        json_string(&mut out, &self.path);
+        out.push_str(",\"query\":");
+        json_string(&mut out, &self.query);
+        out.push_str(",\"params\":{");
+        let mut first = true;
+        for (k, v) in &self.params {
+            if !first {
+                out.push(',');
+            }
+            first = false;
+            json_string(&mut out, k);
+            out.push(':');
+            json_string(&mut out, v);
+        }
+        out.push_str("}}");
+        out
+    }
+}
+
+/// Minimal JSON string escape: handle quote, backslash, and
+/// control characters. The Context's `path` and `query`
+/// come from the HTTP request line and may contain quotes
+/// (rare, but possible in malformed input), so we escape
+/// defensively rather than trust the input.
+fn json_string(out: &mut String, s: &str) {
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
 const DEFAULT_PORT: u16 = 3000;
 
 #[derive(Debug)]
@@ -119,13 +206,26 @@ fn handle_connection(
             None,
             "TSP v2 PoC 1 slice 10b: malformed request line\n".to_string(),
         ),
-        ParsedRequest::Known { method, path } => match routes.lookup(&path, method) {
+        ParsedRequest::Known { method, path, query } => {
+            // Build the per-request Context the page handler
+            // receives as its single argument. `params` is
+            // empty for slice 16a (dynamic route segments
+            // are not implemented yet). The query string is
+            // passed verbatim -- the JS side decodes it via
+            // `URLSearchParams` if it wants parsed forms.
+            let ctx = Context {
+                method,
+                path: path.clone(),
+                query,
+                params: std::collections::HashMap::new(),
+            };
+            match routes.lookup(&path, method) {
             MatchResult::Found { route, method: req_method } => {
                 let page_ref = PageRef {
                     route: route.path.clone(),
                     method: req_method,
                 };
-                render_for_route(&route, req_method, &page_ref, registry, bun)
+                render_for_route(&route, req_method, &page_ref, registry, bun, &ctx)
             }
             MatchResult::FoundHeadOverGet { route } => {
                 // Spec sect.6.5: HEAD with no explicit HEAD export.
@@ -138,7 +238,7 @@ fn handle_connection(
                     method: HttpMethod::Get,
                 };
                 let (_status, _ct, _allow, _body) = render_for_route(
-                    &route, HttpMethod::Get, &page_ref, registry, bun,
+                    &route, HttpMethod::Get, &page_ref, registry, bun, &ctx,
                 );
                 (
                     "HTTP/1.1 200 OK",
@@ -185,7 +285,8 @@ fn handle_connection(
                     routes.len()
                 ),
             ),
-        },
+            }
+        }
     };
 
     let mut head = format!(
@@ -233,6 +334,7 @@ fn render_for_route(
     page_ref: &PageRef,
     registry: &PageRegistry,
     bun: &BunRuntime,
+    ctx: &Context,
 ) -> (&'static str, &'static str, Option<String>, String) {
     // The route exists (router matched) but the boot-time
     // method detector may not have registered this method
@@ -271,7 +373,7 @@ fn render_for_route(
                 Ok(guard) => {
                     // We own the build. Run pipeline,
                     // commit, pin the payload, serve.
-                    let build_result = pipeline::build(route, requested, bun);
+                    let build_result = pipeline::build(route, requested, bun, &ctx.to_json());
                     match build_result {
                         Ok(body) => {
                             let deps: Vec<crate::module_graph::ModuleId> = Vec::new();
@@ -462,7 +564,13 @@ fn render_405_body(
 
 #[derive(Debug)]
 enum ParsedRequest {
-    Known { method: HttpMethod, path: String },
+    Known {
+        method: HttpMethod,
+        path: String,
+        /// Raw query string without the leading `?`, or
+        /// empty when the request had no query.
+        query: String,
+    },
     Unknown,
 }
 
@@ -480,10 +588,17 @@ fn parse_request(request: &str) -> ParsedRequest {
     let Some(method) = HttpMethod::from_request_line(method_str) else {
         return ParsedRequest::Unknown;
     };
-    let end = path.find('?').unwrap_or(path.len());
+    let qpos = path.find('?');
+    let end = qpos.unwrap_or(path.len());
+    let query = if let Some(q) = qpos {
+        path[q + 1..].to_string()
+    } else {
+        String::new()
+    };
     ParsedRequest::Known {
         method,
         path: path[..end].to_string(),
+        query,
     }
 }
 
@@ -508,3 +623,53 @@ pub fn resolve_port() -> Result<u16, HostError> {
 // slice 10c's planned additions.
 #[allow(dead_code)]
 fn _generation_anchor(_g: &generation::GenerationId) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::router::HttpMethod;
+
+    #[test]
+    fn context_to_json_basic() {
+        let ctx = Context {
+            method: HttpMethod::Get,
+            path: "/".to_string(),
+            query: "".to_string(),
+            params: std::collections::HashMap::new(),
+        };
+        let s = ctx.to_json();
+        // The exact wire form is part of the slice 16a
+        // contract: it is parsed by the JS preamble.
+        assert!(s.contains("\"method\":\"GET\""), "got: {s}");
+        assert!(s.contains("\"path\":\"/\""), "got: {s}");
+        assert!(s.contains("\"query\":\"\""), "got: {s}");
+        assert!(s.contains("\"params\":{}"), "got: {s}");
+    }
+
+    #[test]
+    fn context_to_json_with_query() {
+        let ctx = Context {
+            method: HttpMethod::Get,
+            path: "/search".to_string(),
+            query: "q=hello&page=2".to_string(),
+            params: std::collections::HashMap::new(),
+        };
+        let s = ctx.to_json();
+        assert!(s.contains("\"q=hello&page=2\""), "got: {s}");
+    }
+
+
+    #[test]
+    fn context_to_json_serialises_params() {
+        let mut params = std::collections::HashMap::new();
+        params.insert("id".to_string(), "42".to_string());
+        let ctx = Context {
+            method: HttpMethod::Get,
+            path: "/users/42".to_string(),
+            query: String::new(),
+            params,
+        };
+        let s = ctx.to_json();
+        assert!(s.contains("\"id\":\"42\""), "got: {s}");
+    }
+}
