@@ -7,24 +7,59 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
-command_exists() {
-  command -v "$1" >/dev/null 2>&1
+require_bun() {
+  if [[ -n "${TSP_BUN_BIN:-}" ]]; then
+    if [[ ! -f "$TSP_BUN_BIN" ]]; then
+      echo "Error: TSP_BUN_BIN does not exist: $TSP_BUN_BIN" >&2
+      exit 1
+    fi
+    BUN_BIN=("$TSP_BUN_BIN")
+    return
+  fi
+
+  local candidate
+  local candidates=(
+    "$ROOT_DIR/bun/build/debug/bun-debug.exe"
+    "$ROOT_DIR/bun/build/debug/bun-debug"
+    "$ROOT_DIR/bun/build/release/bun.exe"
+    "$ROOT_DIR/bun/build/release/bun"
+  )
+  for candidate in "${candidates[@]}"; do
+    if [[ -f "$candidate" ]]; then
+      BUN_BIN=("$candidate")
+      return
+    fi
+  done
+
+  if command -v bun >/dev/null 2>&1; then
+    BUN_BIN=("$(command -v bun)")
+    return
+  fi
+
+  {
+    echo "Error: Bun is required."
+    echo "Build the bundled fork or install Bun 1.x."
+    echo "You can also set TSP_BUN_BIN to an explicit Bun executable."
+  } >&2
+  exit 1
 }
 
-require_bun() {
-  if ! command_exists bun; then
-    echo "Error: Bun is required. Install Bun 1.x or the TSP-enabled Bun fork." >&2
-    exit 1
-  fi
+run_bun() {
+  "${BUN_BIN[@]}" "$@"
+}
+
+require_bun_and_report() {
+  require_bun
+  echo "Using Bun: ${BUN_BIN[0]}"
 }
 
 run_server() {
-  require_bun
-  exec bun run src/main.ts "$@"
+  require_bun_and_report
+  exec "${BUN_BIN[@]}" run src/main.ts "$@"
 }
 
 build_server() {
-  require_bun
+  require_bun_and_report
   local mode="${1:-release}"
   local output_dir="$ROOT_DIR/dist/bun"
   if [[ "$mode" == "dev" ]]; then
@@ -36,7 +71,7 @@ build_server() {
 
   mkdir -p "$output_dir"
   echo "Building TSP server with Bun ($mode)..."
-  bun build src/main.ts --compile --outfile "$output_dir/tspserver" "$@"
+  run_bun build src/main.ts --compile --outfile "$output_dir/tspserver" "$@"
   if [[ -d "$ROOT_DIR/www" ]]; then
     rm -rf "$output_dir/www"
     cp -R "$ROOT_DIR/www" "$output_dir/www"
@@ -45,6 +80,32 @@ build_server() {
     cp "$ROOT_DIR/config.jsonc" "$output_dir/config.jsonc"
   fi
   echo "Built $output_dir/tspserver with external www/ source tree"
+}
+
+run_tests() {
+  require_bun_and_report
+  local command_name="$1"
+  shift
+  case "$command_name" in
+    test:unit) run_bun test tests/unit "$@" ;;
+    test:e2e) run_bun test tests/e2e "$@" ;;
+    *) run_bun test "$@" ;;
+  esac
+}
+
+run_check() {
+  require_bun_and_report
+  run_bun x tsc --noEmit
+}
+
+run_fmt() {
+  require_bun_and_report
+  run_bun x prettier --write src tests types.d.ts
+}
+
+run_lint() {
+  require_bun_and_report
+  run_bun x eslint src tests
 }
 
 case "${1:-help}" in
@@ -69,26 +130,16 @@ case "${1:-help}" in
     build_server release "$@"
     ;;
   test|test:unit|test:e2e)
-    require_bun
-    command_name="$1"
-    shift
-    case "$command_name" in
-      test:unit) bun test tests/unit "$@" ;;
-      test:e2e) bun test tests/e2e "$@" ;;
-      *) bun test "$@" ;;
-    esac
+    run_tests "$@"
     ;;
   check)
-    require_bun
-    bunx tsc --noEmit
+    run_check
     ;;
   fmt)
-    require_bun
-    bunx prettier --write src tests types.d.ts
+    run_fmt
     ;;
   lint)
-    require_bun
-    bunx eslint src tests
+    run_lint
     ;;
   clean)
     rm -rf "$ROOT_DIR/dist/bun" "$ROOT_DIR/tspserver" "$ROOT_DIR/tspserver.exe"
@@ -106,6 +157,9 @@ Usage: ./tsp.sh <command>
   fmt                         Format source files with Prettier
   lint                        Lint source files with ESLint
   clean                       Remove Bun build output
+
+  The bundled bun/build/debug/bun-debug(.exe) is preferred automatically.
+  Set TSP_BUN_BIN to override the Bun executable.
 EOF
     ;;
   *)

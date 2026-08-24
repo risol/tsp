@@ -49,7 +49,8 @@ This command will:
 # Build release version (alias)
 ./tsp.sh build:tspserver:rel
 
-# Bun (or the TSP-enabled Bun fork) is required before building.
+# The script prefers the bundled TSP-enabled Bun fork when it exists.
+# Set TSP_BUN_BIN to use a different Bun executable.
 bun install
 ```
 
