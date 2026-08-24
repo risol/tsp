@@ -262,13 +262,18 @@ is green.
   - 12 explicit answers in `FREEZE.md`.
   - 10 fixtures, 8 spec-compliant + 2 invalid-as-documentation.
   - No v1 compatibility work has begun.
-- **Out of slice 8:** Sol's sign-off on the 12 items. The
-  freeze is "draft" until Sol confirms; an ADR (plan §69)
-  would be the formal step if any item needs to change.
-- **Next user-side decision:** Sol confirms `FREEZE.md` (or
-  flags items for revision). Once confirmed, the v2.0 contract
-  is locked and slice 9+ can resume code work without
-  renegotiating the surface.
+- **Phase 0 sign-off (2026-08-24):** Sol confirmed all 12
+  items. `FREEZE.md` status flipped from DRAFT to FROZEN in
+  commit `043a832`. The v2.0 application-facing contract is
+  now locked; subsequent slices build on these 12 items, they
+  do not renegotiate them. Any later spec change that
+  contradicts a frozen item must come with an ADR (plan §69).
+- **What Phase 0 closure unlocks:** slice 9+ (in-process JSC
+  bridge, watcher + atomic reload, full Context bridge,
+  fragments-as-HTML rendering, etc.) can resume code work
+  without further contract negotiation. The slice-6 bun.exe
+  subprocess bridge stays as the production path until the
+  in-process bridge lands.
 
 ## Realistic next-step options (post-Slice 7)
 
@@ -376,3 +381,53 @@ User-side decision required before any of (a), (b), (c) starts.
 - Whether `routes/` lives at the repo root or under a v2-specific
   subdir (e.g. `v2/routes/`) to avoid stepping on a future v1 routes
   dir at the root.
+
+
+## Session summary (2026-08-24)
+
+This session took the v2 refactor from zero to a frozen v2.0
+contract in 9 slices:
+
+- **PoC 1 (slices 1-6):** Rust HTTP listener + filesystem route
+  scanner + JSC execute via `bun.exe` subprocess. End-to-end
+  verified: `curl /` returns 200 OK with body `<h1>Hello from TSP v2</h1>`
+  and `Content-Type: text/html; charset=utf-8`. 22 unit tests
+  pass; binary builds in 3.48s incremental.
+- **Slice 7 (in-process JSC spike):** `bun_runtime` dep added
+  with cold compile in 1m 51s; spike module documents the
+  multi-session gap before the in-process bridge can fully
+  land. The PoC 1 subprocess path stays as the production
+  code; the binary regress-tested clean.
+- **Phase 0 (slice 8):** 12-item v2.0 contract documented in
+  `FREEZE.md` + 4 topic docs + 10 example fixtures. Sol signed
+  off; the contract is FROZEN.
+
+Side-by-side coexistence with v1 (`src/main.ts` / `www/` /
+`tsp.sh`) holds throughout: no v1 source was modified.
+
+**v2 git log on the parent tsp repo** (10 commits, oldest to
+newest):
+
+```text
+ec397f4  chore(tsp-v2): scaffold v2 docs and routes fixture (slice 1)
+c53cfd3  chore(tsp-v2): mark slice 2 done in progress log
+44d114f  chore(tsp-v2): mark slice 3 done in progress log
+6067d8d  chore(tsp-v2): mark slices 4 + 5 done, surface slice 6 pivot
+a06cf26  chore(tsp-v2): close PoC 1 in progress log
+4836110  chore(tsp-v2): mark slice 7 (in-process JSC spike) in progress log
+86ce560  docs(tsp-v2): Phase 0 freeze -- 12 contract items + 4 topic docs + 10 fixtures
+a7f3797  chore: gitignore .logs/
+043a832  docs(tsp-v2): lock the 12-item v2.0 contract (Phase 0 closed)
+```
+
+**v2 git log in the bun/ submodule** (7 commits):
+
+```text
+296ef0c2  feat(tsp-v2): add v2 host crate slice 1 (boot stub)
+a0f5ffd5  feat(tsp-v2): add stdlib TCP listener with 404 (PoC 1 slice 2)
+495a5253  feat(tsp-v2): add filesystem route scanner + matcher (PoC 1 slice 3)
+b9a7b0a2  feat(tsp-v2): add bun_jsc + bun_transpiler dependencies (PoC 1 slice 4)
+7d867e49  feat(tsp-v2): add page source reader + static export detector (PoC 1 slice 5)
+d5a88b79  feat(tsp-v2): close PoC 1 vertical slice (JSX + bun.exe JSC bridge)
+1e9a4b92  chore(tsp-v2): add bun_runtime dep + in_process_jsc spike (slice 7)
+```
