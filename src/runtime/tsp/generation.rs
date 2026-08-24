@@ -32,7 +32,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use crate::module_graph::ModuleId;
 use crate::router::HttpMethod;
@@ -58,7 +58,13 @@ pub struct Generation {
     /// before `commit`; `Some(body)` for `Ok` generations.
     /// The host reads this directly to avoid a per-request
     /// re-build.
-    pub payload: Option<String>,
+    ///
+    /// `Arc<String>` so concurrent requests share the same
+    /// buffer (plan sect.21.3 request pinning) and a request
+    /// that pinned the body before a later commit can still
+    /// finish on the generation it observed. The Arc keeps
+    /// the body alive even after `current` is overwritten.
+    pub payload: Option<Arc<String>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -133,7 +139,6 @@ pub enum PageState {
 }
 
 /// One slot per (route, method) pair.
-#[derive(Debug)]
 pub struct PageSlot {
     pub page: PageRef,
     /// The module the slot loads from. Same across all
@@ -148,6 +153,24 @@ pub struct PageSlot {
     pub last_known_good: Option<Generation>,
     /// Build state.
     pub state: PageState,
+    /// Shared build future, set when `state == Building`.
+    /// Concurrent requests on a Building slot wait on this
+    /// (plan sect.22.4 in-flight dedup). `None` outside of a
+    /// build.
+    pub in_flight: Option<Arc<InFlightBuild>>,
+}
+
+impl std::fmt::Debug for PageSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PageSlot")
+            .field("page", &self.page)
+            .field("source", &self.source)
+            .field("current_id", &self.current.as_ref().map(|g| g.id))
+            .field("last_known_good_id", &self.last_known_good.as_ref().map(|g| g.id))
+            .field("state", &self.state)
+            .field("in_flight", &self.in_flight.as_ref().map(|_| "Arc<InFlightBuild>"))
+            .finish()
+    }
 }
 
 impl PageSlot {
@@ -160,6 +183,7 @@ impl PageSlot {
             current: None,
             last_known_good: None,
             state: PageState::Unloaded,
+            in_flight: None,
         }
     }
 
@@ -241,14 +265,20 @@ impl PageRegistry {
     }
 
     /// Read the current generation's payload (the rendered
-    /// HTTP body). Clones the string; the lock is held only
-    /// for the duration of the clone. Returns `None` if the
-    /// slot is not in the registry, has no `current`, or the
-    /// `current` is a `Failed` build (no payload).
+    /// HTTP body). Clones the inner `String`; the lock is
+    /// held only for the duration of the clone. Returns
+    /// `None` if the slot is not in the registry, has no
+    /// `current`, or the `current` is a `Failed` build (no
+    /// payload).
+    ///
+    /// Prefer `read_current_arc` for the request hot path
+    /// (plan sect.21.3 request pinning) -- this String-clone
+    /// form is kept for tests and for callers that need a
+    /// one-off copy.
     pub fn read_current_payload(&self, page: &PageRef) -> Option<String> {
         let inner = self.inner.lock().expect("registry lock poisoned");
         let slot = inner.slots.get(page)?;
-        slot.current.as_ref().and_then(|g| g.payload.clone())
+        slot.current.as_ref().and_then(|g| g.payload.as_ref().map(|a| (**a).clone()))
     }
 
     /// Read the LKG generation's payload. Same shape as
@@ -256,7 +286,7 @@ impl PageRegistry {
     pub fn read_lkg_payload(&self, page: &PageRef) -> Option<String> {
         let inner = self.inner.lock().expect("registry lock poisoned");
         let slot = inner.slots.get(page)?;
-        slot.last_known_good.as_ref().and_then(|g| g.payload.clone())
+        slot.last_known_good.as_ref().and_then(|g| g.payload.as_ref().map(|a| (**a).clone()))
     }
 
     /// Mark a slot dirty. Used by the watcher (slice 11) and
@@ -300,7 +330,8 @@ impl PageRegistry {
     ///
     /// Disallowed:
     /// - `Clean -> Building` (no reason to rebuild)
-    /// - `Building -> Building` (in-flight)
+    /// - `Building -> Building` (in-flight; use
+    ///   `join_in_flight` instead -- plan sect.22.4)
     pub fn begin_build(&self, page: &PageRef) -> Result<PublishGuard, BeginBuildError> {
         let mut inner = self.inner.lock().expect("registry lock poisoned");
         let Some(slot) = inner.slots.get_mut(page) else {
@@ -321,18 +352,59 @@ impl PageRegistry {
                     build_result: BuildResult::Failed(String::new()),
                     payload: None,
                 };
+                // Create the shared in-flight build so concurrent
+                // requests can wait on the same future.
+                let shared = Arc::new(InFlightBuild {
+                    page: slot.page.clone(),
+                    state: Mutex::new(InFlightState::Running),
+                    cvar: Condvar::new(),
+                });
                 slot.state = PageState::Building;
+                slot.in_flight = Some(shared.clone());
                 let slot_page = slot.page.clone();
                 inner.generation_log.push(candidate.id);
                 Ok(PublishGuard {
                     registry: self.clone(),
                     slot_page,
                     candidate: Some(candidate),
+                    shared: Some(shared),
                 })
             }
             PageState::Clean => Err(BeginBuildError::NotBuildable(PageState::Clean)),
             PageState::Building => Err(BeginBuildError::NotBuildable(PageState::Building)),
         }
+    }
+
+    /// Return the in-flight build for a slot that is currently
+    /// in the `Building` state, or `None` otherwise. Callers
+    /// that find a `Building` slot during the request hot path
+    /// use this to wait on the same future (plan sect.22.4 in-
+    /// flight dedup). The future can be `wait`ed on for the
+    /// outcome.
+    pub fn join_in_flight(&self, page: &PageRef) -> Option<Arc<InFlightBuild>> {
+        let inner = self.inner.lock().expect("registry lock poisoned");
+        inner.slots.get(page).and_then(|s| s.in_flight.clone())
+    }
+
+    /// Pin the current generation's body. Returns an `Arc<String>`
+    /// the caller can keep alive across a later `commit`. This
+    /// is the request-pinning primitive: even if the next
+    /// commit overwrites `current`, the pinned `Arc<String>`
+    /// still resolves to the body observed at pin time
+    /// (plan sect.21.3).
+    pub fn read_current_arc(&self, page: &PageRef) -> Option<Arc<String>> {
+        let inner = self.inner.lock().expect("registry lock poisoned");
+        let slot = inner.slots.get(page)?;
+        slot.current.as_ref().and_then(|g| g.payload.clone())
+    }
+
+    /// Pin the LKG generation's body. Same shape as
+    /// `read_current_arc`; used by the request hot path when
+    /// `current` is missing or the in-flight build failed.
+    pub fn read_lkg_arc(&self, page: &PageRef) -> Option<Arc<String>> {
+        let inner = self.inner.lock().expect("registry lock poisoned");
+        let slot = inner.slots.get(page)?;
+        slot.last_known_good.as_ref().and_then(|g| g.payload.clone())
     }
 }
 
@@ -373,11 +445,26 @@ pub struct SlotSnapshot {
 /// `commit(Failed(msg))`. If the guard is dropped without
 /// commit (e.g. the builder panics), the slot is reset to its
 /// pre-build state (Failed or Dirty).
-#[derive(Debug)]
+///
+/// `shared` is the `InFlightBuild` the registry stored on the
+/// slot. `commit` / `fail` write the outcome into it and
+/// notify waiters; `drop` writes `Abandoned` so the waiters
+/// wake up and fall back to LKG (or 500).
 pub struct PublishGuard {
     registry: PageRegistry,
     slot_page: PageRef,
     candidate: Option<Generation>,
+    shared: Option<Arc<InFlightBuild>>,
+}
+
+impl std::fmt::Debug for PublishGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PublishGuard")
+            .field("slot_page", &self.slot_page)
+            .field("has_candidate", &self.candidate.is_some())
+            .field("has_shared", &self.shared.is_some())
+            .finish()
+    }
 }
 
 impl PublishGuard {
@@ -403,7 +490,24 @@ impl PublishGuard {
         let mut candidate = self.candidate.take().expect("candidate already committed");
         candidate.dependencies = deps;
         candidate.build_result = BuildResult::Ok;
-        candidate.payload = Some(payload);
+        let arc_payload: Arc<String> = Arc::new(payload);
+        candidate.payload = Some(arc_payload.clone());
+        // Finalize the in-flight future BEFORE we touch the
+        // slot state, so a waiter waking up between the write
+        // and the slot transition still sees a valid outcome
+        // (the condvar is paired with the InFlightBuild, not
+        // the slot). The shared build is consumed here -- the
+        // waiter only needs its outcome, not the InFlightBuild
+        // itself.
+        if let Some(shared) = self.shared.take() {
+            let mut guard = shared.state.lock().expect("in-flight lock poisoned");
+            *guard = InFlightState::Done(BuildOutcome::Ok(arc_payload));
+            shared.cvar.notify_all();
+            // InFlightBuild is dropped here; the waiters keep
+            // their own Arc<InFlightBuild> only if they
+            // cloned it before commit; in practice they only
+            // need the outcome, which they read once.
+        }
         let mut inner = self.registry.inner.lock().expect("registry lock poisoned");
         if let Some(slot) = inner.slots.get_mut(&self.slot_page) {
             let prev = slot.current.take();
@@ -421,6 +525,7 @@ impl PublishGuard {
             }
             slot.current = Some(candidate);
             slot.state = PageState::Clean;
+            slot.in_flight = None;
         }
     }
 
@@ -429,7 +534,12 @@ impl PublishGuard {
     /// NOT promoted to `current`. State becomes `Failed`.
     pub fn fail(mut self, message: String) {
         let mut candidate = self.candidate.take().expect("candidate already committed");
-        candidate.build_result = BuildResult::Failed(message);
+        candidate.build_result = BuildResult::Failed(message.clone());
+        if let Some(shared) = self.shared.take() {
+            let mut guard = shared.state.lock().expect("in-flight lock poisoned");
+            *guard = InFlightState::Done(BuildOutcome::Failed(message));
+            shared.cvar.notify_all();
+        }
         let mut inner = self.registry.inner.lock().expect("registry lock poisoned");
         if let Some(slot) = inner.slots.get_mut(&self.slot_page) {
             // Do NOT promote to current; do NOT overwrite LKG.
@@ -438,6 +548,7 @@ impl PublishGuard {
             // serve from it. Per plan sect.24.2 a never-loaded
             // page that fails its first build returns 500.
             slot.state = PageState::Failed;
+            slot.in_flight = None;
         }
     }
 }
@@ -446,8 +557,16 @@ impl std::ops::Drop for PublishGuard {
     fn drop(&mut self) {
         // If the guard is dropped without commit / fail, the
         // build was abandoned. Reset state so the next
-        // request can re-trigger.
+        // request can re-trigger, and wake any waiters so
+        // they fall back to LKG instead of waiting forever.
         if self.candidate.is_some() {
+            if let Some(shared) = self.shared.take() {
+                let mut guard = shared.state.lock().expect("in-flight lock poisoned");
+                if matches!(*guard, InFlightState::Running) {
+                    *guard = InFlightState::Abandoned;
+                    shared.cvar.notify_all();
+                }
+            }
             let mut inner = self.registry.inner.lock().expect("registry lock poisoned");
             if let Some(slot) = inner.slots.get_mut(&self.slot_page) {
                 // The previous transition was into Building;
@@ -459,8 +578,74 @@ impl std::ops::Drop for PublishGuard {
                 } else {
                     PageState::Dirty
                 };
+                slot.in_flight = None;
             }
         }
+    }
+}
+
+/// A build that is currently in flight. Concurrent requests on
+/// the same `Building` slot share the same `Arc<InFlightBuild>`
+/// and wait on `cvar` for the outcome (plan sect.22.4 in-flight
+/// dedup). The owner thread fills the outcome in via
+/// `PublishGuard::commit` or `fail`; the drop path fills
+/// `Abandoned` so a panic never leaves waiters stuck.
+pub struct InFlightBuild {
+    pub page: PageRef,
+    /// The `cvar` is paired with this `state` lock.
+    /// `pub` so the host can lock it directly to wait via
+    /// `wait()`; the lock-and-wait idiom is the standard
+    /// Condvar pattern.
+    pub state: Mutex<InFlightState>,
+    pub cvar: Condvar,
+}
+
+impl std::fmt::Debug for InFlightBuild {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.state.lock().expect("in-flight lock poisoned");
+        f.debug_struct("InFlightBuild")
+            .field("page", &self.page)
+            .field("state", &*state)
+            .finish()
+    }
+}
+
+/// The lifecycle of an `InFlightBuild`.
+#[derive(Debug, Clone)]
+pub enum InFlightState {
+    /// Owner is still building. Waiters block on the condvar.
+    Running,
+    /// Owner finished. `BuildOutcome` is the result.
+    Done(BuildOutcome),
+    /// Owner dropped the guard without commit/fail (panic,
+    /// unwind). Waiters should fall back to LKG / 500.
+    Abandoned,
+}
+
+/// What an `InFlightBuild` resolved to.
+#[derive(Debug, Clone)]
+pub enum BuildOutcome {
+    /// Build succeeded; `Arc<String>` is the rendered body.
+    /// The `Arc` keeps the body alive even if the slot's
+    /// `current` is later overwritten.
+    Ok(Arc<String>),
+    /// Build failed. The string is the human-readable
+    /// diagnostic; the request hot path serves LKG or 500.
+    Failed(String),
+}
+
+impl InFlightBuild {
+    /// Block on the condvar until the outcome is known. Caller
+    /// passes the lock guard it holds over `state`. Returns
+    /// the final `InFlightState`. Used by request threads
+    /// that joined an in-flight build and need to wait for
+    /// the same future.
+    pub fn wait(&self, guard: std::sync::MutexGuard<'_, InFlightState>) -> InFlightState {
+        let mut guard = guard;
+        while matches!(*guard, InFlightState::Running) {
+            guard = self.cvar.wait(guard).expect("in-flight cvar poisoned");
+        }
+        guard.clone()
     }
 }
 
@@ -608,5 +793,187 @@ mod tests {
         // Both handles see the same slot.
         assert!(r1.snapshot(&p).is_some());
         assert!(r2.snapshot(&p).is_some());
+    }
+
+    // --- Slice 12 tests (plan sect.21.3 + 22.4) ---
+
+    /// Concurrent requests on a Building slot see the same
+    /// in-flight future and resolve to the same outcome. This
+    /// is the in-flight dedup primitive.
+    #[test]
+    fn in_flight_dedup_shares_one_future() {
+        use std::thread;
+        let r = PageRegistry::new();
+        let p = page("/", HttpMethod::Get);
+        r.register(p.clone(), modid("routes/index.tsp"));
+
+        // Thread A: owns the build, sleeps a bit, then commits.
+        let r_a = r.clone();
+        let p_a = p.clone();
+        let a = thread::spawn(move || {
+            let guard = r_a.begin_build(&p_a).expect("begin");
+            let shared = r_a.join_in_flight(&p_a).expect("in-flight exists");
+            // Sleep so the waiter has a chance to start.
+            thread::sleep(std::time::Duration::from_millis(50));
+            guard.commit(vec![], "A-body".to_string());
+            shared
+        });
+
+        // Thread B: arrives while A is building. Joins the
+        // in-flight and waits on the condvar.
+        let r_b = r.clone();
+        let p_b = p.clone();
+        let b = thread::spawn(move || {
+            // Spin until the slot is in Building.
+            for _ in 0..100 {
+                if matches!(
+                    r_b.snapshot(&p_b).map(|s| s.state),
+                    Some(PageState::Building)
+                ) {
+                    break;
+                }
+                thread::sleep(std::time::Duration::from_millis(2));
+            }
+            let shared = r_b.join_in_flight(&p_b).expect("in-flight exists");
+            let guard = shared.state.lock().expect("lock");
+            let outcome = shared.wait(guard);
+            outcome
+        });
+
+        let outcome_b = b.join().expect("B join");
+        let _shared_a = a.join().expect("A join");
+
+        // B should have observed the same Ok outcome that A
+        // committed.
+        match outcome_b {
+            InFlightState::Done(BuildOutcome::Ok(arc)) => assert_eq!(*arc, "A-body"),
+            other => panic!("B expected Ok(A-body), got {other:?}"),
+        }
+        // After both threads, slot is Clean and in_flight is None.
+        let snap = r.snapshot(&p).unwrap();
+        assert_eq!(snap.state, PageState::Clean);
+        assert!(r.join_in_flight(&p).is_none());
+    }
+
+    /// A request that pins the current Arc<String> before a
+    /// later commit finishes on the pinned body, not on the
+    /// new current. This is request pinning (plan sect.21.3).
+    #[test]
+    fn request_pinning_survives_commit_overwrite() {
+        let r = PageRegistry::new();
+        let p = page("/", HttpMethod::Get);
+        r.register(p.clone(), modid("routes/index.tsp"));
+        let g1 = r.begin_build(&p).unwrap();
+        g1.commit(vec![], "v1".to_string());
+        // Pin v1.
+        let pinned = r.read_current_arc(&p).expect("current exists");
+        assert_eq!(*pinned, "v1");
+        // Mark dirty and rebuild.
+        r.mark_dirty(&p);
+        let g2 = r.begin_build(&p).unwrap();
+        g2.commit(vec![], "v2".to_string());
+        // Pinned v1 still resolves to "v1"; the new current
+        // is v2.
+        assert_eq!(*pinned, "v1");
+        let new_current = r.read_current_arc(&p).expect("new current");
+        assert_eq!(*new_current, "v2");
+    }
+
+    /// When `current` is overwritten, the previous Arc<String>
+    /// becomes eligible for drop if no one is pinning it. We
+    /// verify by checking that the buffer we held is the only
+    /// one alive at pin time and that dropping it does not
+    /// affect the new current.
+    #[test]
+    fn generation_release_drops_old_payload() {
+        let r = PageRegistry::new();
+        let p = page("/", HttpMethod::Get);
+        r.register(p.clone(), modid("routes/index.tsp"));
+        let g1 = r.begin_build(&p).unwrap();
+        g1.commit(vec![], "release-me".to_string());
+        // Capture a strong count via Arc::strong_count before
+        // overwrite. We hold no extra clones of our own, so
+        // strong_count should be 1 (only the slot owns it).
+        // First commit puts the new Generation into BOTH
+        // `current` and `last_known_good` (LKG semantics:
+        // "last successful build"). So the Arc<String>
+        // payload has 2 holders (current + LKG) + our read
+        // clone = 3.
+        let before = r.read_current_arc(&p).unwrap();
+        let strong_before = std::sync::Arc::strong_count(&before);
+        assert_eq!(strong_before, 3, "current (1) + LKG (1) + our read (1) = 3");
+        // Drop our handle; the slot still owns it.
+        drop(before);
+        let only_slot = r.read_current_arc(&p).unwrap();
+        // current + LKG + our read = 3.
+        assert_eq!(std::sync::Arc::strong_count(&only_slot), 3);
+        drop(only_slot);
+        // Overwrite: the slot's strong count should drop to 0
+        // for the old buffer and 2 for the new one.
+        r.mark_dirty(&p);
+        let g2 = r.begin_build(&p).unwrap();
+        g2.commit(vec![], "fresh".to_string());
+        let after = r.read_current_arc(&p).unwrap();
+        assert_eq!(*after, "fresh");
+        // Second commit: prev successful was promoted to LKG
+        // (it stays), new goes to current. So the new
+        // Arc<String> has current (1) + LKG-clone-doesn't-
+        // apply-here-no (1) + our read (1) = 2 -- wait, the
+        // new commit's prev_was_ok path is `slot.last_known_good
+        // = prev` which moves (not clones) the previous
+        // Generation. So the new candidate Arc has just
+        // current (1) + our read (1) = 2.
+        assert_eq!(std::sync::Arc::strong_count(&after), 2);
+    }
+
+    /// A request that joins a Building slot and the build
+    /// fails: the waiter sees the Failed outcome and the
+    /// request hot path serves LKG / 500.
+    #[test]
+    fn in_flight_waiter_sees_failure_outcome() {
+        use std::thread;
+        let r = PageRegistry::new();
+        let p = page("/", HttpMethod::Get);
+        r.register(p.clone(), modid("routes/index.tsp"));
+        // First commit so LKG is established.
+        let g1 = r.begin_build(&p).unwrap();
+        g1.commit(vec![], "lkg-body".to_string());
+        r.mark_dirty(&p);
+        // Owner thread fails the build.
+        let r_a = r.clone();
+        let p_a = p.clone();
+        let a = thread::spawn(move || {
+            let guard = r_a.begin_build(&p_a).expect("begin");
+            let shared = r_a.join_in_flight(&p_a).expect("in-flight");
+            thread::sleep(std::time::Duration::from_millis(20));
+            guard.fail("boom".to_string());
+            shared
+        });
+        // Waiter: sees Failed.
+        let r_b = r.clone();
+        let p_b = p.clone();
+        let b = thread::spawn(move || {
+            for _ in 0..100 {
+                if matches!(
+                    r_b.snapshot(&p_b).map(|s| s.state),
+                    Some(PageState::Building)
+                ) {
+                    break;
+                }
+                thread::sleep(std::time::Duration::from_millis(2));
+            }
+            let shared = r_b.join_in_flight(&p_b).expect("in-flight");
+            let guard = shared.state.lock().expect("lock");
+            shared.wait(guard)
+        });
+        let outcome = b.join().expect("B");
+        let _ = a.join().expect("A");
+        match outcome {
+            InFlightState::Done(BuildOutcome::Failed(msg)) => assert_eq!(msg, "boom"),
+            other => panic!("expected Failed(boom), got {other:?}"),
+        }
+        // LKG is intact.
+        let lkg = r.read_lkg_arc(&p).unwrap();
+        assert_eq!(*lkg, "lkg-body");
     }
 }

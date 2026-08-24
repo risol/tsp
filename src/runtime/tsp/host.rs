@@ -1,6 +1,6 @@
-//! TCP listener + request dispatcher for TSP v2 PoC 1 slices 2..10b.
+//! TCP listener + request dispatcher for TSP v2 PoC 1 slices 2..12.
 //!
-//! See `tsp-v2-plan.md` sect.61 Phase 1 + sect.20-21. Responsibilities:
+//! See `tsp-v2-plan.md` sect.61 Phase 1 + sect.20-22. Responsibilities:
 //!
 //! 2. Bind to `0.0.0.0:<port>` (default 3000; override via `TSP_PORT`).
 //! 3. Accept each connection on its own thread.
@@ -13,23 +13,29 @@
 //! 8. Slice 10b: thread the request through `PageRegistry` so a
 //!    page that already built serves from `current.payload`
 //!    without re-running `prepare + execute` on every request.
+//! 9. Slice 12: in-flight dedup (plan sect.22.4) and request
+//!    pinning (plan sect.21.3) on the `Arc<String>` payload.
+//!    Concurrent requests on a Building slot share one build
+//!    future; a request that pinned a body serves that exact
+//!    body even if a later commit overwrites `current` mid-flight.
 //!
-//! Out of slice 10b (deferred to slice 10c):
-//! - In-flight dedup: concurrent requests on a Building slot share
-//!   the build future; for now the second request sees
-//!   `BeginBuildError::NotBuildable(Building)` and falls back to
-//!   LKG (or 503 if no LKG).
-//! - Request pinning: a request that started on generation N
-//!   finishes on N even if N+1 publishes mid-flight.
+//! Out of slice 12 (deferred to slice 13+):
+//! - In-process JSC bridge (plan sect.25.3): replace the
+//!   `bun.exe` subprocess path with `bun_runtime`.
+//! - New-route pickup without restart (the watcher rebuilds
+//!   the module graph on add/remove in slice 12+).
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
-use crate::generation::{self, BeginBuildError, PageRef, PageRegistry, PageState};
+use crate::generation::{
+    self, BeginBuildError, BuildOutcome, InFlightState, PageRef, PageRegistry, PageState,
+};
 use crate::jsc_bridge::BunRuntime;
 use crate::pipeline;
 use crate::router::{HttpMethod, MatchResult, RouteTable};
+use std::sync::Arc;
 
 const DEFAULT_PORT: u16 = 3000;
 
@@ -68,7 +74,7 @@ pub fn serve(
     let addr = format!("{host}:{port}");
     let listener = TcpListener::bind(&addr).map_err(HostError::Bind)?;
     eprintln!(
-        "TSPv2PoC1: listening on http://{addr} (slice 10b, {} route(s) loaded)",
+        "TSPv2PoC1: listening on http://{addr} (slice 12, {} route(s) loaded)",
         routes.len()
     );
 
@@ -167,11 +173,22 @@ fn handle_connection(
     Ok(())
 }
 
-/// Slice 10b dispatch. The page may be Unloaded, Dirty, Clean,
-/// Building, or Failed. We try to read from the registry; on
-/// Unloaded/Dirty we run a synchronous build; on Building we
-/// fall back to LKG; on Failed we fall back to LKG too.
-/// Slice 10c will add real in-flight dedup.
+/// Slice 12 dispatch. The page may be Unloaded, Clean, Dirty,
+/// Building, or Failed. The request hot path uses the new
+/// pinned-payload + in-flight dedup primitives:
+///
+/// - Unloaded/Dirty/Failed: we win the `begin_build` race,
+///   run the pipeline, `commit` the result, pin the
+///   `Arc<String>`, and serve it.
+/// - Building: a sibling request is already building. We
+///   join the shared in-flight future (plan sect.22.4),
+///   wait on the condvar, and either serve the committed
+///   payload or fall back to LKG on failure.
+/// - Clean: pin the current `Arc<String>` and serve. The
+///   pin (plan sect.21.3) means a later commit cannot
+///   retroactively change the body this request observes
+///   -- mid-flight reloads do not corrupt in-progress
+///   responses.
 fn render_for_route(
     route: &crate::router::Route,
     requested: HttpMethod,
@@ -186,15 +203,13 @@ fn render_for_route(
     // the state machine sees the request.
     let snap = registry.snapshot(page_ref);
     if snap.is_none() {
-        // Re-prepare to get the real method set for the
-        // `Allow:` header (cheap for slice 10b; slice 10c
-        // will cache the allow list per route).
         let allow = match crate::page::prepare(route) {
             Ok(p) => build_allow_header(&p.methods),
             Err(_) => String::new(),
         };
         let body = format!(
-            "TSP v2 PoC 1 slice 10b: method {} not exported by {}\n",
+            "TSP v2 PoC 1 slice 12: method {} not exported by {}
+",
             requested.as_str(),
             route.source.display()
         );
@@ -208,112 +223,182 @@ fn render_for_route(
     let state = snap.as_ref().map(|s| s.state.clone()).unwrap_or(PageState::Unloaded);
 
     match state {
-        PageState::Unloaded | PageState::Dirty => {
-            // Build synchronously. The build pipeline (slice 6
-            // bridge + slice 5 prepare) is what fills the
-            // payload; slice 11+ will populate the dependency
-            // list properly.
+        PageState::Unloaded | PageState::Dirty | PageState::Failed => {
+            // Try to win the build race. If we lose (another
+            // thread transitioned us to Building between
+            // snapshot and begin_build), fall through to the
+            // Building branch on the same request -- the
+            // shared future means we still share one build.
             match registry.begin_build(page_ref) {
                 Ok(guard) => {
-                    match pipeline::build(route, requested, bun) {
+                    // We own the build. Run pipeline,
+                    // commit, pin the payload, serve.
+                    let build_result = pipeline::build(route, requested, bun);
+                    match build_result {
                         Ok(body) => {
                             let deps: Vec<crate::module_graph::ModuleId> = Vec::new();
-                            guard.commit(deps, body.clone());
-                            ("HTTP/1.1 200 OK", "text/html; charset=utf-8", None, body)
+                            // commit() consumes guard; payload
+                            // becomes an Arc<String> on the
+                            // new current generation.
+                            guard.commit(deps, body);
+                            // Re-read the pinned Arc from the
+                            // current generation we just
+                            // published. This is the
+                            // request-pinning primitive.
+                            let pinned = registry
+                                .read_current_arc(page_ref)
+                                .expect("post-commit current exists");
+                            serve_arc(200, "OK", pinned)
                         }
                         Err(e) => {
                             let msg = format!("{e}");
-                            guard.fail(msg.clone());
-                            eprintln!("TSPv2PoC1: build error on {}: {e}", route.source.display());
+                            guard.fail(msg);
+                            eprintln!(
+                                "TSPv2PoC1: build error on {}: {e}",
+                                route.source.display()
+                            );
                             (
                                 "HTTP/1.1 500 Internal Server Error",
                                 "text/plain; charset=utf-8",
                                 None,
-                                format!("TSP v2 PoC 1 slice 10b: build error on {}\n  {e}\n", route.source.display()),
+                                format!(
+                                    "TSP v2 PoC 1 slice 12: build error on {}
+  {e}
+",
+                                    route.source.display()
+                                ),
                             )
                         }
                     }
                 }
-                Err(BeginBuildError::NotBuildable(other_state)) => {
-                    // The slot transitioned out of Unloaded /
-                    // Dirty between snapshot and begin_build
-                    // (another thread won the race, or the
-                    // slot was never Unloaded/Dirty to begin
-                    // with). Whatever the cause, the
-                    // authoritative answer is whatever the
-                    // slot's `current` is now. Fall back to
-                    // current.
+                Err(BeginBuildError::NotBuildable(PageState::Building)) => {
+                    // Lost the race. Re-dispatch into the
+                    // Building branch on this same request.
+                    handle_building(route, page_ref, registry)
+                }
+                Err(BeginBuildError::NotBuildable(other)) => {
+                    // Slot transitioned Clean between our
+                    // snapshot and begin_build (watcher race
+                    // + us re-snapshot). Serve current.
                     eprintln!(
-                        "TSPv2PoC1: build race -- snapshot said Unloaded/Dirty, begin_build returned NotBuildable({other_state:?})"
+                        "TSPv2PoC1: build race -- snapshot said Unloaded/Dirty, begin_build returned NotBuildable({other:?})"
                     );
-                    serve_current_or_500(registry, page_ref)
+                    serve_current_pinned_or_500(registry, page_ref)
                 }
-                Err(BeginBuildError::UnknownPage) => {
-                    // Page was not registered. Should be
-                    // caught at boot; treat as 500.
-                    (
-                        "HTTP/1.1 500 Internal Server Error",
-                        "text/plain; charset=utf-8",
-                        None,
-                        "TSP v2 PoC 1 slice 10b: page not registered in PageRegistry\n".to_string(),
-                    )
-                }
+                Err(BeginBuildError::UnknownPage) => (
+                    "HTTP/1.1 500 Internal Server Error",
+                    "text/plain; charset=utf-8",
+                    None,
+                    "TSP v2 PoC 1 slice 12: page not registered in PageRegistry
+".to_string(),
+                ),
             }
         }
-        PageState::Clean => serve_current_or_500(registry, page_ref),
-        PageState::Building => serve_lkg_or_503(registry, page_ref),
-        PageState::Failed => serve_lkg_or_500(registry, page_ref, route),
+        PageState::Building => handle_building(route, page_ref, registry),
+        PageState::Clean => serve_current_pinned_or_500(registry, page_ref),
+        // PageState::Failed is handled in the
+        // Unloaded|Dirty|Failed arm above (a Failed slot
+        // can be rebuilt by begin_build; the failed-then-
+        // succeed transition promotes the new build).
     }
 }
 
-fn serve_current_or_500(
+/// Wait on the shared in-flight build (plan sect.22.4). If
+/// the outcome is Ok, serve the pinned body. If the outcome
+/// is Failed or Abandoned, fall back to LKG.
+fn handle_building(
+    route: &crate::router::Route,
+    page_ref: &PageRef,
+    registry: &PageRegistry,
+) -> (&'static str, &'static str, Option<String>, String) {
+    let Some(shared) = registry.join_in_flight(page_ref) else {
+        // State is Building but the in-flight handle is gone
+        // (shouldn't happen with the current state machine,
+        // but defend against it by serving LKG).
+        return serve_lkg_pinned_or_500(registry, page_ref, route);
+    };
+    let guard = shared.state.lock().expect("in-flight lock poisoned");
+    match shared.wait(guard) {
+        InFlightState::Done(BuildOutcome::Ok(arc)) => {
+            // Pin the Arc<String> we just received. The
+            // request will see this body even if a later
+            // commit overwrites current while we are
+            // writing the response.
+            serve_arc(200, "OK", arc)
+        }
+        InFlightState::Done(BuildOutcome::Failed(msg)) => {
+            eprintln!(
+                "TSPv2PoC1: in-flight build for {} failed: {msg}",
+                route.source.display()
+            );
+            serve_lkg_pinned_or_500(registry, page_ref, route)
+        }
+        InFlightState::Abandoned => {
+            eprintln!(
+                "TSPv2PoC1: in-flight build for {} abandoned (guard dropped)",
+                route.source.display()
+            );
+            serve_lkg_pinned_or_500(registry, page_ref, route)
+        }
+        InFlightState::Running => unreachable!("wait() must observe a terminal state"),
+    }
+}
+
+fn serve_arc(
+    _code: u16,
+    _reason: &'static str,
+    body: Arc<String>,
+) -> (&'static str, &'static str, Option<String>, String) {
+    ("HTTP/1.1 200 OK", "text/html; charset=utf-8", None, (*body).clone())
+}
+
+fn serve_current_pinned_or_500(
     registry: &PageRegistry,
     page_ref: &PageRef,
 ) -> (&'static str, &'static str, Option<String>, String) {
-    match registry.read_current_payload(page_ref) {
-        Some(body) => ("HTTP/1.1 200 OK", "text/html; charset=utf-8", None, body),
+    match registry.read_current_arc(page_ref) {
+        Some(arc) => serve_arc(200, "OK", arc),
         None => (
             "HTTP/1.1 500 Internal Server Error",
             "text/plain; charset=utf-8",
             None,
-            "TSP v2 PoC 1 slice 10b: Clean slot has no payload\n".to_string(),
+            "TSP v2 PoC 1 slice 12: Clean slot has no payload
+".to_string(),
         ),
     }
 }
 
-fn serve_lkg_or_503(
-    registry: &PageRegistry,
-    page_ref: &PageRef,
-) -> (&'static str, &'static str, Option<String>, String) {
-    match registry.read_lkg_payload(page_ref) {
-        Some(body) => ("HTTP/1.1 200 OK", "text/html; charset=utf-8", None, body),
-        None => (
-            "HTTP/1.1 503 Service Unavailable",
-            "text/plain; charset=utf-8",
-            None,
-            "TSP v2 PoC 1 slice 10b: concurrent build in flight, no LKG\n".to_string(),
-        ),
-    }
-}
-
-fn serve_lkg_or_500(
+fn serve_lkg_pinned_or_500(
     registry: &PageRegistry,
     page_ref: &PageRef,
     route: &crate::router::Route,
 ) -> (&'static str, &'static str, Option<String>, String) {
-    match registry.read_lkg_payload(page_ref) {
-        Some(body) => ("HTTP/1.1 200 OK", "text/html; charset=utf-8", None, body),
+    match registry.read_lkg_arc(page_ref) {
+        Some(arc) => serve_arc(200, "OK", arc),
         None => (
             "HTTP/1.1 500 Internal Server Error",
             "text/plain; charset=utf-8",
             None,
             format!(
-                "TSP v2 PoC 1 slice 10b: page {} never built successfully\n",
+                "TSP v2 PoC 1 slice 12: page {} never built successfully
+",
                 route.source.display()
             ),
         ),
     }
 }
+
+// Slice 12 rewrites the legacy helpers:
+//   - serve_current_or_500  ->  serve_current_pinned_or_500
+//   - serve_lkg_or_503      ->  removed (Building no longer 503s;
+//     we share the in-flight build via `handle_building` and
+//     fall back to LKG on failure)
+//   - serve_lkg_or_500      ->  serve_lkg_pinned_or_500
+// All three new helpers live in `render_for_route`'s block
+// above. The hot path uses Arc<String> exclusively so a
+// mid-flight commit cannot change the body an in-progress
+// request observes (plan sect.21.3 request pinning).
+
 
 fn render_405_body(
     route: &crate::router::Route,
