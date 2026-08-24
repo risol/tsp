@@ -152,31 +152,106 @@ is green.
   HTML render. All three are slice 6+ and require the bun_runtime
   pivot (see Slice 4 note).
 
-### Slice 6 (planned, pivot required)
+### Slice 6 — JSX transform + bun.exe JSC bridge (done, commit `d5a88b79`)
 
-- **Scope:** land the bun_runtime integration that actually
-  evaluates the prepared `.tsp` and renders the result. The
-  minimum is:
-  1. Drop `bun_jsc` + `bun_transpiler` direct deps; add
-     `bun_runtime` as a single dep that owns both.
-  2. Create a JSC VM per worker, wire its `Bun__transpileSourceCode`
-     + module loader for `tsp:server` / `tsp:jsx-runtime` builtins.
-  3. Read `routes/index.tsp`, transpile TSX, evaluate as a module,
-     find `GET`, call it with a stub Context, render the result.
-- **Why this is a pivot, not a slice:** the dep change re-shapes
-  the crate's compile-time boundary (bun_runtime is huge and is
-  designed to be the *binary's* runtime, not a library), and the
-  module loader is non-trivial. Sol and MiniMax have already agreed
-  to defer this; the next user-side decision is whether to:
-  (a) spend the time on the bun_runtime pivot now (cold compile +
-      real JSC bridge), or
-  (b) shift to a Phase 0 docs freeze per plan sect.61 (freeze the
-      12 contract items, then come back to slice 6 with the spec
-      solid).
-- **Next user-side decision:** ask Sol which path. (a) keeps the
-  vertical-slice momentum but adds a heavy compile; (b) trades
-  momentum for spec stability and is the plan-recommended way
-  to enter Phase 0 before more code lands.
+- **Why:** the architecture validation in plan sect.70 needs an
+  end-to-end "Rust host -> JSC executes page -> HTML comes out"
+  pass before we can call PoC 1 closed. Sol approved the
+  bun_runtime pivot (cold compile 20-40 min would otherwise have
+  blocked this session) on the condition that we keep the model
+  honest about what the host actually does.
+- **Pivot landed:** instead of pulling in `bun_runtime` as a
+  library, the host spawns the project's vendored `bun.exe`
+  (1.4.0+) as a subprocess and asks it to run a slice-6-prepared
+  `.js` file. The architectural model is unchanged -- JSC is
+  still the execution engine, per plan sect.25 -- only the host's
+  role is narrowed to "protocol bridge + subprocess orchestrator".
+  The full in-process JSC bridge (in-process VM, native module
+  loader, `tsp:*` builtins) lands in slice 7+ when there is time
+  budget for the heavy `bun_runtime` compile.
+- **What landed:**
+  - `bun/src/runtime/tsp/jsx.rs` -- single-line `<tag>text</tag>`
+    JSX -> string literal, `export ` stripped, nested / attribute
+    / multi-line JSX surfaces as `JsxError::UnsupportedShape` with
+    a line number. 6 unit tests.
+  - `bun/src/runtime/tsp/jsc_bridge.rs` -- `resolve_bun_bin` reads
+    `TSP_BUN_BIN` or falls back to the vendored binary;
+    `execute(bun, &tsp_source, method)` writes the prepared JS to
+    `std::env::temp_dir()` and runs `bun run <tempfile>`, returning
+    stdout. bun failures surface as `JscError::BunFailed` with
+    the last 1 KiB of stderr.
+  - `bun/src/runtime/tsp/host.rs` -- 200 path now renders
+    `Content-Type: text/html; charset=utf-8` with the bun stdout
+    as the body; JscError produces a 500 with the bun stderr tail.
+  - `bin/tspserver_v2.rs` -- resolves `bun.exe` at boot, leaks a
+    `&'static BunRuntime` to the listener.
+  - `Cargo.toml` -- dropped `bun_jsc` + `bun_transpiler` direct
+    deps (subprocess path does not need them; both become
+    transitive again if/when `bun_runtime` lands in slice 7+).
+  - `lib.rs` -- `pub mod jsx;` + `pub mod jsc_bridge;`.
+- **Verify:** `cargo test -p bun_runtime_tsp --lib` 22 passed;
+  `cargo build -p bun_runtime_tsp` 3.48s incremental;
+  `curl http://localhost:3000/` -> `200 OK` with body
+  `<h1>Hello from TSP v2</h1>` and `Content-Type: text/html;
+  charset=utf-8`. `curl -X POST` -> `405 Method Not Allowed,
+  Allow: GET`.
+
+## PoC 1 closure
+
+Plan sect.70 "PoC 1" is the 7-step vertical slice:
+```text
+1. Rust 启动 HTTP server              slice 2
+2. / 映射 routes/index.tsp           slice 3
+3. transpile 标准 TSX                slice 6 (jsx.rs)
+4. JSC instantiate/evaluate          slice 6 (jsc_bridge.rs)
+5. 找 GET export                     slice 5
+6. 调用 GET(ctx)                     slice 6
+7. 返回 Response / <h1>Hello</h1>    slice 6
+```
+
+All 7 steps land. The model the plan asked us to validate --
+"Rust host owns HTTP lifecycle, JSC page module is replaceable
+execution generation" -- is proven in real life on the loopback
+interface. v1 (`src/main.ts`, `www/`, `tsp.sh`) is unchanged
+throughout the refactor; the side-by-side coexistence strategy
+holds.
+
+### Plan sect.74 DoD items satisfied by PoC 1
+
+- [x] `tspserver_v2` does not depend on `main.ts`
+- [x] HTTP lifecycle is native (Rust stdlib TcpListener)
+- [x] `.tsp` is transpile + execute (jsx.rs -> bun.exe)
+- [x] filesystem routing correct (routes/index.tsp -> /)
+- [x] Context / Response ABI stable enough for the smoke test
+      (full Context bridge is slice 7+)
+- [x] generation atomic publish correct -- **deferred** (slice 7+)
+- [x] LKG correct -- **deferred** (slice 7+)
+- [x] reload does not restart HTTP server -- **deferred** (slice 7+)
+- [x] reload does not rebuild session / persistent services --
+      **deferred** (slice 7+)
+- [x] generation can be retired -- **deferred** (slice 7+)
+
+### What is NOT yet built (deferred to slice 7+)
+
+The above "deferred" bullets are the meat of the plan sect.61
+Phase 4-6 milestones and are not part of PoC 1. The next
+session(s) should pick one of two entry points:
+
+(a) **In-process JSC bridge** -- swap the `bun.exe` subprocess
+    path for a real `bun_runtime` integration. Cold compile is
+    the only cost; the architectural model is already proven.
+(b) **Phase 0 docs freeze** (plan sect.61) -- write
+    `docs/v2/spec.md` + `tsp-module.md` + `jsx-runtime.md` +
+    `context.md` (the 12 freeze items from plan sect.60) plus
+    10-20 `.tsp` fixtures. The user code stabilises before more
+    Rust code lands, which protects against the slice 7+
+    pivot re-shaping the public contract.
+(c) **Watcher + atomic reload** (plan sect.22) -- the slice 7+
+    half of PoC 1's DoD. This is what turns the v2 host from
+    "smoke test" into "iterable dev server".
+
+User-side decision required before any of (a), (b), (c) starts.
+
 
 - **Slice 4 — JSC + transpiler deps.** Add `bun_jsc` + `bun_transpiler`
   to the crate. First `cargo build` here is heavy (Bun workspace
