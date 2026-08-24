@@ -25,7 +25,7 @@
 //!
 //! Each `mod` is added the slice it lands in.
 
-#![doc = "Slice 10b: build pipeline wired into the request flow."]
+#![doc = "Slice 11: filesystem watcher (polling backend) + lazy reload."]
 
 pub mod pipeline;
 pub mod generation;
@@ -36,3 +36,4 @@ pub mod jsx;
 pub mod module_graph;
 pub mod page;
 pub mod router;
+pub mod watcher;

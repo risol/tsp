@@ -230,6 +230,16 @@ impl PageRegistry {
         })
     }
 
+    /// List every registered `PageRef`. Slice 11's watcher uses
+    /// this to mark all slots dirty on any file change (the
+    /// precise source->PageRef index lands in slice 12); the
+    /// dev-inspector (future slice) uses it to render the page
+    /// table.
+    pub fn all_page_refs(&self) -> Vec<PageRef> {
+        let inner = self.inner.lock().expect("registry lock poisoned");
+        inner.slots.keys().cloned().collect()
+    }
+
     /// Read the current generation's payload (the rendered
     /// HTTP body). Clones the string; the lock is held only
     /// for the duration of the clone. Returns `None` if the
