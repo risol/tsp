@@ -25,3 +25,4 @@ test_*.xlsx
 .docker_build_info
 node_modules/
 .bun-bootstrap/
+.logs/
