@@ -132,7 +132,7 @@ return new Response("Plain text", {
 
 **Binary**:
 ```tsx
-const data = await Deno.readFile("./image.png");
+const data = await Bun.file("./image.png").arrayBuffer();
 return new Response(data, {
   headers: { "Content-Type": "image/png" }
 });
@@ -161,9 +161,9 @@ return new Response("Server Error", { status: 500 });
 
 ```tsx
 // Create readable stream
-const file = await Deno.open("./large-file.txt");
+const file = Bun.file("./large-file.txt");
 
-return new Response(file.readable, {
+return new Response(file.stream(), {
   headers: {
     "Content-Type": "text/plain",
     "Content-Disposition": "attachment; filename=file.txt",

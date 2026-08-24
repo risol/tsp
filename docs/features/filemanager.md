@@ -69,8 +69,8 @@ Complete configuration options:
     // Optional: Allowed path whitelist
     "allowedPaths": ["./www", "./uploads"],
 
-    // Optional: Denied path blacklist (default: [".git", ".deno", "node_modules", ".cache"])
-    "deniedPaths": [".git", ".deno", "node_modules", ".cache"],
+    // Optional: Denied path blacklist (default: [".git", "node_modules", ".cache"])
+    "deniedPaths": [".git", "node_modules", ".cache"],
 
     // Optional: Max upload size (default: 100MB)
     "maxUploadSize": 104857600,
@@ -147,7 +147,7 @@ Complete configuration options:
 
 #### deniedPaths
 - Type: `string[]`
-- Default: `[".git", ".deno", "node_modules", ".cache"]`
+- Default: `[".git", "node_modules", ".cache"]`
 - Description: Denied path blacklist
 - Usage: Any path containing matched patterns will be rejected
 
@@ -495,7 +495,6 @@ Ensure sensitive directories are in the blacklist:
   "fileManager": {
     "deniedPaths": [
       ".git",
-      ".deno",
       "node_modules",
       ".cache",
       ".env",
@@ -763,7 +762,7 @@ Planned feature improvements:
 
 The file manager uses the following technologies:
 
-- **Backend**: Deno + TypeScript
+- **Backend**: Bun + TypeScript
 - **Frontend**: Native HTML + CSS + JavaScript (no framework dependencies)
 - **Authentication**: PBKDF2 password hashing + Session management
 - **Security**: Path validation, CSRF Token, file type checking

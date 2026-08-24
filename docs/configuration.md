@@ -54,7 +54,7 @@ TSP supports setting parameters through configuration files while maintaining th
     "path": "/__filemanager",           // Access path
     "password": "your_password",         // Access password (at least 6 characters)
     "allowOutsideRoot": false,          // Whether to allow access outside root
-    "deniedPaths": [".git", ".deno"],   // Paths to deny access
+    "deniedPaths": [".git", "node_modules"],   // Paths to deny access
     "maxUploadSize": 104857600          // Maximum upload size (bytes)
   }
 }

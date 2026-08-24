@@ -13,7 +13,7 @@ TSP (TypeScript Server Page) is a TypeScript server that executes `.tsp` files d
 ## Core Features
 
 - Direct TSP Execution - execute `.tsp` files without build
-- Hot Reload - via Deno's watch mode
+- Hot Reload - via Bun module invalidation
 - Type Safety - global type declarations, no imports needed
 - Data Validation - schema-first with Zod
 - Dependency Injection - type-safe DI system
@@ -56,7 +56,7 @@ TSP (TypeScript Server Page) is a TypeScript server that executes `.tsp` files d
 
 Version is defined in:
 - `src/version.ts` - `TSP_VERSION`
-- `deno.json:2` - version field
+- `package.json` - version field
 - `CHANGELOG.md` - changelog
 
 ## Critical Architecture Rules

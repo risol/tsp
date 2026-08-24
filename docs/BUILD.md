@@ -157,7 +157,7 @@ ssh user@server
 cd /path/to/deploy
 tar -xzf tspserver-linux.tar.gz
 cd dist
-DENO_DIR=./.deno ./tspserver
+./tspserver
 ```
 
 ## Server Configuration
@@ -190,35 +190,6 @@ Create `config.json` or `config.jsonc` in `dist/`:
 ./tspserver --root ./www --port 9000 --dev
 ```
 
-## Environment Variables
-
-### DENO_DIR
-
-Compiled binaries require setting the `DENO_DIR` environment variable:
-
-```bash
-# Set DENO_DIR to current directory
-export DENO_DIR=./.deno  # Linux/Mac
-set DENO_DIR=./.deno     # Windows CMD
-$env:DENO_DIR="./.deno"  # Windows PowerShell
-
-# Then run the server
-./tspserver
-```
-
-### One-time Setup
-
-```bash
-# Linux/Mac
-DENO_DIR=./.deno ./tspserver
-
-# Windows PowerShell
-$env:DENO_DIR="./.deno"; .\tspserver.exe
-
-# Windows CMD
-set DENO_DIR=./.deno&& tspserver.exe
-```
-
 ## Production Deployment Recommendations
 
 ### 1. Use Process Manager
@@ -236,7 +207,6 @@ After=network.target
 Type=simple
 User=www-data
 WorkingDirectory=/opt/tsp
-Environment="DENO_DIR=./.deno"
 ExecStart=/opt/tsp/tspserver --root ./www --port 9000
 Restart=always
 RestartSec=10
@@ -319,8 +289,7 @@ COPY dist/ /app/
 # Expose port
 EXPOSE 9000
 
-# Set environment variable and start
-ENV DENO_DIR=./.deno
+# Start server
 CMD ["./tspserver", "--root", "./www", "--port", "9000"]
 ```
 
@@ -368,10 +337,10 @@ rm -rf dist/
 
 ## FAQ
 
-### Q: Why is the DENO_DIR environment variable needed?
+### Q: Does the compiled binary need a runtime cache directory?
 
-A: Compiled binaries use Bun. TSP pages remain external files and are loaded by
-the TSP-enabled Bun runtime from the configured `www/` source root.
+A: No. The executable includes Bun. TSP pages remain external files and are
+loaded by the TSP-enabled Bun runtime from the configured `www/` source root.
 
 ### Q: Can I run it on a machine without Bun installed?
 

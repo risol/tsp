@@ -171,7 +171,7 @@
 
     // Denied path blacklist (optional)
     // These paths are not accessible
-    "deniedPaths": [".git", ".deno", "node_modules", ".cache"],
+    "deniedPaths": [".git", "node_modules", ".cache"],
 
     // Maximum upload size in bytes (default: 104857600 = 100MB)
     "maxUploadSize": 104857600,

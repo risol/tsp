@@ -1098,7 +1098,7 @@ interface PageContext {
 
     /**
      * Crypto 加密工具
-     * 基于 Deno 原生 Web Crypto API，提供常用的加密功能
+     * 基于 Web Crypto API，提供常用的加密功能
      *
      * @example
      * ```tsx

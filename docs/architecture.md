@@ -2,7 +2,7 @@
 
 ## Overview
 
-TSP is a Deno-based TypeScript full-stack framework using `.tsp`/`.tsx` file-based routing, supporting in-process hot reload, type-safe dependency injection, and compilable deployment.
+TSP is a Bun-based TypeScript full-stack framework using `.tsp`/`.tsx` file-based routing, supporting in-process hot reload, type-safe dependency injection, and compilable deployment.
 
 ## Core Features
 
@@ -14,11 +14,11 @@ TSP is a Deno-based TypeScript full-stack framework using `.tsp`/`.tsx` file-bas
 
 ## Technology Stack
 
-- **Runtime**: Deno
+- **Runtime**: Bun (TSP-enabled Bun fork)
 - **Language**: TypeScript/TSX
 - **Rendering Engine**: React (18.3.1)
 - **Module Loading**: Custom TSX loader with caching
-- **HTTP Service**: Deno std/http
+- **HTTP Service**: Bun.serve
 
 ## Architecture Design
 
@@ -211,17 +211,17 @@ export function Header({ title }: HeaderProps) {
 # Compile
 ./tsp.sh build:tspserver:rel
 
-# Run (need to set DENO_DIR)
-DENO_DIR=/path/to/.deno ./tspserver --root ./www --port 9000
+# Run
+./tspserver --root ./www --port 9000
 ```
 
 **Advantages after Compilation**:
-- No need to install Deno
+- No need to install Bun
 - Faster startup speed
 - Single file distribution
 
 **Notes**:
-- Need to set `DENO_DIR` environment variable
+- The executable embeds Bun; keep the external `www/` source root alongside it.
 
 ## Performance Optimization
 
@@ -231,7 +231,7 @@ DENO_DIR=/path/to/.deno ./tspserver --root ./www --port 9000
    - File not modified → Reuse cache
    - File modified → Reload
 
-2. **Module Cache**: Deno's module cache
+2. **Module Cache**: Bun's module cache
    - Auto-cache remote dependencies
    - Speed up module loading
 
@@ -361,7 +361,7 @@ A: Use `--dev` mode, files will automatically reload after modification
 ### Q: What platforms can I deploy to?
 
 A:
-- Any platform supporting Deno
+- Any platform supported by Bun
 - Compiled binaries can be deployed to any Linux/Windows/macOS server
 
 ## Future Plans

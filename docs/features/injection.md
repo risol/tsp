@@ -116,7 +116,7 @@ let sessionStore: SessionStore | null = null;
 // Register Session dependency
 registerDep('session', (ctx) => {
   if (!sessionStore) {
-    const secret = Deno.env.get('TSP_SESSION_SECRET');
+    const secret = process.env.TSP_SESSION_SECRET;
     const secretBytes = secret
       ? new TextEncoder().encode(secret)
       : new Uint8Array(32); // Random key for development

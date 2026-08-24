@@ -1,6 +1,6 @@
 # TSP Development Documentation
 
-TSP is a Deno-based TypeScript full-stack framework using `.tsp`/`.tsx` file-based routing, supporting in-process hot reload, type-safe dependency injection, and compilable deployment.
+TSP is a Bun-based TypeScript full-stack framework using `.tsp`/`.tsx` file-based routing, supporting in-process hot reload, type-safe dependency injection, and compilable deployment.
 
 ## Table of Contents
 

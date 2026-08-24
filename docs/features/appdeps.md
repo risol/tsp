@@ -50,7 +50,7 @@ let sessionStore: SessionStore | null = null;
 
 registerDep('session', (ctx) => {
   if (!sessionStore) {
-    const secret = Deno.env.get('TSP_SESSION_SECRET');
+    const secret = process.env.TSP_SESSION_SECRET;
     const secretBytes = secret
       ? new TextEncoder().encode(secret)
       : new Uint8Array(32);
@@ -226,7 +226,7 @@ See: [Cookie Feature Documentation](./cookies.md)
 
 ### Crypto
 
-Crypto provides encryption utilities based on Deno's native Web Crypto API:
+Crypto provides encryption utilities based on the standard Web Crypto API:
 
 ```tsx
 export default Page(async function(ctx, { crypto, response }) {
@@ -834,7 +834,7 @@ declare global {
 // 2. main.ts
 registerDep('api', (ctx) => {
   const baseUrl = 'https://api.example.com';
-  const apiKey = Deno.env.get('API_KEY');
+  const apiKey = process.env.API_KEY;
 
   const request = async <T>(
     method: string,
@@ -891,8 +891,8 @@ registerDep('mailer', (ctx) => {
     host: 'smtp.example.com',
     port: 587,
     auth: {
-      user: Deno.env.get('SMTP_USER'),
-      pass: Deno.env.get('SMTP_PASS'),
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
     },
   });
 
@@ -1010,7 +1010,7 @@ Read configuration from environment variables instead of hardcoding:
 ```typescript
 // ✅ Recommended - Use environment variables
 registerDep('db', (ctx) => {
-  const url = Deno.env.get('DATABASE_URL');
+  const url = process.env.DATABASE_URL;
   if (!url) {
     throw new Error('DATABASE_URL environment variable is required');
   }
@@ -1030,7 +1030,7 @@ Provide good error handling in dependencies:
 ```typescript
 // ✅ Recommended - Provide error handling
 registerDep('api', (ctx) => {
-  const baseUrl = Deno.env.get('API_URL') || 'https://api.example.com';
+  const baseUrl = process.env.API_URL || 'https://api.example.com';
 
   return {
     get: async <T>(url: string) => {
@@ -1175,7 +1175,7 @@ export default Page(async function(ctx, { db, cache }) {
 
 ```typescript
 // tests/unit/my-page_test.ts
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { expect, test } from "bun:test";
 import { registerDep } from "../../src/injection-typed.ts";
 
 // Register test dependencies
@@ -1190,7 +1190,7 @@ registerDep('db', (ctx) => ({
 }));
 
 // Test page
-Deno.test('my page renders correctly', async () => {
+test('my page renders correctly', async () => {
   const ctx = {
     method: 'GET',
     url: new URL('http://localhost:9000/test'),
@@ -1207,8 +1207,8 @@ Deno.test('my page renders correctly', async () => {
   const result = await page.default(ctx);
 
   // Assert results
-  assertStringIncludes(result, 'Test User');
-  assertStringIncludes(result, 'Test Post');
+  expect(result).toContain('Test User');
+  expect(result).toContain('Test Post');
 });
 ```
 

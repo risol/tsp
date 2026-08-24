@@ -283,7 +283,7 @@ You can modify session options in `src/main.ts`:
 const options = {
   ...getDefaultOptions(),
   maxAge: 3600,  // 1 hour (seconds)
-  secret: new TextEncoder().encode(Deno.env.get('TSP_SESSION_SECRET')),
+  secret: new TextEncoder().encode(process.env.TSP_SESSION_SECRET),
   cookieName: 'myapp_session',
   secure: true,
   httpOnly: true,

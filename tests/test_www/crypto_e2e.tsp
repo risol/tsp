@@ -1,6 +1,6 @@
 /**
  * Crypto E2E Test Page - TSP File
- * Test Crypto full functionality (native Deno Web Crypto API)
+ * Test Crypto full functionality (native Web Crypto API)
  */
 
 export default Page(async function(ctx, { crypto, response }) {
