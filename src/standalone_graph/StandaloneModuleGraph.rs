@@ -187,6 +187,122 @@ impl StandaloneModuleGraph {
         self.find_ref(name).is_some()
     }
 
+    /// Resolve the common package entrypoint shapes emitted by `bun build
+    /// --compile`. Package metadata is intentionally not required at runtime:
+    /// the standalone graph already contains the selected entry source and
+    /// its transitive files.
+    pub fn find_package(&self, specifier: &[u8]) -> Option<&[u8]> {
+        if specifier.is_empty()
+            || specifier[0] == b'.'
+            || specifier[0] == b'/'
+            || specifier[0] == b'#'
+            || specifier.contains(&b':')
+        {
+            return None;
+        }
+
+        let mut base = Vec::with_capacity(
+            BASE_PUBLIC_PATH_WITH_DEFAULT_SUFFIX.len() + b"node_modules/".len() + specifier.len(),
+        );
+        base.extend_from_slice(BASE_PUBLIC_PATH_WITH_DEFAULT_SUFFIX.as_bytes());
+        base.extend_from_slice(b"node_modules/");
+        base.extend_from_slice(specifier);
+
+        let mut candidates: Vec<Vec<u8>> = Vec::with_capacity(16);
+        let mut add = |suffix: &[u8]| {
+            let mut candidate = Vec::with_capacity(base.len() + suffix.len());
+            candidate.extend_from_slice(&base);
+            candidate.extend_from_slice(suffix);
+            candidates.push(candidate);
+        };
+
+        let has_known_extension = specifier.ends_with(b".js")
+            || specifier.ends_with(b".mjs")
+            || specifier.ends_with(b".cjs")
+            || specifier.ends_with(b".ts")
+            || specifier.ends_with(b".tsx");
+        if has_known_extension {
+            add(b"");
+        }
+
+        add(b".node.js");
+        add(b".server.js");
+        add(b".browser.js");
+        add(b".js");
+        add(b".mjs");
+        add(b".cjs");
+        add(b"/index.js");
+        add(b"/index.mjs");
+        add(b"/index.cjs");
+        add(b"/index.ts");
+        add(b"/index.tsx");
+        add(b"/lib/index.js");
+        add(b"/dist/index.js");
+
+        for candidate in &candidates {
+            if let Some(file) = self.lookup_file(candidate) {
+                return Some(file.name);
+            }
+        }
+
+        // The graph key may use a target-specific virtual-root spelling that
+        // differs from the resolver's public base path. Match the package
+        // portion independently of that prefix, normalizing both slash
+        // conventions used by Windows standalone graphs.
+        for candidate in &candidates {
+            let candidate_suffix = if let Some(index) = candidate.windows(13).position(|part| {
+                part == b"/node_modules/"
+            }) {
+                &candidate[index..]
+            } else {
+                candidate.as_slice()
+            };
+            let mut windows_candidate_suffix = candidate_suffix.to_vec();
+            for byte in &mut windows_candidate_suffix {
+                if *byte == b'/' {
+                    *byte = b'\\';
+                }
+            }
+            for name in self.files.keys() {
+                if name.ends_with(candidate_suffix) || name.ends_with(&windows_candidate_suffix) {
+                    return Some(name);
+                }
+            }
+        }
+
+        // Package export maps often select names such as `server.node.js`.
+        // Prefer a direct file below the requested package subpath, with a
+        // stable extension preference when several variants are embedded.
+        let mut prefix = base;
+        prefix.push(b'.');
+        let mut best: Option<(&[u8], usize, usize)> = None;
+        for name in self.files.keys() {
+            if !name.starts_with(&prefix) {
+                continue;
+            }
+            let score = if name.ends_with(b".node.js") {
+                0
+            } else if name.ends_with(b".server.js") {
+                1
+            } else if name.ends_with(b".js") {
+                2
+            } else if name.ends_with(b".mjs") {
+                3
+            } else if name.ends_with(b".cjs") {
+                4
+            } else {
+                continue;
+            };
+            let length = name.len();
+            if best.map_or(true, |(_, best_score, best_length)| {
+                (score, length) < (best_score, best_length)
+            }) {
+                best = Some((name, score, length));
+            }
+        }
+        best.map(|(name, _, _)| name)
+    }
+
     pub fn stat(&self, name: &[u8]) -> Option<Stat> {
         if !is_bun_standalone_file_path(name) {
             return None;
@@ -307,6 +423,10 @@ impl bun_resolver::StandaloneModuleGraph for StandaloneModuleGraph {
 
     fn find(&self, name: &[u8]) -> Option<&[u8]> {
         self.find_ref(name).map(|f| f.name)
+    }
+
+    fn find_package(&self, specifier: &[u8]) -> Option<&[u8]> {
+        Self::find_package(self, specifier)
     }
 
     fn base_public_path_with_default_suffix(&self) -> &'static [u8] {

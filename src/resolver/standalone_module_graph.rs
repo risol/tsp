@@ -17,6 +17,10 @@ pub trait StandaloneModuleGraph: Send + Sync {
     /// first) and return the embedded file's canonical name slice if present.
     /// Spec `StandaloneModuleGraph.find`.
     fn find(&self, name: &[u8]) -> Option<&[u8]>;
+    /// Resolve a bare package specifier against the embedded module graph.
+    /// This is used by external TSP pages whose imports originate outside
+    /// the compiled application's filesystem tree.
+    fn find_package(&self, specifier: &[u8]) -> Option<&[u8]>;
     /// `StandaloneModuleGraph.base_public_path_with_default_suffix` — the
     /// virtual-root prefix used for embedded modules (e.g. `/$bunfs/root/`).
     /// Baked-in `'static` constant; surfaced here so low-tier callers

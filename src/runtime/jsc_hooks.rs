@@ -3869,6 +3869,79 @@ fn get_hardcoded_module(
     }
 }
 
+const TSP_REACT_SOURCE: &[u8] = br#"
+const m = globalThis.__tspBuiltins.react;
+export default m;
+export const Children = m.Children;
+export const Component = m.Component;
+export const Fragment = m.Fragment;
+export const Profiler = m.Profiler;
+export const PureComponent = m.PureComponent;
+export const StrictMode = m.StrictMode;
+export const Suspense = m.Suspense;
+export const __SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED = m.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED;
+export const cloneElement = m.cloneElement;
+export const createContext = m.createContext;
+export const createElement = m.createElement;
+export const createFactory = m.createFactory;
+export const createRef = m.createRef;
+export const forwardRef = m.forwardRef;
+export const isValidElement = m.isValidElement;
+export const lazy = m.lazy;
+export const memo = m.memo;
+export const startTransition = m.startTransition;
+export const unstable_act = m.unstable_act;
+export const useCallback = m.useCallback;
+export const useContext = m.useContext;
+export const useDebugValue = m.useDebugValue;
+export const useDeferredValue = m.useDeferredValue;
+export const useEffect = m.useEffect;
+export const useId = m.useId;
+export const useImperativeHandle = m.useImperativeHandle;
+export const useInsertionEffect = m.useInsertionEffect;
+export const useLayoutEffect = m.useLayoutEffect;
+export const useMemo = m.useMemo;
+export const useReducer = m.useReducer;
+export const useRef = m.useRef;
+export const useState = m.useState;
+export const useSyncExternalStore = m.useSyncExternalStore;
+export const useTransition = m.useTransition;
+export const version = m.version;
+"#;
+
+const TSP_REACT_JSX_RUNTIME_SOURCE: &[u8] = br#"
+const m = globalThis.__tspBuiltins.reactJsxRuntime;
+export const Fragment = m.Fragment;
+export const jsx = m.jsx;
+export const jsxs = m.jsxs;
+"#;
+
+const TSP_REACT_JSX_DEV_RUNTIME_SOURCE: &[u8] = br#"
+const m = globalThis.__tspBuiltins.reactJsxDevRuntime;
+export const Fragment = m.Fragment;
+export const jsxDEV = m.jsxDEV;
+"#;
+
+const TSP_REACT_DOM_SERVER_SOURCE: &[u8] = br#"
+const m = globalThis.__tspBuiltins.reactDomServer;
+export default m;
+export const renderToPipeableStream = m.renderToPipeableStream;
+export const renderToReadableStream = m.renderToReadableStream;
+export const renderToStaticMarkup = m.renderToStaticMarkup;
+export const renderToString = m.renderToString;
+export const version = m.version;
+"#;
+
+fn tsp_embedded_builtin_source(specifier: &[u8]) -> Option<&'static [u8]> {
+    match specifier {
+        b"tsp:embedded/react" => Some(TSP_REACT_SOURCE),
+        b"tsp:embedded/react/jsx-runtime" => Some(TSP_REACT_JSX_RUNTIME_SOURCE),
+        b"tsp:embedded/react/jsx-dev-runtime" => Some(TSP_REACT_JSX_DEV_RUNTIME_SOURCE),
+        b"tsp:embedded/react-dom/server" => Some(TSP_REACT_DOM_SERVER_SOURCE),
+        _ => None,
+    }
+}
+
 /// `ModuleLoader.fetchBuiltinModule(jsc_vm, specifier)` — `HardcodedModule`
 /// lookup + macro-namespace + standalone-module-graph probe; also covers the
 /// `Bun__fetchBuiltinModule` export wrapper.
@@ -3887,6 +3960,19 @@ unsafe fn fetch_builtin_module(
     // the common case (`ZigStringSlice` drops without freeing).
     let spec_utf8 = specifier.to_utf8();
     let spec = spec_utf8.slice();
+
+    if let Some(source_code) = tsp_embedded_builtin_source(spec) {
+        unsafe {
+            *out = ErrorableResolvedSource::ok(ResolvedSource {
+                source_code: bun_core::String::static_(source_code),
+                specifier: specifier.dupe_ref(),
+                source_url: specifier.dupe_ref(),
+                source_code_needs_deref: false,
+                ..ResolvedSource::default()
+            });
+        }
+        return FetchBuiltinResult::Found;
+    }
 
     // ── HardcodedModule fast path ───────────────────────────────────────
     if let Some(&hardcoded) = HardcodedModule::MAP.get(spec) {

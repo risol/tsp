@@ -3270,6 +3270,17 @@ fn normalize_specifier_for_resolution<'a>(
     }
 }
 
+#[inline]
+fn tsp_embedded_builtin_path(specifier: &[u8]) -> Option<&'static [u8]> {
+    match specifier {
+        b"react" => Some(b"tsp:embedded/react"),
+        b"react/jsx-runtime" => Some(b"tsp:embedded/react/jsx-runtime"),
+        b"react/jsx-dev-runtime" => Some(b"tsp:embedded/react/jsx-dev-runtime"),
+        b"react-dom/server" => Some(b"tsp:embedded/react-dom/server"),
+        _ => None,
+    }
+}
+
 /// Heap-backed so only a pointer lives in TLS; see test/js/bun/binary/tls-segment-size.
 #[thread_local]
 static SPECIFIER_CACHE_RESOLVER_BUF: core::cell::Cell<*mut bun_paths::PathBuffer> =
@@ -4428,8 +4439,46 @@ impl VirtualMachine {
                 global_cache,
             ) {
                 ResultUnion::Success(r) => break r,
-                ResultUnion::Failure(e) => return Err(e.into()),
+                ResultUnion::Failure(e) => {
+                    // A standalone page may import a package that was
+                    // bundled into the executable, while the filesystem
+                    // resolver reports a package-json or package lookup
+                    // failure for the external page directory. Give the
+                    // embedded graph a chance before surfacing that error.
+                    if matches!(e, bun_resolver::Error::ModuleNotFound) {
+                        if let Some(graph) = self.standalone_module_graph {
+                            if let Some(path) = graph.find_package(normalized_specifier) {
+                                ret.query_string =
+                                    unsafe { bun_ptr::detach_lifetime(query_string) };
+                                ret.path = self.dupe_resolved_path(path);
+                                ret.result = None;
+                                return Ok(());
+                            }
+                        }
+                    }
+                    if let Some(path) = tsp_embedded_builtin_path(normalized_specifier) {
+                        ret.query_string = unsafe { bun_ptr::detach_lifetime(query_string) };
+                        ret.path = path;
+                        ret.result = None;
+                        return Ok(());
+                    }
+                    return Err(e.into());
+                }
                 ResultUnion::Pending(_) | ResultUnion::NotFound => {
+                    if let Some(graph) = self.standalone_module_graph {
+                        if let Some(path) = graph.find_package(normalized_specifier) {
+                            ret.query_string = unsafe { bun_ptr::detach_lifetime(query_string) };
+                            ret.path = self.dupe_resolved_path(path);
+                            ret.result = None;
+                            return Ok(());
+                        }
+                    }
+                    if let Some(path) = tsp_embedded_builtin_path(normalized_specifier) {
+                        ret.query_string = unsafe { bun_ptr::detach_lifetime(query_string) };
+                        ret.path = path;
+                        ret.result = None;
+                        return Ok(());
+                    }
                     if !retry_on_not_found {
                         return Err(crate::CrateError::ModuleNotFound);
                     }
