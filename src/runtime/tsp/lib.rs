@@ -21,8 +21,10 @@
 //! mod jsc_bridge;    // JSC + TSX transpile + execute
 //! ```
 //!
-//! All modules are `pub(super)` for now; the binary is the only consumer
-//! until Slice 4 wires up the real JSC bridge. The exact set of `mod`
-//! declarations here is the per-slice progress marker.
+//! Each `mod` is added the slice it lands in. Slice 1: library shell;
+//! slice 2 lands the listener; slice 3 lands the router; slice 4 lands
+//! the JSC bridge; etc.
 
-#![doc = "Slice 1: layout + boot stub. See `bin/tspserver_v2.rs` for the entry point."]
+#![doc = "Slice 2: stdlib TCP listener + 404. See `host.rs` for the entry point."]
+
+pub mod host;
