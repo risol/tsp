@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 本仓库用于试验和验证 TSP 开发流程。
 
