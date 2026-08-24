@@ -6,7 +6,9 @@
 import {
   assertEquals,
   assertExists,
-} from "https://deno.land/std@0.210.0/testing/asserts.ts";
+} from "./asserts.ts";
+import { test } from "bun:test";
+import { runtime } from "../../src/runtime/platform.ts";
 import {
   getMimeType,
   isStaticFileAllowed,
@@ -53,17 +55,17 @@ const DEFAULT_EXTENSIONS = [
  */
 async function setupTestFiles() {
   // Create test directory
-  await Deno.mkdir(TEST_DIR, { recursive: true });
+  await runtime.mkdir(TEST_DIR, { recursive: true });
 
   // Create various test files
-  await Deno.writeTextFile(TEST_FILES.css, "body { color: red; }");
-  await Deno.writeTextFile(TEST_FILES.js, "console.log('test');");
-  await Deno.writeTextFile(TEST_FILES.txt, "test content");
-  await Deno.writeTextFile(TEST_FILES.html, "<html></html>");
+  await runtime.writeTextFile(TEST_FILES.css, "body { color: red; }");
+  await runtime.writeTextFile(TEST_FILES.js, "console.log('test');");
+  await runtime.writeTextFile(TEST_FILES.txt, "test content");
+  await runtime.writeTextFile(TEST_FILES.html, "<html></html>");
 
   // Create a fake image file (binary)
   const pngData = new Uint8Array([0x89, 0x50, 0x4e, 0x47]); // PNG signature
-  await Deno.writeFile(TEST_FILES.png, pngData);
+  await runtime.writeFile(TEST_FILES.png, pngData);
 }
 
 /**
@@ -71,98 +73,98 @@ async function setupTestFiles() {
  */
 async function cleanupTestFiles() {
   try {
-    await Deno.remove(TEST_DIR, { recursive: true });
+    await runtime.remove(TEST_DIR, { recursive: true });
   } catch {
     // Directory does not exist, ignore
   }
 }
 
-Deno.test("static - getMimeType: CSS file", () => {
+test("static - getMimeType: CSS file", () => {
   const mimeType = getMimeType("style.css");
   assertEquals(mimeType, "text/css; charset=utf-8");
 });
 
-Deno.test("static - getMimeType: JavaScript file", () => {
+test("static - getMimeType: JavaScript file", () => {
   const mimeType = getMimeType("app.js");
   assertEquals(mimeType, "application/javascript; charset=utf-8");
 });
 
-Deno.test("static - getMimeType: JSON file", () => {
+test("static - getMimeType: JSON file", () => {
   const mimeType = getMimeType("data.json");
   assertEquals(mimeType, "application/json; charset=utf-8");
 });
 
-Deno.test("static - getMimeType: PNG image", () => {
+test("static - getMimeType: PNG image", () => {
   const mimeType = getMimeType("image.png");
   assertEquals(mimeType, "image/png");
 });
 
-Deno.test("static - getMimeType: JPG image", () => {
+test("static - getMimeType: JPG image", () => {
   const mimeType = getMimeType("photo.jpg");
   assertEquals(mimeType, "image/jpeg");
 });
 
-Deno.test("static - getMimeType: JPEG image", () => {
+test("static - getMimeType: JPEG image", () => {
   const mimeType = getMimeType("photo.jpeg");
   assertEquals(mimeType, "image/jpeg");
 });
 
-Deno.test("static - getMimeType: SVG image", () => {
+test("static - getMimeType: SVG image", () => {
   const mimeType = getMimeType("icon.svg");
   assertEquals(mimeType, "image/svg+xml");
 });
 
-Deno.test("static - getMimeType: ICO icon", () => {
+test("static - getMimeType: ICO icon", () => {
   const mimeType = getMimeType("favicon.ico");
   assertEquals(mimeType, "image/x-icon");
 });
 
-Deno.test("static - getMimeType: WOFF font", () => {
+test("static - getMimeType: WOFF font", () => {
   const mimeType = getMimeType("font.woff");
   assertEquals(mimeType, "font/woff");
 });
 
-Deno.test("static - getMimeType: WOFF2 font", () => {
+test("static - getMimeType: WOFF2 font", () => {
   const mimeType = getMimeType("font.woff2");
   assertEquals(mimeType, "font/woff2");
 });
 
-Deno.test("static - getMimeType: text file", () => {
+test("static - getMimeType: text file", () => {
   const mimeType = getMimeType("readme.txt");
   assertEquals(mimeType, "text/plain; charset=utf-8");
 });
 
-Deno.test("static - getMimeType: Markdown file", () => {
+test("static - getMimeType: Markdown file", () => {
   const mimeType = getMimeType("doc.md");
   assertEquals(mimeType, "text/markdown; charset=utf-8");
 });
 
-Deno.test("static - getMimeType: unknown type", () => {
+test("static - getMimeType: unknown type", () => {
   const mimeType = getMimeType("file.unknown");
   assertEquals(mimeType, "application/octet-stream");
 });
 
-Deno.test("static - isStaticFileAllowed: allowed extensions", () => {
+test("static - isStaticFileAllowed: allowed extensions", () => {
   const allowed = isStaticFileAllowed("style.css", DEFAULT_EXTENSIONS);
   assertEquals(allowed, true);
 });
 
-Deno.test("static - isStaticFileAllowed: disallowed extensions", () => {
+test("static - isStaticFileAllowed: disallowed extensions", () => {
   const allowed = isStaticFileAllowed("page.tsx", DEFAULT_EXTENSIONS);
   assertEquals(allowed, false);
 });
 
-Deno.test("static - isStaticFileAllowed: empty list", () => {
+test("static - isStaticFileAllowed: empty list", () => {
   const allowed = isStaticFileAllowed("style.css", []);
   assertEquals(allowed, false);
 });
 
-Deno.test("static - isStaticFileAllowed: case insensitive", () => {
+test("static - isStaticFileAllowed: case insensitive", () => {
   const allowed = isStaticFileAllowed("IMAGE.PNG", DEFAULT_EXTENSIONS);
   assertEquals(allowed, true);
 });
 
-Deno.test("static - serveStaticFile: read CSS file", async () => {
+test("static - serveStaticFile: read CSS file", async () => {
   await setupTestFiles();
 
   try {
@@ -187,7 +189,7 @@ Deno.test("static - serveStaticFile: read CSS file", async () => {
   }
 });
 
-Deno.test("static - serveStaticFile: read JS file", async () => {
+test("static - serveStaticFile: read JS file", async () => {
   await setupTestFiles();
 
   try {
@@ -208,7 +210,7 @@ Deno.test("static - serveStaticFile: read JS file", async () => {
   }
 });
 
-Deno.test("static - serveStaticFile: read text file", async () => {
+test("static - serveStaticFile: read text file", async () => {
   await setupTestFiles();
 
   try {
@@ -233,7 +235,7 @@ Deno.test("static - serveStaticFile: read text file", async () => {
   }
 });
 
-Deno.test("static - serveStaticFile: dev mode no cache", async () => {
+test("static - serveStaticFile: dev mode no cache", async () => {
   await setupTestFiles();
 
   try {
@@ -257,7 +259,7 @@ Deno.test("static - serveStaticFile: dev mode no cache", async () => {
   }
 });
 
-Deno.test("static - serveStaticFile: disallowed file type", async () => {
+test("static - serveStaticFile: disallowed file type", async () => {
   await setupTestFiles();
 
   try {
@@ -274,7 +276,7 @@ Deno.test("static - serveStaticFile: disallowed file type", async () => {
   }
 });
 
-Deno.test("static - serveStaticFile: file not found", async () => {
+test("static - serveStaticFile: file not found", async () => {
   await setupTestFiles();
 
   try {
@@ -291,7 +293,7 @@ Deno.test("static - serveStaticFile: file not found", async () => {
   }
 });
 
-Deno.test("static - serveStaticFileWithCache: ETag validation", async () => {
+test("static - serveStaticFileWithCache: ETag validation", async () => {
   await setupTestFiles();
 
   try {
@@ -327,7 +329,7 @@ Deno.test("static - serveStaticFileWithCache: ETag validation", async () => {
   }
 });
 
-Deno.test("static - serveStaticFileWithCache: If-Modified-Since validation", async () => {
+test("static - serveStaticFileWithCache: If-Modified-Since validation", async () => {
   await setupTestFiles();
 
   try {
@@ -365,7 +367,7 @@ Deno.test("static - serveStaticFileWithCache: If-Modified-Since validation", asy
   }
 });
 
-Deno.test("static - serveStaticFileWithCache: dev mode does not use cache", async () => {
+test("static - serveStaticFileWithCache: dev mode does not use cache", async () => {
   await setupTestFiles();
 
   try {
@@ -390,7 +392,7 @@ Deno.test("static - serveStaticFileWithCache: dev mode does not use cache", asyn
   }
 });
 
-Deno.test("static - MIME type: all default supported types", () => {
+test("static - MIME type: all default supported types", () => {
   const testCases = [
     ["file.html", "text/html; charset=utf-8"],
     ["file.css", "text/css; charset=utf-8"],

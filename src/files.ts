@@ -3,7 +3,8 @@
  * Provides multipart/form-data parsing and file saving functionality
  */
 
-import { join } from "std/path";
+import { join } from "node:path";
+import { runtime } from "./runtime/platform.ts";
 import { nanoid } from "nanoid";
 
 /**
@@ -43,7 +44,7 @@ export function createUploadedFile(
      * @param path - Target path (can be relative or absolute)
      */
     async save(path: string): Promise<void> {
-      await Deno.writeFile(path, this.data);
+      await runtime.writeFile(path, this.data);
     },
 
     /**

@@ -1,10 +1,11 @@
 /**
  * Archive file service module
- * Wraps @deno-library/compress library, provides extract and compress functionality
+ * Wraps the npm `compressing` library for archive operations.
  */
 
-import { zip, tar, tgz } from "@deno-library/compress";
-import { join, basename, dirname } from "std/path";
+import compressing from "compressing";
+import { join, basename, dirname } from "node:path";
+import { runtime } from "../runtime/platform.ts";
 import type { ArchiveType } from "./types.ts";
 
 /**
@@ -20,13 +21,13 @@ export async function extractArchive(
 ): Promise<void> {
   switch (type) {
     case "zip":
-      await zip.uncompress(archivePath, targetDir);
+      await compressing.zip.uncompress(archivePath, targetDir);
       break;
     case "tar":
-      await tar.uncompress(archivePath, targetDir);
+      await compressing.tar.uncompress(archivePath, targetDir);
       break;
     case "tgz":
-      await tgz.uncompress(archivePath, targetDir);
+      await compressing.tgz.uncompress(archivePath, targetDir);
       break;
     default:
       throw new Error(`Unsupported archive format: ${type}`);
@@ -50,13 +51,16 @@ export async function compressToZip(
 
   if (sourcePaths.length === 1) {
     // Single file/directory compression
-    await zip.compress(sourcePaths[0], targetPath, {
-      excludeSrc: !options?.includeSrc,
-    });
+    const sourceStat = await runtime.stat(sourcePaths[0]);
+    await (sourceStat.isDirectory
+      ? compressing.zip.compressDir(sourcePaths[0], targetPath, {
+          includeParentDir: options?.includeSrc ?? false,
+        })
+      : compressing.zip.compressFile(sourcePaths[0], targetPath));
   } else {
     // Multiple file compression: create temp directory
     const tempDir = join(dirname(targetPath), ".temp_" + Date.now());
-    await Deno.mkdir(tempDir, { recursive: true });
+    await runtime.mkdir(tempDir, { recursive: true });
 
     try {
       // Copy all files to temp directory
@@ -65,21 +69,21 @@ export async function compressToZip(
         const destPath = join(tempDir, fileName);
 
         // Check if source path is file or directory
-        const stat = await Deno.stat(sourcePath);
+        const stat = await runtime.stat(sourcePath);
         if (stat.isDirectory) {
           // Recursively copy directory
           await copyDirectory(sourcePath, destPath);
         } else {
           // Copy file
-          await Deno.copyFile(sourcePath, destPath);
+          await runtime.copyFile(sourcePath, destPath);
         }
       }
 
       // Compress temp directory
-      await zip.compress(tempDir, targetPath, { excludeSrc: true });
+      await compressing.zip.compressDir(tempDir, targetPath, { includeParentDir: false });
     } finally {
       // Clean up temp directory
-      await Deno.remove(tempDir, { recursive: true });
+      await runtime.remove(tempDir, { recursive: true });
     }
   }
 }
@@ -90,16 +94,16 @@ export async function compressToZip(
  * @param dest Target directory path
  */
 async function copyDirectory(src: string, dest: string): Promise<void> {
-  await Deno.mkdir(dest, { recursive: true });
+  await runtime.mkdir(dest, { recursive: true });
 
-  for await (const entry of Deno.readDir(src)) {
+  for await (const entry of runtime.readDir(src)) {
     const srcPath = join(src, entry.name);
     const destPath = join(dest, entry.name);
 
     if (entry.isDirectory) {
       await copyDirectory(srcPath, destPath);
     } else {
-      await Deno.copyFile(srcPath, destPath);
+      await runtime.copyFile(srcPath, destPath);
     }
   }
 }
@@ -112,7 +116,7 @@ async function copyDirectory(src: string, dest: string): Promise<void> {
  */
 export async function getArchiveSize(archivePath: string): Promise<number> {
   try {
-    const stat = await Deno.stat(archivePath);
+    const stat = await runtime.stat(archivePath);
     return stat.size;
   } catch {
     return 0;
@@ -128,13 +132,13 @@ export async function getDirectorySize(dirPath: string): Promise<number> {
   let totalSize = 0;
 
   try {
-    for await (const entry of Deno.readDir(dirPath)) {
+    for await (const entry of runtime.readDir(dirPath)) {
       const entryPath = join(dirPath, entry.name);
 
       if (entry.isDirectory) {
         totalSize += await getDirectorySize(entryPath);
       } else {
-        const stat = await Deno.stat(entryPath);
+        const stat = await runtime.stat(entryPath);
         totalSize += stat.size;
       }
     }
@@ -155,7 +159,7 @@ export async function getTotalSize(paths: string[]): Promise<number> {
 
   for (const path of paths) {
     try {
-      const stat = await Deno.stat(path);
+      const stat = await runtime.stat(path);
 
       if (stat.isDirectory) {
         totalSize += await getDirectorySize(path);

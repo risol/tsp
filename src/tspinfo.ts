@@ -4,8 +4,13 @@
  */
 
 import { getRegisteredDeps } from "./injection-typed.ts";
-import { join } from "std/path";
+import { join } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { runtime } from "./runtime/platform.ts";
 import type { Logger } from "./logger.ts";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * TSP info interface
@@ -174,8 +179,8 @@ export class TspInfo {
     return {
       server: {
         tspVersion: this.tspVersion,
-        architecture: Deno.build.arch,
-        target: Deno.build.target,
+        architecture: runtime.build.arch,
+        target: runtime.build.target,
       },
       config: {
         root: this.config.root,
@@ -202,10 +207,10 @@ export class TspInfo {
           heapUsedFormatted: this.formatBytes(memoryUsage.heapUsed),
           externalFormatted: this.formatBytes(memoryUsage.external),
         },
-        pid: Deno.pid,
-        ppid: Deno.ppid,
-        cwd: Deno.cwd(),
-        execPath: Deno.execPath(),
+        pid: runtime.pid,
+        ppid: runtime.ppid,
+        cwd: runtime.cwd(),
+        execPath: runtime.execPath,
       },
       system: systemInfo,
       envVars,
@@ -543,7 +548,7 @@ export class TspInfo {
     <!-- Footer -->
     <div class="footer">
       <p>TSP Server - TypeScript Server Page</p>
-      <p style="margin-top: 5px; opacity: 0.8;">Built with Deno + TSX + React</p>
+      <p style="margin-top: 5px; opacity: 0.8;">Built with Bun + TSX + React</p>
     </div>
   </div>
 </body>
@@ -590,7 +595,7 @@ export class TspInfo {
     heapUsed: number;
     external: number;
   } {
-    // Deno doesn't provide detailed memory info, return estimated values
+    // Use the portable process memory shape available in Bun/Node.
     try {
       // Try to use performance API
       if (typeof performance !== "undefined" && (performance as any).memory) {
@@ -628,7 +633,7 @@ export class TspInfo {
     memTotal: number;
     memTotalFormatted: string;
   }> {
-    const hostname = Deno.hostname?.() || "unknown";
+    const hostname = runtime.hostname() || "unknown";
 
     // Logical CPU cores (including hyper-threading)
     const logicalCpus = navigator.hardwareConcurrency || 4;
@@ -647,8 +652,8 @@ export class TspInfo {
     }
 
     return {
-      platform: Deno.build.os,
-      osVersion: Deno.build.os + " " + Deno.build.arch,
+      platform: runtime.build.os,
+      osVersion: runtime.build.os + " " + runtime.build.arch,
       hostname,
       cpus: {
         physical: physicalCpus,
@@ -666,13 +671,13 @@ export class TspInfo {
     try {
       let command: string;
 
-      if (Deno.build.os === "windows") {
+      if (runtime.build.os === "win32") {
         // Windows: Use WMIC to get physical core count
         command = "wmic cpu get NumberOfCores";
-      } else if (Deno.build.os === "linux") {
+      } else if (runtime.build.os === "linux") {
         // Linux: Read /proc/cpuinfo
         command = "grep '^core id' /proc/cpuinfo | sort -u | wc -l";
-      } else if (Deno.build.os === "darwin") {
+      } else if (runtime.build.os === "darwin") {
         // macOS: Use sysctl
         command = "sysctl -n hw.physicalcpu";
       } else {
@@ -680,18 +685,14 @@ export class TspInfo {
         return Math.ceil((navigator.hardwareConcurrency || 4) / 2);
       }
 
-      const process = new Deno.Command("sh", {
-        args: ["-c", command],
-        stdout: "piped",
-        stderr: "piped",
-      });
+      const shell = runtime.build.os === "win32" ? "cmd.exe" : "sh";
+      const args = runtime.build.os === "win32" ? ["/c", command] : ["-c", command];
+      const { stdout } = await execFileAsync(shell, args, { encoding: "utf8" });
 
-      const { stdout, code } = await process.output();
+      if (stdout) {
+        const output = stdout.trim();
 
-      if (code === 0) {
-        const output = new TextDecoder().decode(stdout).trim();
-
-        if (Deno.build.os === "windows") {
+        if (runtime.build.os === "win32") {
           // Windows output format: handle multiple lines, find numbers
           const lines = output.split(/\r?\n/);
           for (const line of lines) {
@@ -723,7 +724,7 @@ export class TspInfo {
 
     // Safe environment variable prefixes
     const safePrefixes = [
-      "DENO_",
+      "BUN_",
       "NODE_ENV",
       "PATH",
       "HOME",
@@ -733,7 +734,7 @@ export class TspInfo {
       "TZ",
     ];
 
-    for (const [key, value] of Object.entries(Deno.env)) {
+    for (const [key, value] of Object.entries(runtime.env)) {
       // Check if it's a safe variable
       const isSafe = safePrefixes.some((prefix) => key.startsWith(prefix)) ||
         !key.match(/PASSWORD|SECRET|KEY|TOKEN|PRIVATE/i);

@@ -1,0 +1,3 @@
+# TSP pages are loaded by the TSP-enabled Bun runtime from the real filesystem.
+# Do not enable Bun's process-level --hot reload for page graphs.
+logLevel = "info"

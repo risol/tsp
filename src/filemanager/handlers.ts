@@ -3,7 +3,8 @@
  * Implements all file operation API endpoints
  */
 
-import { join, dirname, basename } from "std/path";
+import { join, dirname, basename } from "node:path";
+import { isAlreadyExists, runtime, type DirEntry } from "../runtime/platform.ts";
 import type {
   FileManagerConfig,
   FileInfo,
@@ -68,7 +69,7 @@ function createErrorResponse(message: string, status: number = 400): Response {
  * Read file info from path
  */
 async function getFileInfo(path: string): Promise<FileInfo> {
-  const stat = await Deno.stat(path);
+  const stat = await runtime.stat(path);
   const name = basename(path);
   const lastDotIndex = name.lastIndexOf(".");
 
@@ -194,14 +195,14 @@ export async function handleBrowseAPI(
     const targetPath = validation.normalizedPath!;
 
     // Check if it's a directory
-    const stat = await Deno.stat(targetPath);
+  const stat = await runtime.stat(targetPath);
     if (!stat.isDirectory) {
       return createErrorResponse("Path is not a directory", 400);
     }
 
     // Read directory contents
-    const entries: Deno.DirEntry[] = [];
-    for await (const entry of Deno.readDir(targetPath)) {
+  const entries: DirEntry[] = [];
+  for await (const entry of runtime.readDir(targetPath)) {
       entries.push(entry);
     }
 
@@ -209,7 +210,7 @@ export async function handleBrowseAPI(
     const files: FileInfo[] = [];
     for (const entry of entries) {
       const entryPath = join(targetPath, entry.name);
-      const entryStat = await Deno.stat(entryPath);
+    const entryStat = await runtime.stat(entryPath);
 
       // Skip hidden files (starting with dot)
       if (entry.name.startsWith(".")) {
@@ -274,7 +275,7 @@ export async function handleUploadAPI(
     }
 
     // Check if it's a directory
-    const stat = await Deno.stat(validation.normalizedPath!);
+  const stat = await runtime.stat(validation.normalizedPath!);
     if (!stat.isDirectory) {
       return createErrorResponse("Target path is not a directory", 400);
     }
@@ -309,7 +310,7 @@ export async function handleUploadAPI(
     const targetPath = join(validation.normalizedPath!, file.name);
     const arrayBuffer = await file.arrayBuffer();
     const uint8Array = new Uint8Array(arrayBuffer);
-    await Deno.writeFile(targetPath, uint8Array);
+    await runtime.writeFile(targetPath, uint8Array);
 
     return createJSONResponse({
       success: true,
@@ -348,16 +349,16 @@ export async function handleDownloadAPI(
     const targetPath = validation.normalizedPath!;
 
     // Check if it's a file
-    const stat = await Deno.stat(targetPath);
+  const stat = await runtime.stat(targetPath);
     if (stat.isDirectory) {
       return createErrorResponse("Cannot download directory", 400);
     }
 
     // Read file
-    const fileContent = await Deno.readFile(targetPath);
+  const fileContent = await runtime.readFile(targetPath);
     const filename = basename(targetPath);
 
-    return new Response(fileContent, {
+    return new Response(fileContent as unknown as BodyInit, {
       status: 200,
       headers: {
         "Content-Type": "application/octet-stream",
@@ -403,11 +404,11 @@ export async function handleDeleteAPI(
     }
 
     // Delete file or directory
-    const stat = await Deno.stat(targetPath);
+  const stat = await runtime.stat(targetPath);
     if (stat.isDirectory) {
-      await Deno.remove(targetPath, { recursive: true });
+      await runtime.remove(targetPath, { recursive: true });
     } else {
-      await Deno.remove(targetPath);
+      await runtime.remove(targetPath);
     }
 
     return createJSONResponse({
@@ -461,7 +462,7 @@ export async function handleRenameAPI(
     }
 
     // Rename
-    await Deno.rename(body.oldPath, targetPath);
+    await runtime.rename(body.oldPath, targetPath);
 
     return createJSONResponse({
       success: true,
@@ -506,20 +507,20 @@ export async function handleMkdirAPI(
     }
 
     // Check if parent path is a directory
-    const parentStat = await Deno.stat(parentValidation.normalizedPath!);
+  const parentStat = await runtime.stat(parentValidation.normalizedPath!);
     if (!parentStat.isDirectory) {
       return createErrorResponse("Parent path is not a directory", 400);
     }
 
     // Create directory
-    await Deno.mkdir(targetPath);
+    await runtime.mkdir(targetPath);
 
     return createJSONResponse({
       success: true,
       data: { message: "Directory created successfully" },
     });
   } catch (error) {
-    if (error instanceof Deno.errors.AlreadyExists) {
+    if (isAlreadyExists(error)) {
       return createErrorResponse("Directory already exists", 409);
     }
     return createErrorResponse(
@@ -580,7 +581,7 @@ export async function handleExtractAPI(
     const archivePath = archiveValidation.normalizedPath!;
 
     // Check if file exists
-    const archiveStat = await Deno.stat(archivePath);
+  const archiveStat = await runtime.stat(archivePath);
     if (archiveStat.isDirectory) {
       return createErrorResponse("Cannot extract directory", 400);
     }
@@ -623,7 +624,7 @@ export async function handleExtractAPI(
 
     // Ensure target directory exists
     try {
-      await Deno.mkdir(normalizedTargetDir, { recursive: true });
+      await runtime.mkdir(normalizedTargetDir, { recursive: true });
     } catch {
       // Ignore already exists error
     }
@@ -695,7 +696,7 @@ export async function handleCompressAPI(
 
     // Check if target file already exists
     try {
-      await Deno.stat(targetPath);
+      await runtime.stat(targetPath);
       return createErrorResponse("Target file already exists", 409);
     } catch {
       // File doesn't exist, can continue
@@ -767,7 +768,7 @@ export async function handleBatchMoveAPI(
 
     // Check if target directory exists and is a directory
     try {
-      const targetStat = await Deno.stat(normalizedTargetDir);
+  const targetStat = await runtime.stat(normalizedTargetDir);
       if (!targetStat.isDirectory) {
         return createErrorResponse("Target path is not a directory", 400);
       }
@@ -788,7 +789,7 @@ export async function handleBatchMoveAPI(
 
         // Check if target already exists
         try {
-          await Deno.stat(targetPath);
+          await runtime.stat(targetPath);
           results.failed.push({
             path: sourcePath,
             error: "Target already exists",
@@ -799,7 +800,7 @@ export async function handleBatchMoveAPI(
         }
 
         // Move file or directory
-        await Deno.rename(sourcePath, targetPath);
+          await runtime.rename(sourcePath, targetPath);
         results.success.push(sourcePath);
       } catch (error) {
         results.failed.push({

@@ -21,6 +21,7 @@ import {
   Fragment,
   cloneElement,
   createElement,
+  type ReactElement,
   type ReactNode,
 } from "react";
 
@@ -163,7 +164,7 @@ export function HtmxFragment(props: HtmxFragmentProps): ReactNode {
  * Type guard for React elements. We avoid a hard dep on `react` types
  * beyond the named imports above so this file stays portable.
  */
-function isElement(value: unknown): value is { type: unknown; props: Record<string, unknown> } {
+function isElement(value: unknown): value is ReactElement<Record<string, unknown>> {
   return typeof value === "object" && value !== null && "type" in (value as object) &&
     "props" in (value as object);
 }

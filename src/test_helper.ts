@@ -5,6 +5,8 @@
  * No additional tools needed, write tests directly in TSX
  */
 
+import { isNotFound, runtime } from "./runtime/platform.ts";
+
 /**
  * Test result type
  */
@@ -510,7 +512,7 @@ class TestHelperImpl implements TestHelper {
 
     // Ensure snapshot directory exists
     try {
-      await Deno.mkdir(snapshotDir, { recursive: true });
+      await runtime.mkdir(snapshotDir, { recursive: true });
     } catch {
       // Directory may already exist
     }
@@ -519,13 +521,13 @@ class TestHelperImpl implements TestHelper {
 
     if (update) {
       // Update mode: write new snapshot
-      await Deno.writeTextFile(snapshotFile, expectedValue);
+      await runtime.writeTextFile(snapshotFile, expectedValue);
       return;
     }
 
     try {
       // Read snapshot file
-      const snapshot = await Deno.readTextFile(snapshotFile);
+      const snapshot = await runtime.readTextFile(snapshotFile);
 
       if (snapshot !== expectedValue) {
         throw new Error(
@@ -535,10 +537,10 @@ class TestHelperImpl implements TestHelper {
           `Tip: Use testHelper.assertSnapshot("${name}", value, true) to update the snapshot.`
         );
       }
-    } catch (error) {
-      if (error instanceof Deno.errors.NotFound) {
+      } catch (error) {
+        if (isNotFound(error)) {
         // Snapshot doesn't exist, create new snapshot
-        await Deno.writeTextFile(snapshotFile, expectedValue);
+          await runtime.writeTextFile(snapshotFile, expectedValue);
         throw new Error(
           `Snapshot "${name}" created. Run test again to verify.`
         );

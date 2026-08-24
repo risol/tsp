@@ -7,9 +7,10 @@ import {
   assertEquals,
   assertExists,
   assertStringIncludes,
-} from "https://deno.land/std@0.210.0/testing/asserts.ts";
+} from "./asserts.ts";
+import { test } from "bun:test";
 import { type Config, logAccess } from "../../src/main.ts";
-
+import { runtime } from "../../src/runtime/platform.ts";
 // Temporary log file paths for testing
 const TEST_LOG_FILE = "./test_access.log";
 const TEST_LOG_FILE_2 = "./test_access_2.log";
@@ -19,13 +20,13 @@ const TEST_LOG_FILE_2 = "./test_access_2.log";
  */
 async function cleanupTestLog(filepath: string) {
   try {
-    await Deno.remove(filepath);
+    await runtime.remove(filepath);
   } catch {
     // File does not exist, ignore
   }
 }
 
-Deno.test("access log - logAccess: console output (default config)", async () => {
+test("access log - logAccess: console output (default config)", async () => {
   const config: Config = {
     root: "./www",
     port: 9000,
@@ -50,7 +51,7 @@ Deno.test("access log - logAccess: console output (default config)", async () =>
   assertEquals(true, true);
 });
 
-Deno.test("access log - logAccess: file output - basic request", async () => {
+test("access log - logAccess: file output - basic request", async () => {
   await cleanupTestLog(TEST_LOG_FILE);
 
   const config: Config = {
@@ -72,7 +73,7 @@ Deno.test("access log - logAccess: file output - basic request", async () => {
   await logAccess(request, response, config);
 
   // Read log file
-  const logContent = await Deno.readTextFile(TEST_LOG_FILE);
+  const logContent = await runtime.readTextFile(TEST_LOG_FILE);
   const logLines = logContent.trim().split("\n");
 
   // Verify log content
@@ -92,7 +93,7 @@ Deno.test("access log - logAccess: file output - basic request", async () => {
   await cleanupTestLog(TEST_LOG_FILE);
 });
 
-Deno.test("access log - logAccess: file output - multiple appends", async () => {
+test("access log - logAccess: file output - multiple appends", async () => {
   await cleanupTestLog(TEST_LOG_FILE_2);
 
   const config: Config = {
@@ -131,7 +132,7 @@ Deno.test("access log - logAccess: file output - multiple appends", async () => 
   );
 
   // Read log file
-  const logContent = await Deno.readTextFile(TEST_LOG_FILE_2);
+  const logContent = await runtime.readTextFile(TEST_LOG_FILE_2);
   const logLines = logContent.trim().split("\n");
 
   // Verify three log lines
@@ -159,7 +160,7 @@ Deno.test("access log - logAccess: file output - multiple appends", async () => 
   await cleanupTestLog(TEST_LOG_FILE_2);
 });
 
-Deno.test("access log - logAccess: no User-Agent", async () => {
+test("access log - logAccess: no User-Agent", async () => {
   await cleanupTestLog(TEST_LOG_FILE);
 
   const config: Config = {
@@ -179,7 +180,7 @@ Deno.test("access log - logAccess: no User-Agent", async () => {
   await logAccess(request, response, config);
 
   // Read log file
-  const logContent = await Deno.readTextFile(TEST_LOG_FILE);
+  const logContent = await runtime.readTextFile(TEST_LOG_FILE);
 
   // Verify log contains "-" as User-Agent placeholder
   assertStringIncludes(logContent, '"-"');
@@ -188,7 +189,7 @@ Deno.test("access log - logAccess: no User-Agent", async () => {
   await cleanupTestLog(TEST_LOG_FILE);
 });
 
-Deno.test("access log - logAccess: various HTTP methods", async () => {
+test("access log - logAccess: various HTTP methods", async () => {
   await cleanupTestLog(TEST_LOG_FILE);
 
   const config: Config = {
@@ -220,7 +221,7 @@ Deno.test("access log - logAccess: various HTTP methods", async () => {
   }
 
   // Read log file
-  const logContent = await Deno.readTextFile(TEST_LOG_FILE);
+  const logContent = await runtime.readTextFile(TEST_LOG_FILE);
   const logLines = logContent.trim().split("\n");
 
   // Verify all methods are logged
@@ -234,7 +235,7 @@ Deno.test("access log - logAccess: various HTTP methods", async () => {
   await cleanupTestLog(TEST_LOG_FILE);
 });
 
-Deno.test("access log - logAccess: various status codes", async () => {
+test("access log - logAccess: various status codes", async () => {
   await cleanupTestLog(TEST_LOG_FILE);
 
   const config: Config = {
@@ -258,7 +259,7 @@ Deno.test("access log - logAccess: various status codes", async () => {
   }
 
   // Read log file
-  const logContent = await Deno.readTextFile(TEST_LOG_FILE);
+  const logContent = await runtime.readTextFile(TEST_LOG_FILE);
   const logLines = logContent.trim().split("\n");
 
   // Verify all status codes are logged
@@ -272,7 +273,7 @@ Deno.test("access log - logAccess: various status codes", async () => {
   await cleanupTestLog(TEST_LOG_FILE);
 });
 
-Deno.test("access log - logAccess: path contains query parameters", async () => {
+test("access log - logAccess: path contains query parameters", async () => {
   await cleanupTestLog(TEST_LOG_FILE);
 
   const config: Config = {
@@ -295,7 +296,7 @@ Deno.test("access log - logAccess: path contains query parameters", async () => 
   await logAccess(request, response, config);
 
   // Read log file
-  const logContent = await Deno.readTextFile(TEST_LOG_FILE);
+  const logContent = await runtime.readTextFile(TEST_LOG_FILE);
 
   // Verify path is recorded (note: only pathname is logged, query parameters are not included)
   // According to current implementation, only pathname is recorded
@@ -305,7 +306,7 @@ Deno.test("access log - logAccess: path contains query parameters", async () => 
   await cleanupTestLog(TEST_LOG_FILE);
 });
 
-Deno.test("access log - logAccess: complex User-Agent", async () => {
+test("access log - logAccess: complex User-Agent", async () => {
   await cleanupTestLog(TEST_LOG_FILE);
 
   const config: Config = {
@@ -328,7 +329,7 @@ Deno.test("access log - logAccess: complex User-Agent", async () => {
   await logAccess(request, response, config);
 
   // Read log file
-  const logContent = await Deno.readTextFile(TEST_LOG_FILE);
+  const logContent = await runtime.readTextFile(TEST_LOG_FILE);
 
   // Verify complete User-Agent is logged
   assertStringIncludes(logContent, userAgent);

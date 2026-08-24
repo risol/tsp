@@ -3,13 +3,14 @@
  * Tests security checks in src/router.ts
  */
 
-import { assertEquals } from "https://deno.land/std@0.210.0/testing/asserts.ts";
+import { assertEquals } from "./asserts.ts";
+import { test } from "bun:test";
+import { runtime } from "../../src/runtime/platform.ts";
 import { resolvePath, securityCheck } from "../../src/router.ts";
-
 // Use paths relative to project root
 const TEST_ROOT = "./www";
 
-Deno.test("security - securityCheck: path traversal attack protection", async () => {
+test("security - securityCheck: path traversal attack protection", async () => {
   const testPaths = [
     "../../../etc/passwd",
     "../secret.tsx",
@@ -26,7 +27,7 @@ Deno.test("security - securityCheck: path traversal attack protection", async ()
   }
 });
 
-Deno.test("security - securityCheck: non-whitelist files", async () => {
+test("security - securityCheck: non-whitelist files", async () => {
   const testPaths = [
     "www/config.json",
     "www/data.txt",
@@ -48,7 +49,7 @@ Deno.test("security - securityCheck: non-whitelist files", async () => {
   }
 });
 
-Deno.test("security - securityCheck: normal files pass", async () => {
+test("security - securityCheck: normal files pass", async () => {
   // Note: Only .tsp files pass security check
   const validPaths = [
     "www/index.tsp",
@@ -59,7 +60,7 @@ Deno.test("security - securityCheck: normal files pass", async () => {
   for (const filepath of validPaths) {
     // Check if file actually exists
     try {
-      await Deno.stat(filepath);
+      await runtime.stat(filepath);
     } catch {
       console.log(`Skip non-existent file: ${filepath}`);
       continue;
@@ -74,7 +75,7 @@ Deno.test("security - securityCheck: normal files pass", async () => {
   }
 });
 
-Deno.test("security - securityCheck: relative path traversal", async () => {
+test("security - securityCheck: relative path traversal", async () => {
   const attackPaths = [
     "./../../../etc/passwd",
     "..././etc/passwd",
@@ -90,7 +91,7 @@ Deno.test("security - securityCheck: relative path traversal", async () => {
   }
 });
 
-Deno.test("security - securityCheck: URL encoding bypass", async () => {
+test("security - securityCheck: URL encoding bypass", async () => {
   const encodedPaths = [
     "%2e%2e%2fetc/passwd", // ../etc/passwd
     "..%252f..%252f..%252fetc/passwd", // Double encoding

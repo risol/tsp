@@ -1,4 +1,4 @@
-import mysql from "npm:mysql2@^2.3.3/promise";
+import mysql from "mysql2/promise";
 
 /**
  * MySQL client implementation class

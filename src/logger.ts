@@ -4,7 +4,8 @@
  * Supports log rotation (by size, by date, compression)
  */
 
-import { join, dirname } from "std/path";
+import { join, dirname } from "node:path";
+import { runtime } from "./runtime/platform.ts";
 import { LogRotator, type RotationConfig } from "./logger-rotation.ts";
 
 /**
@@ -164,8 +165,8 @@ class LogWriter {
       // Normal write (no rotation)
       try {
         const logDir = dirname(this.filepath);
-        await Deno.mkdir(logDir, { recursive: true });
-        await Deno.writeTextFile(this.filepath, message + "\n", {
+        await runtime.mkdir(logDir, { recursive: true });
+        await runtime.writeTextFile(this.filepath, message + "\n", {
           append: true,
         });
       } catch (error) {
@@ -186,9 +187,9 @@ async function writeToFile(
   try {
     // Ensure directory exists before each write
     const logDir = dirname(filepath);
-    await Deno.mkdir(logDir, { recursive: true });
+    await runtime.mkdir(logDir, { recursive: true });
 
-    await Deno.writeTextFile(filepath, message + "\n", { append: true });
+    await runtime.writeTextFile(filepath, message + "\n", { append: true });
   } catch (error) {
     console.error(`Failed to write to log file: ${error}`);
   }

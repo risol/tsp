@@ -25,3 +25,5 @@ test_*.xlsx
 
 .docker_build_info
 /deno-tsp
+node_modules/
+.bun-bootstrap/

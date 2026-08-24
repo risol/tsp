@@ -1,4 +1,4 @@
-import ExcelJS from "npm:exceljs@^4.4.0";
+import ExcelJS from "exceljs";
 
 /**
  * ExcelJS factory function

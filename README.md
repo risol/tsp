@@ -131,7 +131,7 @@ cd tsp-linux-x64
 
 ### Option 2: Build from Source
 
-If you want to build from source, you need Rust and C build tools:
+If you want to build from source, install Bun or the TSP-enabled Bun fork:
 
 ```bash
 # Clone the repository (with submodules)
@@ -141,9 +141,8 @@ cd tsp
 # Or if already cloned, init submodules
 git submodule update --init --recursive
 
-# Build deno-tsp runtime
-sh ./tsp.sh build:denort
-sh ./tsp.sh build:deno
+# Install npm dependencies
+bun install
 
 # Start development server
 sh ./tsp.sh dev
@@ -192,11 +191,9 @@ Key features:
 
 ## Build from Source (Advanced)
 
-Most users should download pre-built releases instead. Building from source requires:
+Most users should download pre-built releases instead. Building from source requires Bun:
 
-- Rust toolchain
-- C compiler (gcc/clang)
-- For Linux static builds: sysroot (auto-downloaded)
+- Bun 1.x or the TSP-enabled Bun fork
 
 ```bash
 # Build release binary for current platform
@@ -209,7 +206,8 @@ sh ./tsp.sh build:tspserver:dev
 sh ./tsp.sh build:tspserver:rel
 ```
 
-Build output is in the `dist/` directory.
+Build output is in `dist/bun/`. The compiled executable loads `www/` from the
+real filesystem; do not use `bun --hot` for TSP page reloads.
 
 ## Docker Test Services
 
@@ -223,5 +221,6 @@ See [DOCKER_SERVICES.md](docker/DOCKER_SERVICES.md)
 - [Development Guide](./docs/development.md) - Development setup
 - [Configuration](./docs/configuration.md) - Server configuration
 - [Features](./docs/features/readme.md) - Feature documentation
+- [Bun migration boundary](./docs/bun-migration.md) - Bun runtime and page-loader contract
 - [Testing](./docs/testing/readme.md) - Testing guide
 - [Changelog](./docs/changelog.md) - Version change log

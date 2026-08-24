@@ -111,7 +111,7 @@ class SessionStore {
   private secret: Uint8Array;
   private options: Required<SessionOptions>;
   private cryptoKey: CryptoKey | null = null;
-  private cleanupTimer: number | null = null;
+  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private logger: Logger | undefined;
 
   constructor(options: SessionOptions, logger?: Logger) {

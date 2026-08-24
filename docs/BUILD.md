@@ -49,9 +49,8 @@ This command will:
 # Build release version (alias)
 ./tsp.sh build:tspserver:rel
 
-# First build deno-tsp (required)
-./tsp.sh build:denort
-./tsp.sh build:deno
+# Bun (or the TSP-enabled Bun fork) is required before building.
+bun install
 ```
 
 ## Build Output
@@ -371,18 +370,20 @@ rm -rf dist/
 
 ### Q: Why is the DENO_DIR environment variable needed?
 
-A: Compiled binaries need the Deno runtime to handle module caching and dynamic imports. `DENO_DIR` specifies the cache directory location.
+A: Compiled binaries use Bun. TSP pages remain external files and are loaded by
+the TSP-enabled Bun runtime from the configured `www/` source root.
 
-### Q: Can I run it on a machine without Deno installed?
+### Q: Can I run it on a machine without Bun installed?
 
-A: The Deno runtime must be installed. The binary contains your application code but depends on the Deno runtime environment.
+A: The compiled executable includes the Bun runtime. A TSP-enabled Bun build is
+required when using external `.tsp` pages and targeted page reloads.
 
 ### Q: How to reduce binary file size?
 
 A: You can use the `--no-remote` option to avoid embedding remote modules:
 
 ```bash
-deno compile --no-remote --allow-net --allow-read --allow-write --allow-env --output tspserver src/main.ts
+bun build src/main.ts --compile --outfile tspserver
 ```
 
 Note: This requires network connectivity on the target machine to download dependencies.

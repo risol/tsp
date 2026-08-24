@@ -3,7 +3,8 @@
  * Responsible for serving static files
  */
 
-import { extname } from "std/path";
+import { extname } from "node:path";
+import { isNotFound, runtime } from "./runtime/platform.ts";
 
 /**
  * MIME type mapping table
@@ -82,6 +83,14 @@ async function generateETag(
   return `"${hex}-${mtime}"`;
 }
 
+function toResponseBody(content: Uint8Array): BodyInit {
+  return content as unknown as BodyInit;
+}
+
+function toArrayBuffer(content: Uint8Array): ArrayBuffer {
+  return content.slice().buffer as ArrayBuffer;
+}
+
 /**
  * Serve static file
  * @param filepath File path
@@ -101,7 +110,7 @@ export async function serveStaticFile(
 
   try {
     // Read file info
-    const stat = await Deno.stat(filepath);
+    const stat = await runtime.stat(filepath);
 
     // Reject directories
     if (stat.isDirectory) {
@@ -109,7 +118,7 @@ export async function serveStaticFile(
     }
 
     // Read file content
-    const content = await Deno.readFile(filepath);
+    const content = await runtime.readFile(filepath);
 
     // Get MIME type
     const mimeType = getMimeType(filepath);
@@ -127,20 +136,20 @@ export async function serveStaticFile(
     } else {
       // Production mode: use caching strategy
       const mtime = stat.mtime?.getTime() || 0;
-      const etag = await generateETag(content.buffer, mtime);
+      const etag = await generateETag(toArrayBuffer(content), mtime);
 
       headers["ETag"] = etag;
       headers["Last-Modified"] = new Date(mtime).toUTCString();
       headers["Cache-Control"] = "public, max-age=86400"; // 1 day
     }
 
-    return new Response(content, {
+    return new Response(toResponseBody(content), {
       status: 200,
       headers,
     });
   } catch (error) {
     // File does not exist or read error
-    if (error instanceof Deno.errors.NotFound) {
+    if (isNotFound(error)) {
       return null;
     }
     throw error;
@@ -168,7 +177,7 @@ export async function serveStaticFileWithCache(
 
   try {
     // Read file info
-    const stat = await Deno.stat(filepath);
+    const stat = await runtime.stat(filepath);
 
     // Reject directories
     if (stat.isDirectory) {
@@ -176,14 +185,14 @@ export async function serveStaticFileWithCache(
     }
 
     // Read file content
-    const content = await Deno.readFile(filepath);
+    const content = await runtime.readFile(filepath);
 
     // Get MIME type
     const mimeType = getMimeType(filepath);
 
     // Development mode: disable caching
     if (isDev) {
-      return new Response(content, {
+      return new Response(toResponseBody(content), {
         status: 200,
         headers: {
           "Content-Type": mimeType,
@@ -196,7 +205,7 @@ export async function serveStaticFileWithCache(
 
     // Production mode: use ETag and Last-Modified
     const mtime = stat.mtime?.getTime() || 0;
-    const etag = await generateETag(content.buffer, mtime);
+    const etag = await generateETag(toArrayBuffer(content), mtime);
     const lastModified = new Date(mtime).toUTCString();
 
     // Check If-None-Match (ETag)
@@ -229,7 +238,7 @@ export async function serveStaticFileWithCache(
     }
 
     // Return file content
-    return new Response(content, {
+    return new Response(toResponseBody(content), {
       status: 200,
       headers: {
         "Content-Type": mimeType,
@@ -240,7 +249,7 @@ export async function serveStaticFileWithCache(
     });
   } catch (error) {
     // File does not exist or read error
-    if (error instanceof Deno.errors.NotFound) {
+    if (isNotFound(error)) {
       return null;
     }
     throw error;

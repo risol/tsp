@@ -6,7 +6,8 @@
 import {
   assertEquals,
   assertExists,
-} from "https://deno.land/std@0.210.0/testing/asserts.ts";
+} from "./asserts.ts";
+import { test } from "bun:test";
 import { type InternalPageContext, type PageContext } from "../../src/context.ts";
 import {
   getRegisteredDeps,
@@ -31,7 +32,7 @@ function createMockContext(pathname: string = "/"): InternalPageContext {
   };
 }
 
-Deno.test("injection - registerDep: register single dependency", () => {
+test("injection - registerDep: register single dependency", () => {
   const testFn = () => "test";
   registerDep("testFunc" as never, testFn as never);
 
@@ -42,7 +43,7 @@ Deno.test("injection - registerDep: register single dependency", () => {
   unregisterDep("testFunc" as never);
 });
 
-Deno.test("injection - registerDep: register multiple dependencies", () => {
+test("injection - registerDep: register multiple dependencies", () => {
   registerDep("func1" as never, () => "func1");
   registerDep("func2" as never, () => "func2");
   registerDep("func3" as never, () => "func3");
@@ -59,7 +60,7 @@ Deno.test("injection - registerDep: register multiple dependencies", () => {
   unregisterDep("func3" as never);
 });
 
-Deno.test("injection - unregisterDep: unregister dependency", () => {
+test("injection - unregisterDep: unregister dependency", () => {
   registerDep("tempFunc" as never, () => "temp");
 
   let deps = getRegisteredDeps();
@@ -71,7 +72,7 @@ Deno.test("injection - unregisterDep: unregister dependency", () => {
   assertEquals(deps.includes("tempFunc"), false);
 });
 
-Deno.test("injection - getRegisteredDeps: get registered dependency list", () => {
+test("injection - getRegisteredDeps: get registered dependency list", () => {
   // Get current dependency count
   const beforeCount = getRegisteredDeps().length;
 
@@ -88,7 +89,7 @@ Deno.test("injection - getRegisteredDeps: get registered dependency list", () =>
   unregisterDep("dep2" as never);
 });
 
-Deno.test("injection - Page: single dependency injection", async () => {
+test("injection - Page: single dependency injection", async () => {
   const testFunc = () => "testFunc called";
   registerDep("testFunc" as never, (ctx) => testFunc);
 
@@ -106,7 +107,7 @@ Deno.test("injection - Page: single dependency injection", async () => {
   unregisterDep("testFunc" as never);
 });
 
-Deno.test("injection - Page: multiple dependency injection", async () => {
+test("injection - Page: multiple dependency injection", async () => {
   const func1 = () => "func1";
   const func2 = () => "func2";
   const func3 = () => "func3";
@@ -133,7 +134,7 @@ Deno.test("injection - Page: multiple dependency injection", async () => {
   unregisterDep("func3" as never);
 });
 
-Deno.test("injection - Page: async dependency building", async () => {
+test("injection - Page: async dependency building", async () => {
   const asyncFunc = async () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     return "async result";
@@ -157,7 +158,7 @@ Deno.test("injection - Page: async dependency building", async () => {
   unregisterDep("asyncFunc" as never);
 });
 
-Deno.test("injection - Page: dependency can access context", async () => {
+test("injection - Page: dependency can access context", async () => {
   registerDep("contextReader" as never, (ctx) => {
     return () => ctx.url.pathname;
   });
@@ -176,7 +177,7 @@ Deno.test("injection - Page: dependency can access context", async () => {
   unregisterDep("contextReader" as never);
 });
 
-Deno.test("injection - Page: page function returns JSX", async () => {
+test("injection - Page: page function returns JSX", async () => {
   registerDep("logger" as never, () => ({
     debug: () => {},
     info: () => {},
@@ -204,7 +205,7 @@ Deno.test("injection - Page: page function returns JSX", async () => {
   unregisterDep("logger" as never);
 });
 
-Deno.test("injection - Page: global Page function available", async () => {
+test("injection - Page: global Page function available", async () => {
   // Verify global Page function exists
   assertExists((globalThis as any).Page);
 

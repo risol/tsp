@@ -7,7 +7,8 @@
 import {
   assertEquals,
   assertExists,
-} from "https://deno.land/std@0.210.0/testing/asserts.ts";
+} from "./asserts.ts";
+import { test } from "bun:test";
 import {
   HtmxFragment,
   hxUrl,
@@ -15,24 +16,24 @@ import {
 } from "../../src/htmx-helpers.ts";
 import { createElement } from "react";
 
-Deno.test("hxUrl: appends .tsp when missing", () => {
+test("hxUrl: appends .tsp when missing", () => {
   assertEquals(hxUrl("/users", "table"), "/users.tsp/__fragment/table");
 });
 
-Deno.test("hxUrl: keeps .tsp when already present", () => {
+test("hxUrl: keeps .tsp when already present", () => {
   assertEquals(hxUrl("/users.tsp", "table"), "/users.tsp/__fragment/table");
 });
 
-Deno.test("hxUrl: prepends / when missing", () => {
+test("hxUrl: prepends / when missing", () => {
   assertEquals(hxUrl("users", "row-1"), "/users.tsp/__fragment/row-1");
 });
 
-Deno.test("hxUrl: accepts underscores and dashes in name", () => {
+test("hxUrl: accepts underscores and dashes in name", () => {
   assertEquals(hxUrl("/x", "user_table"), "/x.tsp/__fragment/user_table");
   assertEquals(hxUrl("/x", "row-1"), "/x.tsp/__fragment/row-1");
 });
 
-Deno.test("hxUrl: throws on empty name", () => {
+test("hxUrl: throws on empty name", () => {
   let threw = false;
   try {
     hxUrl("/x", "");
@@ -46,7 +47,7 @@ Deno.test("hxUrl: throws on empty name", () => {
 // resolveHtmxFragments
 // ============================================
 
-Deno.test("resolveHtmxFragments: passes primitives through", async () => {
+test("resolveHtmxFragments: passes primitives through", async () => {
   assertEquals(await resolveHtmxFragments(null, {}), null);
   assertEquals(await resolveHtmxFragments(undefined, {}), undefined);
   assertEquals(await resolveHtmxFragments("text", {}), "text");
@@ -54,7 +55,7 @@ Deno.test("resolveHtmxFragments: passes primitives through", async () => {
   assertEquals(await resolveHtmxFragments(false, {}), false);
 });
 
-Deno.test("resolveHtmxFragments: walks arrays", async () => {
+test("resolveHtmxFragments: walks arrays", async () => {
   const out = await resolveHtmxFragments(
     ["a", null, 1, ["nested", "x"]],
     {},
@@ -62,7 +63,7 @@ Deno.test("resolveHtmxFragments: walks arrays", async () => {
   assertEquals(out, ["a", null, 1, ["nested", "x"]]);
 });
 
-Deno.test("resolveHtmxFragments: auto-fetches fragment when no children", async () => {
+test("resolveHtmxFragments: auto-fetches fragment when no children", async () => {
   const calls: string[] = [];
   const ctx = {
     _fragments: {
@@ -94,7 +95,7 @@ Deno.test("resolveHtmxFragments: auto-fetches fragment when no children", async 
   assertEquals(child.props.id, "t");
 });
 
-Deno.test("resolveHtmxFragments: respects explicit children", async () => {
+test("resolveHtmxFragments: respects explicit children", async () => {
   const calls: string[] = [];
   const ctx = {
     _fragments: {
@@ -118,7 +119,7 @@ Deno.test("resolveHtmxFragments: respects explicit children", async () => {
   assertEquals(out.props.children.props.children, "override");
 });
 
-Deno.test("resolveHtmxFragments: warns and returns null when fragment missing", async () => {
+test("resolveHtmxFragments: warns and returns null when fragment missing", async () => {
   // Suppress the warn so test output stays clean; we only care about
   // the value returned in this test.
   const originalWarn = console.warn;
@@ -135,7 +136,7 @@ Deno.test("resolveHtmxFragments: warns and returns null when fragment missing", 
   }
 });
 
-Deno.test("resolveHtmxFragments: recurses into nested children", async () => {
+test("resolveHtmxFragments: recurses into nested children", async () => {
   const ctx = {
     _fragments: {
       inner: async () => createElement("em", null, "from-fragment"),

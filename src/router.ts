@@ -3,7 +3,8 @@
  * Responsible for URL to filesystem mapping
  */
 
-import { join, normalize, resolve } from "std/path";
+import { join, normalize, resolve } from "node:path";
+import { isNotFound, runtime } from "./runtime/platform.ts";
 
 // Path resolution result
 interface PathResult {
@@ -154,7 +155,7 @@ export function parseFragmentPath(pathname: string): FragmentRequest | null {
 async function findFile(basePath: string): Promise<string | null> {
   // Check if exists and is a file
   try {
-    const stat = await Deno.stat(basePath);
+    const stat = await runtime.stat(basePath);
     if (stat.isFile) {
       return basePath;
     }
@@ -165,7 +166,7 @@ async function findFile(basePath: string): Promise<string | null> {
   // Try index.tsp in directory
   const indexPath = join(basePath, "index.tsp");
   try {
-    const stat = await Deno.stat(indexPath);
+    const stat = await runtime.stat(indexPath);
     if (stat.isFile) {
       return indexPath;
     }
@@ -231,7 +232,7 @@ export async function securityCheck(
     let finalFilepath = absoluteFilepath;
 
     try {
-      const stat = await Deno.stat(absoluteFilepath);
+      const stat = await runtime.stat(absoluteFilepath);
 
       // If path is a directory, try to find index.tsp
       if (stat.isDirectory) {

@@ -3,7 +3,8 @@
  * Supports automatic log file rotation by size and time
  */
 
-import { dirname, join } from "std/path";
+import { dirname, join } from "node:path";
+import { isNotFound, runtime } from "./runtime/platform.ts";
 
 /**
  * Rotation strategy
@@ -59,7 +60,7 @@ export class LogRotator {
    */
   private async init(): Promise<void> {
     try {
-      const stat = await Deno.stat(this.filepath);
+      const stat = await runtime.stat(this.filepath);
       this.state.currentSize = stat.size;
     } catch {
       // File doesn't exist, start from 0
@@ -78,7 +79,7 @@ export class LogRotator {
 
     // Ensure directory exists
     const logDir = dirname(this.filepath);
-    await Deno.mkdir(logDir, { recursive: true });
+    await runtime.mkdir(logDir, { recursive: true });
 
     // If daily rotation is enabled, use date-based filename
     let targetFile = this.filepath;
@@ -96,7 +97,7 @@ export class LogRotator {
 
     // Write log
     const data = new TextEncoder().encode(message + "\n");
-    await Deno.writeFile(targetFile, data, { append: true });
+    await runtime.writeFile(targetFile, data, { append: true });
     this.state.currentSize += data.length;
     this.state.lastCheck = Date.now();
   }
@@ -122,7 +123,7 @@ export class LogRotator {
       // Delete oldest archive file
       const oldestArchive = this.getArchivePath(this.config.maxFiles);
       try {
-        await Deno.remove(oldestArchive);
+        await runtime.remove(oldestArchive);
       } catch {
         // File doesn't exist, ignore
       }
@@ -133,7 +134,7 @@ export class LogRotator {
         const newArchive = this.getArchivePath(i + 1);
 
         try {
-          await Deno.rename(oldArchive, newArchive);
+          await runtime.rename(oldArchive, newArchive);
         } catch {
           // File doesn't exist, ignore
         }
@@ -142,7 +143,7 @@ export class LogRotator {
       // Rename current log file to first archive
       const firstArchive = this.getArchivePath(1);
       try {
-        await Deno.rename(this.filepath, firstArchive);
+        await runtime.rename(this.filepath, firstArchive);
 
         // If compression is enabled, compress the archive
         if (this.config.compress) {
@@ -167,14 +168,14 @@ export class LogRotator {
 
     try {
       // Check if file exists and has content
-      const stat = await Deno.stat(dailyPath);
+      const stat = await runtime.stat(dailyPath);
       if (stat.size === 0) {
         return; // Empty file, don't archive
       }
 
       // Rename to archive file
       const archivePath = this.getArchivePath(date);
-      await Deno.rename(dailyPath, archivePath);
+      await runtime.rename(dailyPath, archivePath);
 
       // If compression is enabled, compress the archive
       if (this.config.compress) {
@@ -196,7 +197,7 @@ export class LogRotator {
     try {
       const logDir = dirname(this.filepath);
       const baseName = this.getBaseName();
-      const entries = Deno.readDir(logDir);
+      const entries = runtime.readDir(logDir);
 
       const archives: string[] = [];
       for await (const entry of entries) {
@@ -208,9 +209,9 @@ export class LogRotator {
 
       // Sort by modification time (oldest first)
       archives.sort((a, b) => {
-        const statA = Deno.statSync(a);
-        const statB = Deno.statSync(b);
-        return statA.mtime!.getTime() - statB.mtime!.getTime();
+        const statA = runtime.statSync(a);
+        const statB = runtime.statSync(b);
+        return (statA.mtime?.getTime() || 0) - (statB.mtime?.getTime() || 0);
       });
 
       // Delete old archives exceeding maxFiles (keep the newest maxFiles)
@@ -219,7 +220,7 @@ export class LogRotator {
         const toDelete = archives.slice(0, archives.length - keepCount);
         for (const file of toDelete) {
           try {
-            await Deno.remove(file);
+            await runtime.remove(file);
           } catch {
             // Ignore delete failures
           }
@@ -235,9 +236,9 @@ export class LogRotator {
    */
   private async compressArchive(filepath: string): Promise<void> {
     try {
-      const data = await Deno.readFile(filepath);
+      const data = await runtime.readFile(filepath);
 
-      // Use Deno's built-in compression
+      // Use the Web CompressionStream available in Bun.
       const compressed = new Response(
         new ReadableStream({
           async start(controller) {
@@ -267,10 +268,10 @@ export class LogRotator {
 
       // Write compressed file
       const gzipPath = filepath + ".gz";
-      await Deno.writeFile(gzipPath, new Uint8Array(await compressed));
+      await runtime.writeFile(gzipPath, new Uint8Array(await compressed));
 
       // Delete original file
-      await Deno.remove(filepath);
+      await runtime.remove(filepath);
     } catch (error) {
       console.error(`Failed to compress archive: ${error}`);
     }

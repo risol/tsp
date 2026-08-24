@@ -3,7 +3,8 @@
  * Provides path validation, permission control, blacklist/whitelist checking
  */
 
-import { join, normalize, resolve, relative, dirname, basename } from "std/path";
+import { join, normalize, resolve, relative, dirname, basename } from "node:path";
+import { isAlreadyExists, isNotFound, runtime } from "../runtime/platform.ts";
 import type { FileManagerConfig, ArchiveType } from "./types.ts";
 
 /**
@@ -41,10 +42,10 @@ export function validatePath(
 
     // 2. Check if path exists
     try {
-      const stat = Deno.statSync(normalizedPath);
+      const stat = runtime.statSync(normalizedPath);
       // Path exists, continue checking
     } catch (error) {
-      if (error instanceof Deno.errors.NotFound) {
+      if (isNotFound(error)) {
         return {
           success: false,
           error: "Path does not exist",
@@ -335,7 +336,7 @@ export async function validateExtractOperation(
 
   // Check file size
   try {
-    const stat = await Deno.stat(archiveValidation.normalizedPath!);
+    const stat = await runtime.stat(archiveValidation.normalizedPath!);
     if (stat.size > config.maxExtractSize) {
       return {
         success: false,

@@ -6,7 +6,8 @@
 import {
   assertEquals,
   assertExists,
-} from "https://deno.land/std@0.210.0/testing/asserts.ts";
+} from "./asserts.ts";
+import { test } from "bun:test";
 import { buildContext, type InternalPageContext } from "../../src/context.ts";
 
 // Use paths relative to project root
@@ -86,7 +87,7 @@ async function buildContextFromRequest(
   });
 }
 
-Deno.test("context - buildContext: basic request", async () => {
+test("context - buildContext: basic request", async () => {
   const request = new Request("http://localhost:9000/?name=test");
   const context = await buildContextFromRequest(
     request,
@@ -100,7 +101,7 @@ Deno.test("context - buildContext: basic request", async () => {
   assertEquals(context.root, TEST_ROOT);
 });
 
-Deno.test("context - buildContext: multiple query parameters", async () => {
+test("context - buildContext: multiple query parameters", async () => {
   const request = new Request(
     "http://localhost:9000/?name=test&page=1&limit=10",
   );
@@ -115,7 +116,7 @@ Deno.test("context - buildContext: multiple query parameters", async () => {
   assertEquals(context._query.limit, "10");
 });
 
-Deno.test("context - buildContext: POST JSON request", async () => {
+test("context - buildContext: POST JSON request", async () => {
   const request = new Request("http://localhost:9000/", {
     method: "POST",
     body: JSON.stringify({ username: "test", age: 25 }),
@@ -136,7 +137,7 @@ Deno.test("context - buildContext: POST JSON request", async () => {
   assertEquals((context._body as Record<string, unknown>).age, 25);
 });
 
-Deno.test("context - buildContext: POST form request", async () => {
+test("context - buildContext: POST form request", async () => {
   const request = new Request("http://localhost:9000/", {
     method: "POST",
     body: "username=test&password=secret",
@@ -157,7 +158,7 @@ Deno.test("context - buildContext: POST form request", async () => {
   assertEquals((context._body as Record<string, string>).password, "secret");
 });
 
-Deno.test("context - buildContext: cookie parsing", async () => {
+test("context - buildContext: cookie parsing", async () => {
   const request = new Request("http://localhost:9000/", {
     headers: {
       "Cookie": "sessionId=abc123; theme=dark; lang=zh-CN",
@@ -175,7 +176,7 @@ Deno.test("context - buildContext: cookie parsing", async () => {
   assertEquals(context.cookies.lang, "zh-CN");
 });
 
-Deno.test("context - buildContext: multiple request headers", async () => {
+test("context - buildContext: multiple request headers", async () => {
   const request = new Request("http://localhost:9000/", {
     headers: {
       "User-Agent": "Mozilla/5.0",

@@ -1,4 +1,4 @@
-import { createClient } from "npm:redis@^4.6.0";
+import { createClient } from "redis";
 
 /**
  * Redis client implementation class

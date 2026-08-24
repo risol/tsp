@@ -1,7 +1,7 @@
 # 多阶段构建 TSP Server Docker 镜像
 # 第一阶段：构建 Linux 二进制文件
 
-FROM denoland/deno:latest AS builder
+FROM oven/bun:1 AS builder
 
 # 设置工作目录
 WORKDIR /app
@@ -9,8 +9,9 @@ WORKDIR /app
 # 复制项目文件
 COPY . .
 
-# 编译 Linux x64 二进制文件
-RUN deno compile --allow-all --output /tmp/tspserver --target x86_64-unknown-linux-gnu src/main.ts
+# 安装 npm 依赖并编译 Linux x64 二进制文件
+RUN bun install --frozen-lockfile && \
+    bun build src/main.ts --compile --outfile /tmp/tspserver
 
 # 第二阶段：创建轻量级运行镜像
 FROM debian:bookworm-slim

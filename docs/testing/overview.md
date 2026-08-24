@@ -87,7 +87,7 @@ Current test coverage includes:
 ## Related Documentation
 
 - [Development Guide](../development.md) - How to write tests
-- [Task Configuration](../../deno.json) - Deno task descriptions
+- [Bun Configuration](../../package.json) - Bun scripts and dependencies
 - [Feature Documentation](../features/README.md) - Tested feature documentation
 
 ---

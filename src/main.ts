@@ -1,21 +1,24 @@
-#!/usr/bin/env -S deno-tsp run --allow-net --allow-read
+#!/usr/bin/env bun
 
 /**
  * TSP: TypeScript Server Page
- * Template server implemented using Deno + TSX
+ * Template server implemented using Bun + TSX
  */
 
 import { parseFragmentPath, resolvePath, securityCheck } from "./router.ts";
 import { buildContext } from "./context.ts";
 import { renderToString } from "react-dom/server";
+import bcryptjs from "bcryptjs";
 import { registerDep } from "./injection-typed.ts";
 import { serveStaticFileWithCache } from "./static.ts";
-import { dirname, join, relative, resolve } from "std/path";
+import { dirname, join, relative, resolve } from "node:path";
 import { createMySQL } from "./mysql/factory.ts";
 import { createRedis } from "./redis/factory.ts";
 import { createLdapClient } from "./ldap/client.ts";
 import { createExcelJS as createExcelJSImport } from "./exceljs/factory.ts";
-import { parse as parseJsonc } from "jsr:/@std/jsonc";
+import { parse as parseJsonc } from "jsonc-parser";
+import { loadPage } from "./runtime/tsp.ts";
+import { isNotFound, runtime } from "./runtime/platform.ts";
 import {
   createSessionManager,
   getDefaultOptions,
@@ -251,9 +254,9 @@ async function loadConfigFile(
   logger?: Logger,
 ): Promise<Config | null> {
   try {
-    const content = await Deno.readTextFile(filepath);
+    const content = await runtime.readTextFile(filepath);
 
-    // If JSONC file, use Deno's built-in JSONC parser
+    // Parse JSONC with the npm parser so config reload works in Bun.
     let config: ConfigFile;
     if (filepath.endsWith(".jsonc")) {
       config = parseJsonc(content) as ConfigFile;
@@ -290,14 +293,15 @@ async function loadConfigFile(
       ...config,
     };
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
+    if (isNotFound(error)) {
       // File does not exist, return null
       return null;
     } else if (error instanceof SyntaxError) {
       const msg = `Config file format error: ${error.message}`;
       logger?.error(msg);
       console.error(msg);
-      Deno.exit(1);
+      runtime.exit(1);
+      throw new Error(msg);
     } else {
       throw error;
     }
@@ -320,7 +324,7 @@ async function reloadConfigIfNeeded(logger?: Logger): Promise<Config> {
   }
 
   try {
-    const stat = await Deno.stat(configFilepath);
+    const stat = await runtime.stat(configFilepath);
     const newMtime = stat.mtime?.getTime() || 0;
 
     // If config file has not been modified, return current config
@@ -372,7 +376,7 @@ async function reloadConfigIfNeeded(logger?: Logger): Promise<Config> {
 
 // Parse command line arguments
 async function parseArgs(logger?: Logger): Promise<Config> {
-  const args = Deno.args;
+  const args = runtime.args;
   let config = { ...DEFAULT_CONFIG };
   let foundConfigPath: string | null = null;
 
@@ -392,7 +396,7 @@ async function parseArgs(logger?: Logger): Promise<Config> {
       config = loadedConfig;
     } else {
       console.error(`Config file not found: ${foundConfigPath}`);
-      Deno.exit(1);
+      runtime.exit(1);
     }
   } else {
     // Try to automatically find default config file
@@ -404,7 +408,7 @@ async function parseArgs(logger?: Logger): Promise<Config> {
     let configFound = false;
     for (const filename of defaultConfigFiles) {
       try {
-        await Deno.stat(filename);
+        await runtime.stat(filename);
         const msg = `✓ Found config file: ${filename}`;
         logger?.info(msg);
         console.log(msg);
@@ -475,7 +479,7 @@ async function parseArgs(logger?: Logger): Promise<Config> {
       case "--help":
       case "-h":
         printHelp();
-        Deno.exit(0);
+        runtime.exit(0);
       default:
         // Ignore unknown arguments, continue processing
         break;
@@ -489,7 +493,7 @@ async function parseArgs(logger?: Logger): Promise<Config> {
   // Record config file modification time
   if (configFilepath) {
     try {
-      const stat = await Deno.stat(configFilepath);
+      const stat = await runtime.stat(configFilepath);
       configMtime = stat.mtime?.getTime() || 0;
     } catch {
       configMtime = null;
@@ -760,27 +764,20 @@ async function handleRequest(
       root: config.root,
     });
 
-    // Set React global variable (Deno built-in JSX support, needs React object)
+    // Set React global variable for pages compiled as TSX.
     // Only set on first request
     if (!(globalThis as any).React) {
       const react = await import("react");
       (globalThis as any).React = react;
     }
 
-    // Get and execute page function
-    // Deno compiler has built-in .tsp transpilation support, just import directly
+    // Get and execute page function. The TSP-enabled Bun runtime owns page
+    // transpilation, canonical identity and targeted generation reloads.
     let pageFn: (context: any) => Promise<any>;
-
-    // Import page file directly (Deno compiler has built-in .tsp transpilation support)
-    // Hot reload: handled by deno-tsp run --watch or compiled binary's --dynamic-import-no-cache
-    const fileUrlBase = "file://" + filepath.replace(/\\/g, "/");
-
-    // Main file URL (hot reload handled by deno-tsp run --watch or compiled binary's dynamic_import_no_cache)
-    let fileUrl = fileUrlBase;
 
     let pageModule: any;
     try {
-      pageModule = await import(fileUrl);
+      pageModule = await loadPage(filepath, config.dev, config.root);
     } catch (importError) {
       // Re-throw with simplified message, detailed info will be in catch block
       const errMsg = importError instanceof Error ? importError.message : String(importError);
@@ -1131,7 +1128,7 @@ async function main(): Promise<void> {
     // Initialize global store (only once)
     if (!sessionStore) {
       // Read secret from environment variable
-      const secret = Deno.env.get("TSP_SESSION_SECRET");
+      const secret = runtime.env.TSP_SESSION_SECRET;
       const secretBytes = secret ? new TextEncoder().encode(secret) : undefined; // Auto-generated in dev mode
 
       // Read session options from config
@@ -1224,7 +1221,7 @@ async function main(): Promise<void> {
     return createExcelJSImport;
   });
 
-  // Register Crypto helper (native Deno API)
+  // Register the Web Crypto helper exposed by Bun.
   registerDep("crypto", () => {
     const subtle = crypto.subtle as any;
     return {
@@ -1297,10 +1294,6 @@ async function main(): Promise<void> {
     return async (config?: { saltRounds?: number }) => {
       const saltRounds = config?.saltRounds || 10;
 
-      // Load bcryptjs from esm.sh
-      const mod = await import("https://esm.sh/bcryptjs@3.0.3");
-      const bcryptjs = mod.default || mod;
-
       return {
         hash: (password: string) => bcryptjs.hashSync(password, saltRounds),
         compare: (password: string, hash: string) => bcryptjs.compareSync(password, hash),
@@ -1340,7 +1333,7 @@ async function main(): Promise<void> {
   // Workers mode: check platform compatibility
   if (config.workers?.enabled) {
     // Check if running on Windows
-    if (Deno.build.os === "windows") {
+    if (runtime.build.os === "win32") {
       console.log("⚠ Workers mode is not supported on Windows.");
       console.log("  Falling back to single-process mode.\n");
       config.workers.enabled = false;
@@ -1407,29 +1400,27 @@ Starting server...
     // This is a worker process: use SO_REUSEPORT to bind to port
     const workerId = config.workers!.id!;
     await startWorkerWithReusePort(config, serverLogger, workerId);
-  } else if (config.workers?.enabled && Deno.build.os !== "windows") {
+  } else if (config.workers?.enabled && runtime.build.os !== "win32") {
     // Parent process: start multiple workers
     const numWorkers = config.workers.num || 4;
     await startWorkersWithReusePort(config, serverLogger, numWorkers);
   } else {
     // Normal mode: single server (or Windows without workers)
-    Deno.serve({
+    const server = Bun.serve({
       port: config.port,
-      onListen: ({ port, hostname }) => {
-        const serverUrl = `http://${hostname}:${port}/`;
-        console.log(`✓ Server running at ${serverUrl}`);
-        console.log("Press Ctrl+C to stop.\n");
-        serverLogger.info("Server started successfully", {
-          url: serverUrl,
-          port,
-          hostname,
-        });
+      fetch: async (req) => {
+        const resp = await handleRequest(req, config, serverLogger);
+        await logAccess(req, resp, config, serverLogger);
+        return resp;
       },
-    }, async (req) => {
-      const resp = await handleRequest(req, config, serverLogger);
-      // Log access log
-      await logAccess(req, resp, config, serverLogger);
-      return resp;
+    });
+    const serverUrl = `http://${server.hostname}:${server.port}/`;
+    console.log(`✓ Server running at ${serverUrl}`);
+    console.log("Press Ctrl+C to stop.\n");
+    serverLogger.info("Server started successfully", {
+      url: serverUrl,
+      port: server.port,
+      hostname: server.hostname,
     });
   }
 }
@@ -1440,34 +1431,29 @@ async function startWorkersWithReusePort(
   serverLogger: Logger,
   numWorkers: number,
 ): Promise<void> {
-  const hostname = "0.0.0.0";
   const port = config.port;
 
   // Start worker processes
-  const workers: Deno.ChildProcess[] = [];
+  const workers: ReturnType<typeof Bun.spawn>[] = [];
 
   for (let i = 0; i < numWorkers; i++) {
-    const worker = new Deno.Command(Deno.execPath(), {
-      args: [
-        "run",
-        "--unstable-net",
-        "--allow-all",
-        import.meta.url,
+    const worker = Bun.spawn([
+        runtime.execPath,
+        process.argv[1] || import.meta.filename,
         "--port",
         port.toString(),
         "--worker-id",
         i.toString(),
         "--root",
         config.root,
-        config.dev ? "--dev" : "",
-      ].filter(Boolean),
+        ...(config.dev ? ["--dev"] : []),
+      ], {
       stdout: "inherit",
       stderr: "inherit",
       stdin: "inherit",
     });
 
-    const child = worker.spawn();
-    workers.push(child);
+    workers.push(worker);
 
     console.log(`✓ Worker ${i} started on port ${port}`);
   }
@@ -1481,7 +1467,7 @@ async function startWorkersWithReusePort(
   });
 
   // Wait for all workers to exit
-  await Promise.all(workers.map((w) => w.status));
+  await Promise.all(workers.map((w) => w.exited));
 }
 
 // Start a single worker with SO_REUSEPORT
@@ -1494,30 +1480,24 @@ async function startWorkerWithReusePort(
 
   console.log(`✓ Worker ${workerId} starting on port ${port}`);
 
-  // Use Deno.serve with reusePort via unstable API
-  // Note: This requires --unstable-net flag
+  // Bun's native server supports reusePort without an unstable flag.
   try {
-    // @ts-ignore - reusePort is unstable
-    const server = Deno.serve({
+    const server = Bun.serve({
       port,
-      // @ts-ignore - reusePort is unstable
       reusePort: true,
-      onListen: ({ port: p, hostname }) => {
-        const serverUrl = `http://${hostname}:${p}/`;
-        console.log(`✓ Worker ${workerId} running at ${serverUrl}`);
-        serverLogger.info("Worker started", {
-          workerId,
-          port: p,
-          url: serverUrl,
-        });
+      fetch: async (req) => {
+        const resp = await handleRequest(req, config, serverLogger);
+        await logAccess(req, resp, config, serverLogger);
+        return resp;
       },
-    }, async (req) => {
-      const resp = await handleRequest(req, config, serverLogger);
-      await logAccess(req, resp, config, serverLogger);
-      return resp;
     });
-
-    await server.finished;
+    const serverUrl = `http://${server.hostname}:${server.port}/`;
+    console.log(`✓ Worker ${workerId} running at ${serverUrl}`);
+    serverLogger.info("Worker started", {
+      workerId,
+      port: server.port,
+      url: serverUrl,
+    });
   } catch (error) {
     console.error(`✗ Worker ${workerId} failed to start:`, error);
     serverLogger.error("Worker failed to start", { workerId, error });
@@ -1531,6 +1511,6 @@ if (import.meta.main) {
     const tempLogger = createDefaultLogger();
     tempLogger.error("Fatal error:", error);
     console.error("Fatal error:", error);
-    Deno.exit(1);
+    runtime.exit(1);
   });
 }
