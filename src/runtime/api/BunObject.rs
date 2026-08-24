@@ -77,7 +77,7 @@ use std::io::Write as _;
 use bun_core::Output;
 use bun_jsc::{
     self as jsc, ArrayBuffer, CallFrame, ConsoleObject, ErrorableString, JSFunction,
-    JSGlobalObject, JSObject, JSPromise, JSValue, JsResult,
+    JSArrayIterator, JSGlobalObject, JSObject, JSPromise, JSValue, JsResult,
 };
 // `bun_jsc::VirtualMachine` is the *module* re-export; the struct lives one level deeper.
 use crate::cli::open::Editor;
@@ -1833,7 +1833,18 @@ fn get_tsp_object(global_this: &JSGlobalObject, _: &JSObject) -> JSValue {
                     .map(JSValue::to_boolean)
                     .unwrap_or(false);
                 if reload {
-                    if let Some(scope_value) = f.arguments().get(2).copied() {
+                    if let Some(paths_value) = f.arguments().get(3).copied()
+                        && paths_value.is_array()
+                    {
+                        let mut paths = JSArrayIterator::init(paths_value, g)?;
+                        while let Some(path_value) = paths.next()? {
+                            if path_value.is_undefined_or_null() {
+                                continue;
+                            }
+                            let path = path_value.get_zig_string(g)?;
+                            g.delete_module_registry_entries_for_exact_path(&path)?;
+                        }
+                    } else if let Some(scope_value) = f.arguments().get(2).copied() {
                         let scope = scope_value.get_zig_string(g)?;
                         g.delete_module_registry_entries_for_scope(&scope)?;
                     } else {

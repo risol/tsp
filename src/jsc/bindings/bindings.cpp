@@ -78,6 +78,7 @@
 #include "JavaScriptCore/ScriptExecutable.h"
 #include "JavaScriptCore/StackFrame.h"
 #include "JavaScriptCore/StackVisitor.h"
+#include <wtf/text/StringBuilder.h>
 #include "JavaScriptCore/VM.h"
 #include "JavaScriptCore/WasmFaultSignalHandler.h"
 #include "ZigGlobalObject.h"
@@ -3038,6 +3039,51 @@ void JSC__JSGlobalObject__deleteModuleRegistryEntry(JSC::JSGlobalObject* global,
     // under cellLock(); take the same lock so the removal can't race it.
     WTF::Locker locker { moduleLoader->cellLock() };
     moduleLoader->removeEntry(identifier);
+}
+
+static void deleteModuleRegistryEntriesForExactPath(JSC::JSGlobalObject* global, WTF::String path)
+{
+    auto convertSeparators = [](const WTF::String& input, char16_t from, char16_t to) {
+        WTF::StringBuilder builder;
+        for (auto character : WTF::StringView { input }.codeUnits())
+            builder.append(character == from ? to : character);
+        return builder.toString();
+    };
+    auto slashPath = convertSeparators(path, '\\', '/');
+    auto backslashPath = convertSeparators(path, '/', '\\');
+    auto samePath = [](const WTF::String& left, const WTF::String& right) {
+#if OS(WINDOWS)
+        return WTF::equalIgnoringASCIICase(left, right);
+#else
+        return left == right;
+#endif
+    };
+    auto& vm = JSC::getVM(global);
+    auto* moduleLoader = global->moduleLoader();
+
+    WTF::Locker locker { moduleLoader->cellLock() };
+    WTF::Vector<JSC::Identifier> entries;
+    for (auto& [key, entry] : moduleLoader->moduleMap()) {
+        if (!key.first || !entry)
+            continue;
+
+        auto keyString = WTF::String { key.first };
+        if (samePath(keyString, path) ||
+            samePath(keyString, slashPath) ||
+            samePath(keyString, backslashPath) ||
+            samePath(keyString, makeString("file://"_s, path)) ||
+            samePath(keyString, makeString("file://"_s, slashPath)) ||
+            samePath(keyString, makeString("file://"_s, backslashPath)))
+            entries.append(JSC::Identifier::fromString(vm, keyString));
+    }
+
+    for (auto& identifier : entries)
+        moduleLoader->removeEntry(identifier);
+}
+
+void JSC__JSGlobalObject__deleteModuleRegistryEntriesForExactPath(JSC::JSGlobalObject* global, ZigString* arg1)
+{
+    deleteModuleRegistryEntriesForExactPath(global, Zig::toString(*arg1));
 }
 
 static void deleteModuleRegistryEntriesWithPrefix(JSC::JSGlobalObject* global, WTF::String prefix)

@@ -1067,6 +1067,15 @@ impl JSGlobalObject {
         })
     }
 
+    pub fn delete_module_registry_entries_for_exact_path(
+        &self,
+        path: &ZigString,
+    ) -> JsResult<()> {
+        crate::from_js_host_call_generic(self, || {
+            JSC__JSGlobalObject__deleteModuleRegistryEntriesForExactPath(self, path)
+        })
+    }
+
     pub fn delete_module_registry_entries_for_page(&self, page_path: &ZigString) -> JsResult<()> {
         crate::from_js_host_call_generic(self, || {
             JSC__JSGlobalObject__deleteModuleRegistryEntriesForPage(self, page_path)
@@ -1596,6 +1605,10 @@ unsafe extern "C" {
     safe fn JSC__JSGlobalObject__deleteModuleRegistryEntry(
         this: &JSGlobalObject,
         name_: &ZigString,
+    );
+    safe fn JSC__JSGlobalObject__deleteModuleRegistryEntriesForExactPath(
+        this: &JSGlobalObject,
+        path: &ZigString,
     );
     safe fn JSC__JSGlobalObject__deleteModuleRegistryEntriesForPage(
         this: &JSGlobalObject,
