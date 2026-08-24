@@ -2186,8 +2186,8 @@ Mitigation：TSP coding model 明确：page/library module top-level 应尽量 p
 - [x] 不修改 JavaScriptCore
 - [x] 不使用 query-string module cache bust
 - [x] 相同 canonical URL 可以得到新 module generation
-- [ ] nested dependency 任意深度可 reload
-- [ ] shared dependency 可以标记多个 page dirty
+- [x] nested dependency 任意深度可 reload
+- [x] shared dependency 可以标记多个 page dirty
 - [ ] 只 reload affected page graph
 - [ ] 旧请求可以完成
 - [ ] 新请求使用新 generation

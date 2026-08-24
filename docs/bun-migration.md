@@ -21,10 +21,14 @@ application layer owns page generations and last-known-good fallback, and delibe
 `bun --hot`, `bun --watch`, query-string cache busting, or remote HTTP imports.
 
 The application repository contains the portable graph model in
-`src/runtime/module-graph.ts`; it is used by the page-loading boundary and by
-unit tests for reverse-dependent dirty propagation and last-known-good
-behavior. Recursive invalidation of already-loaded dependencies remains a
-native Bun follow-up once the loader exposes its resolved module graph.
+`src/runtime/module-graph.ts`. In development, it discovers static file
+dependencies under `config.root`, checks their source stamps on requests, and
+propagates changes through reverse dependencies so shared modules mark all
+owning pages dirty. The page-loading boundary reloads only dirty pages and
+keeps the last-known-good generation when a candidate fails. Precise native
+registry eviction of only the resolved affected modules remains a Bun follow-up
+once the loader exposes its resolved module graph; the current native fallback
+invalidates the configured source scope for a dirty page.
 
 Build a standalone server with:
 

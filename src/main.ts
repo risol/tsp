@@ -779,7 +779,9 @@ async function handleRequest(
 
     let pageModule: any;
     try {
-      pageModule = await loadPage(filepath, config.dev, config.root);
+      // The TSP graph checks source stamps and decides whether this page is
+      // dirty. Bun is asked to invalidate only when a reload is required.
+      pageModule = await loadPage(filepath, false, config.root, config.dev);
     } catch (importError) {
       // Re-throw with simplified message, detailed info will be in catch block
       const errMsg = importError instanceof Error ? importError.message : String(importError);

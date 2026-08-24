@@ -48,23 +48,31 @@ export function loadPage(
   filepath: string,
   reload = false,
   scopeRoot?: string,
+  watchChanges = true,
 ): Promise<TspPageModule> {
   const key = canonicalModuleKey(filepath);
-  const cached = pageCache.get(key);
-
-  if (!reload && cached) return Promise.resolve(cached);
-
   const active = inFlight.get(key);
   if (active) return active;
 
-  if (!pageGraph.getPage(filepath)) {
-    pageGraph.registerPage(filepath, filepath);
-  }
-  pageGraph.beginReload(filepath);
-
   const promise = (async () => {
+    const root = scopeRoot ?? filepath;
+    const knownPage = pageGraph.getPage(filepath);
+    if (knownPage && watchChanges) {
+      await pageGraph.refreshChangedModules();
+    }
+    if (!knownPage || pageGraph.getPage(filepath)?.dirty) {
+      await pageGraph.discoverPage(filepath, root);
+    }
+
+    const cached = pageCache.get(key);
+    const page = pageGraph.getPage(filepath);
+    const shouldReload = reload || !cached || page?.dirty === true;
+    if (!shouldReload && cached) return cached;
+
+    pageGraph.beginReload(filepath);
+
     try {
-      const loaded = await getTspRuntime().loadPage(filepath, reload, scopeRoot);
+      const loaded = await getTspRuntime().loadPage(filepath, true, scopeRoot);
       if (!loaded || typeof loaded.default !== "function") {
         throw new Error(`TSP page has no default function export: ${filepath}`);
       }

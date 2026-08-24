@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { TspModuleGraph, canonicalModuleKey } from "../../src/runtime/module-graph.ts";
 
 describe("TSP module graph", () => {
@@ -29,5 +32,34 @@ describe("TSP module graph", () => {
 
     expect(graph.getPage("/www/index.tsp")?.currentGeneration).toBe(first.id);
     expect(graph.getPage("/www/index.tsp")?.dirty).toBe(true);
+  });
+
+  test("discovers nested source dependencies and marks the owning page dirty", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tsp-module-graph-"));
+    const page = join(root, "page.tsp");
+    const wrapper = join(root, "wrapper.tsx");
+    const utility = join(root, "utility.ts");
+
+    try {
+      await writeFile(page, 'import { render } from "./wrapper.tsx";\nexport default render;\n');
+      await writeFile(wrapper, 'import { value } from "./utility.ts";\nexport function render() { return value; }\n');
+      await writeFile(utility, 'export const value = "v1";\n');
+
+      const graph = new TspModuleGraph();
+      await graph.discoverPage(page, root);
+
+      const inspection = graph.inspectPage(page);
+      expect(inspection?.modules).toHaveLength(3);
+      expect(graph.getModule(page)?.dependencies).toEqual(new Set([canonicalModuleKey(wrapper)]));
+
+      await writeFile(utility, 'export const value = "v2-updated";\n');
+      const dirty = await graph.refreshChangedModules();
+
+      expect(dirty).toEqual(new Set([canonicalModuleKey(page)]));
+      expect(graph.getPage(page)?.dirty).toBe(true);
+      expect(await readFile(utility, "utf8")).toContain("v2-updated");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
