@@ -750,37 +750,55 @@ fn handle_connection(
             // passed verbatim -- the JS side turns it into
             // `ctx.url.searchParams` (spec sect.13.5). `body`
             // and `headers` are slice 16d (spec sect.13.3).
+            // Match first, THEN build the context. The matched
+            // route's `params` (spec sect.11.3 / 11.4) flow
+            // into `ctx.params` so the page handler reads them
+            // as a typed map. FoundHeadOverGet also carries
+            // params (the host still runs the GET handler with
+            // the original request path). The lookup is done
+            // once; the resulting MatchResult is used both to
+            // seed `ctx.params` and to drive the dispatch
+            // below.
+            let matched = routes.lookup(&path, method);
+            let params: std::collections::HashMap<String, String> = match &matched {
+                MatchResult::Found { route, .. } | MatchResult::FoundHeadOverGet { route } => {
+                    route.params.clone()
+                }
+                _ => std::collections::HashMap::new(),
+            };
             let ctx = Context {
                 method,
                 path: path.clone(),
                 query,
-                params: std::collections::HashMap::new(),
+                params,
                 body,
                 headers,
             };
-            match routes.lookup(&path, method) {
+            match matched {
             MatchResult::Found { route, method: req_method } => {
                 let page_ref = PageRef {
                     route: route.path.clone(),
                     method: req_method,
                 };
-                // Slice 16d: a request that carries a query
-                // string or a body is inherently per-request --
-                // the page's output depends on those per-request
-                // inputs, which differ from request to request.
-                // The registry cache keys on (route, method), so
-                // a cached payload would replay the FIRST
-                // request's output (e.g. the first query string,
-                // the first body echo) to every later request on
-                // the same route+method. Such requests therefore
-                // bypass the generation cache and rebuild via
-                // the pipeline directly (spec sect.20-22 cache
-                // semantics only cover body-less, query-less
-                // GET-style rendering). render_with_body does
-                // the 405 / 500 shaping itself.
-                let (_status_line, _ct, allow_header, body) = if !ctx.body.is_empty()
+                // Slice 16d/16e: a request that carries a query
+                // string, a body, OR dynamic-route params is
+                // inherently per-request -- the page's output
+                // depends on those per-request inputs, which
+                // differ from request to request. The registry
+                // cache keys on (route, method), so a cached
+                // payload would replay the FIRST request's
+                // output (e.g. the first query string, the
+                // first body echo, the first captured params)
+                // to every later request on the same
+                // route+method. Such requests therefore bypass
+                // the generation cache and rebuild via the
+                // pipeline directly (spec sect.20-22 cache
+                // semantics only cover body-less, query-less,
+                // param-less GET-style rendering).
+                let per_request = !ctx.body.is_empty()
                     || !ctx.query.is_empty()
-                {
+                    || !ctx.params.is_empty();
+                let (_status_line, _ct, allow_header, body) = if per_request {
                     render_per_request(&route, req_method, bun, &ctx)
                 } else {
                     render_for_route(&route, req_method, &page_ref, registry, bun, &ctx)

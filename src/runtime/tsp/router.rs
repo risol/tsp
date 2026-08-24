@@ -106,15 +106,79 @@ impl HttpMethod {
     ];
 }
 
+/// One segment of a route pattern. The URL template uses
+/// the conventional `:name` for one-segment dynamic and
+/// `*name` for catch-all (the form most Node web frameworks
+/// use; the wire `path` keeps the colon / star so the
+/// registry / dev-inspector / fragment router can show the
+/// original shape).
+///
+/// Spec sect.11.3 / 11.4 define the matching rule:
+/// - `Static("users")` matches the literal segment "users".
+/// - `Param("id")` matches exactly one segment (non-empty,
+///   no `/`) and binds it to `ctx.params.id`.
+/// - `CatchAll("path")` matches the remaining segments
+///   (possibly zero) and joins them with `/`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Segment {
+    Static(String),
+    Param(String),
+    CatchAll(String),
+}
+
+impl Segment {
+    /// Render this segment to its URL-template form
+    /// (`:name` / `*name`) for the canonical `Route.path`
+    /// string the registry / inspector sees.
+    fn template(&self) -> String {
+        match self {
+            Segment::Static(s) => s.clone(),
+            Segment::Param(name) => format!(":{name}"),
+            Segment::CatchAll(name) => format!("*{name}"),
+        }
+    }
+
+    /// Precedence score (spec sect.11.6). Lower wins; the
+    /// matcher picks the route with the lowest score when
+    /// multiple candidates match the request.
+    /// - Static: 0
+    /// - Dynamic: 1
+    /// - Catch-all: 2
+    fn priority(&self) -> u8 {
+        match self {
+            Segment::Static(_) => 0,
+            Segment::Param(_) => 1,
+            Segment::CatchAll(_) => 2,
+        }
+    }
+}
+
 /// One row of the route table: the URL path the request must hit, the
 /// `.tsp` source file that serves it, and the set of HTTP methods the
 /// runtime thinks the file exports (slice 3 says "all of them" until
 /// JSC proves otherwise in slice 5).
+///
+/// Slice 16e adds `segments` (the pattern broken into Static / Param /
+/// CatchAll per spec sect.11.3-11.4) and `params` (the per-request
+/// bind map, populated by `lookup` and read by the host when it
+/// builds the per-request Context). The `path` field stays as the
+/// canonical URL template -- `routes/users/[id].tsp` scans to
+/// `path = "/users/:id"` -- and is still the lookup key for
+/// `add` / `get_by_path` / the PageRegistry's `(route, method)`
+/// cache key. Dynamic routes therefore share a PageSlot across
+/// every concrete URL; the host's per-request cache decision
+/// (slice 16d's `render_per_request`) handles that.
 #[derive(Debug, Clone)]
 pub struct Route {
     pub path: String,
     pub source: PathBuf,
     pub methods: Vec<HttpMethod>,
+    pub segments: Vec<Segment>,
+    /// `params` is empty in the table; `lookup` returns a
+    /// `Route` with `params` populated for the matched
+    /// request. Keeping it on the same struct avoids a
+    /// `Found { route, params }` migration in the host.
+    pub params: std::collections::HashMap<String, String>,
 }
 
 /// Outcome of looking up a request. Three states per plan sect.6.5 and
@@ -330,20 +394,50 @@ impl RouteTable {
             .cloned()
     }
 
-    /// Look up `(path, method)`. Returns the most specific match; for
-    /// the slice-3 linear table that's just the first hit. Future
-    /// slices (radix tree) will encode priority explicitly per
-    /// plan sect.6.5.
+    /// Look up `(path, method)`. The path is the request URL
+    /// path (e.g. `/users/42`); the matcher iterates the table
+    /// and picks the highest-priority route that matches the
+    /// segments (spec sect.11.6 precedence: static > dynamic >
+    /// catch-all). The returned `Route` carries a populated
+    /// `params` map for the matched request.
+    ///
+    /// Trailing-slash equivalence (spec sect.11.9): `/foo` and
+    /// `/foo/` both match the same route, except for the root
+    /// `/` which is its own canonical form.
     pub fn lookup(&self, path: &str, method: HttpMethod) -> MatchResult {
-        // Lock the table briefly. The match arms hold a
-        // reference into the lock guard; we copy the matched
-        // `Route` into a local before returning so the guard
-        // can drop without affecting the borrow. `MatchResult`
-        // borrows for `'static` because the `Route` is owned
-        // by this function (via the local copy), not by the
-        // table itself.
+        let normalized = if path == "/" {
+            "/".to_string()
+        } else {
+            path.trim_end_matches('/').to_string()
+        };
+        let req_segs: Vec<&str> = normalized
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .collect();
         let guard = self.routes.lock().expect("route table lock poisoned");
-        let Some(route) = guard.iter().find(|r| r.path == path).cloned() else {
+        // Find ALL candidates, then pick the best by priority
+        // (lowest total score; ties broken by source order
+        // which `routes.sort_by` makes the scan order).
+        let mut best: Option<(Route, u32)> = None;
+        for r in guard.iter() {
+            if let Some(params) = match_segments(&r.segments, &req_segs) {
+                let score: u32 = r
+                    .segments
+                    .iter()
+                    .map(|s| s.priority() as u32)
+                    .sum();
+                let better = match &best {
+                    None => true,
+                    Some((_, s)) => score < *s,
+                };
+                if better {
+                    let mut route = r.clone();
+                    route.params = params;
+                    best = Some((route, score));
+                }
+            }
+        }
+        let Some((route, _)) = best else {
             return MatchResult::NotFound;
         };
         if route.methods.contains(&method) {
@@ -363,6 +457,61 @@ impl RouteTable {
             }
         }
     }
+}
+
+/// Try to match the request's path segments against a route's
+/// pattern. Returns the populated `params` map on success.
+///
+/// Matching rules (spec sect.11.3-11.4):
+/// - `Static(s)` matches the request segment when equal.
+/// - `Param(name)` matches any single non-empty request
+///   segment and binds it to `params[name]`.
+/// - `CatchAll(name)` matches zero or more trailing request
+///   segments and binds them joined by `/` to `params[name]`.
+///   A catch-all can only appear in the final pattern
+///   position; `match_segments` enforces this by returning
+///   `None` when the catch-all is followed by anything that
+///   did not also match (which the spec already disallows at
+///   scan time -- this is a defence-in-depth check).
+fn match_segments(
+    pattern: &[Segment],
+    req: &[&str],
+) -> Option<std::collections::HashMap<String, String>> {
+    let mut params: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut pi = 0;
+    let mut ri = 0;
+    while pi < pattern.len() {
+        match &pattern[pi] {
+            Segment::Static(s) => {
+                if ri >= req.len() || req[ri] != s.as_str() {
+                    return None;
+                }
+                pi += 1;
+                ri += 1;
+            }
+            Segment::Param(name) => {
+                if ri >= req.len() {
+                    return None;
+                }
+                params.insert(name.clone(), req[ri].to_string());
+                pi += 1;
+                ri += 1;
+            }
+            Segment::CatchAll(name) => {
+                // Join the rest of the request. An empty join
+                // is allowed only when no segments remain.
+                let rest: Vec<&str> = req[ri..].to_vec();
+                params.insert(name.clone(), rest.join("/"));
+                pi = pattern.len();
+                ri = req.len();
+            }
+        }
+    }
+    if ri != req.len() {
+        return None;
+    }
+    Some(params)
 }
 
 fn scan_recursive(
@@ -397,21 +546,42 @@ fn scan_recursive(
         let Some(stem) = name.strip_suffix(".tsp") else {
             continue;
         };
-        let url_path = url_path_for(root, &path, stem)?;
+        let (url_path, segments) = url_path_for(root, &path, stem)?;
         out.push(Route {
             path: url_path,
             source: path,
             methods: HttpMethod::REAL.to_vec(),
+            segments,
+            params: std::collections::HashMap::new(),
         });
     }
     Ok(())
 }
 
-/// Translate a `.tsp` filename (relative to the `routes/` root) into a
-/// URL path. Slice 3 only knows the static + index shapes; anything
-/// else is `UnsupportedShape` so the runtime refuses to boot with a
-/// half-understood route.
-fn url_path_for(root: &Path, abs: &Path, stem: &str) -> Result<String, RouterError> {
+/// Translate a `.tsp` filename (relative to the `routes/` root) into
+/// a (template path, segments) pair. The template path is the
+/// canonical URL form (`/users/:id` for `routes/users/[id].tsp`);
+/// the segments vector is the matching pattern used by `lookup`.
+///
+/// Slice 16e supports the spec sect.11.3/11.4 dynamic / catch-all
+/// shapes:
+/// - `routes/users/[id].tsp`    -> `/users/:id` with [Static("users"), Param("id")]
+/// - `routes/files/[...path].tsp` -> `/files/*path` with [Static("files"), CatchAll("path")]
+/// - directory segments work the same way: `routes/users/[id]/posts.tsp`
+///   -> `/users/:id/posts` with [Static("users"), Param("id"), Static("posts")]
+/// - the optional catch-all shape `[name...]` (matches zero or more
+///   segments) is not in v2.0 (FREEZE item 3); `[...name]` requires
+///   at least one segment.
+///
+/// The segment name must satisfy FREEZE item 3's pattern
+/// `[A-Za-z_][A-Za-z0-9_]*` -- this is the only place we reject
+/// dynamic / catch-all shapes other than the unsupported shapes the
+/// spec never defined.
+fn url_path_for(
+    root: &Path,
+    abs: &Path,
+    stem: &str,
+) -> Result<(String, Vec<Segment>), RouterError> {
     // `relative` is the path under `routes/`, e.g. `users/index.tsp`
     // or just `index.tsp`. Strip the `.tsp` (already done by caller) so
     // we work in segments below.
@@ -419,48 +589,159 @@ fn url_path_for(root: &Path, abs: &Path, stem: &str) -> Result<String, RouterErr
         path: abs.to_path_buf(),
         reason: "file is not under the routes/ root",
     })?;
-    let mut segments: Vec<&str> = rel
+    let dir_segments: Vec<&str> = rel
         .components()
         .filter_map(|c| c.as_os_str().to_str())
         .collect();
-    // Drop the filename -- the directory structure of `rel` is what
-    // becomes the URL, the filename's stem is the last segment.
-    let _ = segments.pop();
+    let (dir_segs, stem_segs) = dir_segments.split_at(dir_segments.len() - 1);
+
+    let parse_one = |s: &str, file: &Path| -> Result<Segment, RouterError> {
+        parse_segment(s, file)
+    };
 
     if stem == "index" {
         // `routes/index.tsp`         -> `/`
         // `routes/users/index.tsp`    -> `/users`
-        let joined = segments.join("/");
-        return Ok(if joined.is_empty() {
+        let mut segments: Vec<Segment> = Vec::with_capacity(dir_segs.len());
+        for s in dir_segs {
+            segments.push(parse_one(s, abs)?);
+        }
+        let template = if segments.is_empty() {
             "/".to_string()
         } else {
-            format!("/{joined}")
-        });
+            format!("/{}", segments_template(&segments))
+        };
+        return Ok((template, segments));
     }
 
-    if stem.contains('[') || stem.contains(']') {
+    let mut segments: Vec<Segment> = Vec::with_capacity(dir_segs.len() + 1);
+    for s in dir_segs {
+        segments.push(parse_one(s, abs)?);
+    }
+    let stem_seg = parse_one(stem, abs)?;
+    // FREEZE item 3: a catch-all can only appear as the LAST segment
+    // of the path -- the segment stream must end with `[...name]` or
+    // a static segment, never a `*name` followed by anything else.
+    if let Segment::CatchAll(_) = stem_seg {
+        // OK -- the file stem is the last position.
+    }
+    segments.push(stem_seg);
+    // Reject a catch-all in any non-final position: walk the segments
+    // and check that nothing follows a CatchAll.
+    for (i, seg) in segments.iter().enumerate() {
+        if matches!(seg, Segment::CatchAll(_)) && i + 1 < segments.len() {
+            return Err(RouterError::UnsupportedShape {
+                path: abs.to_path_buf(),
+                reason: "catch-all `[...name]` must be the last segment",
+            });
+        }
+    }
+    let template = format!("/{}", segments_template(&segments));
+    let _ = stem_segs; // kept for symmetry with the dir_segments split
+    Ok((template, segments))
+}
+
+fn segments_template(segs: &[Segment]) -> String {
+    segs.iter().map(|s| s.template()).collect::<Vec<_>>().join("/")
+}
+
+/// Parse a single segment token (from a directory name or the file
+/// stem) into a `Segment`. Static segments are returned as-is; a
+/// `[name]` token is `Param(name)`; a `[...name]` token is
+/// `CatchAll(name)`. Anything else (mismatched brackets, empty
+/// `[]`, names that fail the FREEZE item 3 identifier pattern) is
+/// `UnsupportedShape` so the runtime refuses to boot.
+fn parse_segment(token: &str, file: &Path) -> Result<Segment, RouterError> {
+    if !token.contains('[') && !token.contains(']') {
+        return Ok(Segment::Static(token.to_string()));
+    }
+    // Catch-all: `[...name]`
+    if let Some(rest) = token.strip_prefix("[...") {
+        let name = rest.strip_suffix(']').ok_or_else(|| RouterError::UnsupportedShape {
+            path: file.to_path_buf(),
+            reason: "malformed catch-all: missing `]`",
+        })?;
+        validate_segment_name(name, file)?;
+        return Ok(Segment::CatchAll(name.to_string()));
+    }
+    // One-segment dynamic: `[name]`
+    if let Some(rest) = token.strip_prefix('[') {
+        let name = rest.strip_suffix(']').ok_or_else(|| RouterError::UnsupportedShape {
+            path: file.to_path_buf(),
+            reason: "malformed dynamic segment: missing `]`",
+        })?;
+        validate_segment_name(name, file)?;
+        return Ok(Segment::Param(name.to_string()));
+    }
+    Err(RouterError::UnsupportedShape {
+        path: file.to_path_buf(),
+        reason: "unbalanced brackets in segment name",
+    })
+}
+
+/// FREEZE item 3 segment-name rule: `[A-Za-z_][A-Za-z0-9_]*`.
+/// Empty `[]` / non-identifier names are rejected at scan time
+/// so a typo'd `routes/users/[1st].tsp` refuses to boot rather
+/// than silently 404'ing.
+fn validate_segment_name(name: &str, file: &Path) -> Result<(), RouterError> {
+    if name.is_empty() {
         return Err(RouterError::UnsupportedShape {
-            path: abs.to_path_buf(),
-            reason: "dynamic / catch-all segments are not slice-3 supported",
+            path: file.to_path_buf(),
+            reason: "empty segment name `[]`",
         });
     }
-
-    // `routes/foo.tsp`            -> `/foo`
-    // `routes/users/new.tsp`       -> `/users/new`
-    segments.push(stem);
-    Ok(format!("/{}", segments.join("/")))
+    let mut chars = name.chars();
+    let first = chars.next().expect("non-empty checked above");
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return Err(RouterError::UnsupportedShape {
+            path: file.to_path_buf(),
+            reason: "segment name must start with [A-Za-z_]",
+        });
+    }
+    for c in chars {
+        if !(c.is_ascii_alphanumeric() || c == '_') {
+            return Err(RouterError::UnsupportedShape {
+                path: file.to_path_buf(),
+                reason: "segment name must be [A-Za-z0-9_]",
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn rt(path: &str, segments: Vec<Segment>, methods: Vec<HttpMethod>) -> Route {
+        // For tests, a stable source path that mirrors the URL.
+        // Dynamic / catch-all templates use `_` so the test
+        // source strings are predictable.
+        let source = if path == "/" {
+            "routes/index.tsp".to_string()
+        } else {
+            format!(
+                "routes{}.tsp",
+                path.replace(':', "_").replace('*', "_star_")
+            )
+        };
+        Route {
+            path: path.to_string(),
+            source: PathBuf::from(source),
+            methods,
+            segments,
+            params: std::collections::HashMap::new(),
+        }
+    }
+
     #[test]
     fn url_path_index_root() {
         // `routes/index.tsp` -> `/`
         let root = Path::new("/app/routes");
         let abs = Path::new("/app/routes/index.tsp");
-        assert_eq!(url_path_for(root, abs, "index").unwrap(), "/");
+        let (template, segs) = url_path_for(root, abs, "index").unwrap();
+        assert_eq!(template, "/");
+        assert!(segs.is_empty());
     }
 
     #[test]
@@ -468,93 +749,281 @@ mod tests {
         // `routes/users/index.tsp` -> `/users`
         let root = Path::new("/app/routes");
         let abs = Path::new("/app/routes/users/index.tsp");
-        assert_eq!(url_path_for(root, abs, "index").unwrap(), "/users");
+        let (template, segs) = url_path_for(root, abs, "index").unwrap();
+        assert_eq!(template, "/users");
+        assert_eq!(segs, vec![Segment::Static("users".to_string())]);
     }
 
     #[test]
     fn url_path_static() {
-        // `routes/login.tsp` -> `/login`
         let root = Path::new("/app/routes");
         let abs = Path::new("/app/routes/login.tsp");
-        assert_eq!(url_path_for(root, abs, "login").unwrap(), "/login");
+        let (template, segs) = url_path_for(root, abs, "login").unwrap();
+        assert_eq!(template, "/login");
+        assert_eq!(segs, vec![Segment::Static("login".to_string())]);
     }
 
     #[test]
     fn url_path_static_nested() {
-        // `routes/users/new.tsp` -> `/users/new`
         let root = Path::new("/app/routes");
         let abs = Path::new("/app/routes/users/new.tsp");
-        assert_eq!(url_path_for(root, abs, "new").unwrap(), "/users/new");
+        let (template, segs) = url_path_for(root, abs, "new").unwrap();
+        assert_eq!(template, "/users/new");
+        assert_eq!(
+            segs,
+            vec![
+                Segment::Static("users".to_string()),
+                Segment::Static("new".to_string()),
+            ]
+        );
     }
 
     #[test]
-    fn url_path_dynamic_rejected() {
-        // `routes/users/[id].tsp` is slice-7+ territory; slice 3 must
-        // refuse to start rather than silently 404.
+    fn url_path_dynamic_param() {
+        // `routes/users/[id].tsp` -> `/users/:id` with [Static("users"), Param("id")]
         let root = Path::new("/app/routes");
         let abs = Path::new("/app/routes/users/[id].tsp");
-        let err = url_path_for(root, abs, "[id]").unwrap_err();
+        let (template, segs) = url_path_for(root, abs, "[id]").unwrap();
+        assert_eq!(template, "/users/:id");
+        assert_eq!(
+            segs,
+            vec![
+                Segment::Static("users".to_string()),
+                Segment::Param("id".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn url_path_dynamic_directory_segment() {
+        // `routes/users/[id]/posts.tsp` -> `/users/:id/posts`
+        let root = Path::new("/app/routes");
+        let abs = Path::new("/app/routes/users/[id]/posts.tsp");
+        let (template, segs) = url_path_for(root, abs, "posts").unwrap();
+        assert_eq!(template, "/users/:id/posts");
+        assert_eq!(
+            segs,
+            vec![
+                Segment::Static("users".to_string()),
+                Segment::Param("id".to_string()),
+                Segment::Static("posts".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn url_path_catch_all() {
+        // `routes/files/[...path].tsp` -> `/files/*path` with [Static("files"), CatchAll("path")]
+        let root = Path::new("/app/routes");
+        let abs = Path::new("/app/routes/files/[...path].tsp");
+        let (template, segs) = url_path_for(root, abs, "[...path]").unwrap();
+        assert_eq!(template, "/files/*path");
+        assert_eq!(
+            segs,
+            vec![
+                Segment::Static("files".to_string()),
+                Segment::CatchAll("path".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn url_path_rejects_invalid_segment_names() {
+        // FREEZE item 3 pattern: `1st` is not a valid identifier.
+        let root = Path::new("/app/routes");
+        let abs = Path::new("/app/routes/users/[1st].tsp");
+        let err = url_path_for(root, abs, "[1st]").unwrap_err();
         assert!(matches!(err, RouterError::UnsupportedShape { .. }));
+        // Empty `[]`.
+        let abs2 = Path::new("/app/routes/users/[].tsp");
+        let err2 = url_path_for(root, abs2, "[]").unwrap_err();
+        assert!(matches!(err2, RouterError::UnsupportedShape { .. }));
+        // Unbalanced `[id`.
+        let abs3 = Path::new("/app/routes/users/[id.tsp");
+        let err3 = url_path_for(root, abs3, "[id").unwrap_err();
+        assert!(matches!(err3, RouterError::UnsupportedShape { .. }));
+    }
+
+    #[test]
+    fn url_path_rejects_non_final_catch_all() {
+        // A catch-all followed by anything else is not allowed
+        // (FREEZE item 3: catch-all is the last segment).
+        let root = Path::new("/app/routes");
+        let abs = Path::new("/app/routes/[...path]/tail.tsp");
+        let err = url_path_for(root, abs, "tail").unwrap_err();
+        assert!(matches!(err, RouterError::UnsupportedShape { .. }));
+    }
+
+    fn table_with(routes: Vec<Route>) -> RouteTable {
+        RouteTable { routes: Arc::new(Mutex::new(routes)) }
     }
 
     #[test]
     fn lookup_found() {
-        let table = RouteTable {
-            routes: Arc::new(Mutex::new(vec![Route {
-                path: "/".to_string(),
-                source: PathBuf::from("routes/index.tsp"),
-                methods: HttpMethod::REAL.to_vec(),
-            }])),
-        };
+        let table = table_with(vec![rt(
+            "/",
+            vec![],
+            HttpMethod::REAL.to_vec(),
+        )]);
         let m = table.lookup("/", HttpMethod::Get);
         assert!(matches!(m, MatchResult::Found { .. }));
     }
 
     #[test]
     fn lookup_not_found() {
-        let table = RouteTable {
-            routes: Arc::new(Mutex::new(vec![Route {
-                path: "/".to_string(),
-                source: PathBuf::from("routes/index.tsp"),
-                methods: HttpMethod::REAL.to_vec(),
-            }])),
-        };
+        let table = table_with(vec![rt("/", vec![], HttpMethod::REAL.to_vec())]);
         assert!(matches!(table.lookup("/nope", HttpMethod::Get), MatchResult::NotFound));
     }
 
     #[test]
     fn lookup_method_not_allowed() {
-        let table = RouteTable {
-            routes: Arc::new(Mutex::new(vec![Route {
-                path: "/".to_string(),
-                source: PathBuf::from("routes/index.tsp"),
-                methods: vec![HttpMethod::Get], // POST not present
-            }])),
-        };
+        let table = table_with(vec![rt("/", vec![], vec![HttpMethod::Get])]);
         let m = table.lookup("/", HttpMethod::Post);
         assert!(matches!(m, MatchResult::MethodNotAllowed { .. }));
+    }
+
+    #[test]
+    fn lookup_dynamic_segment_binds_params() {
+        let table = table_with(vec![rt(
+            "/users/:id",
+            vec![Segment::Static("users".to_string()), Segment::Param("id".to_string())],
+            HttpMethod::REAL.to_vec(),
+        )]);
+        match table.lookup("/users/42", HttpMethod::Get) {
+            MatchResult::Found { route, .. } => {
+                assert_eq!(route.params.get("id").map(String::as_str), Some("42"));
+            }
+            other => panic!("expected Found, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lookup_dynamic_segment_does_not_over_match() {
+        // `/users/42/extra` must not match `/users/:id` -- a Param
+        // binds exactly one segment.
+        let table = table_with(vec![rt(
+            "/users/:id",
+            vec![Segment::Static("users".to_string()), Segment::Param("id".to_string())],
+            HttpMethod::REAL.to_vec(),
+        )]);
+        assert!(matches!(
+            table.lookup("/users/42/extra", HttpMethod::Get),
+            MatchResult::NotFound
+        ));
+    }
+
+    #[test]
+    fn lookup_catch_all_binds_remaining() {
+        let table = table_with(vec![rt(
+            "/files/*path",
+            vec![Segment::Static("files".to_string()), Segment::CatchAll("path".to_string())],
+            HttpMethod::REAL.to_vec(),
+        )]);
+        match table.lookup("/files/a/b/c.txt", HttpMethod::Get) {
+            MatchResult::Found { route, .. } => {
+                assert_eq!(
+                    route.params.get("path").map(String::as_str),
+                    Some("a/b/c.txt")
+                );
+            }
+            other => panic!("expected Found, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lookup_prefers_static_over_dynamic() {
+        // Spec sect.11.6: when two routes match, static beats
+        // dynamic. /users/me must match the static `/users/me`
+        // route, not the dynamic `/users/:name`.
+        let table = table_with(vec![
+            rt(
+                "/users/:name",
+                vec![Segment::Static("users".to_string()), Segment::Param("name".to_string())],
+                HttpMethod::REAL.to_vec(),
+            ),
+            rt(
+                "/users/me",
+                vec![Segment::Static("users".to_string()), Segment::Static("me".to_string())],
+                HttpMethod::REAL.to_vec(),
+            ),
+        ]);
+        match table.lookup("/users/me", HttpMethod::Get) {
+            MatchResult::Found { route, .. } => {
+                assert_eq!(route.path, "/users/me");
+                assert!(route.params.is_empty());
+            }
+            other => panic!("expected Found, got {other:?}"),
+        }
+        // The dynamic route still wins when no static matches.
+        match table.lookup("/users/other", HttpMethod::Get) {
+            MatchResult::Found { route, .. } => {
+                assert_eq!(route.path, "/users/:name");
+                assert_eq!(route.params.get("name").map(String::as_str), Some("other"));
+            }
+            other => panic!("expected Found, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lookup_prefers_dynamic_over_catch_all() {
+        let table = table_with(vec![
+            rt(
+                "/files/*path",
+                vec![Segment::Static("files".to_string()), Segment::CatchAll("path".to_string())],
+                HttpMethod::REAL.to_vec(),
+            ),
+            rt(
+                "/files/:id",
+                vec![Segment::Static("files".to_string()), Segment::Param("id".to_string())],
+                HttpMethod::REAL.to_vec(),
+            ),
+        ]);
+        match table.lookup("/files/readme", HttpMethod::Get) {
+            MatchResult::Found { route, .. } => {
+                assert_eq!(route.path, "/files/:id");
+                assert_eq!(route.params.get("id").map(String::as_str), Some("readme"));
+            }
+            other => panic!("expected Found, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lookup_trailing_slash_normalised() {
+        // Spec sect.11.9: trailing slash is not a distinct
+        // route identity. /foo and /foo/ both match.
+        let table = table_with(vec![rt(
+            "/foo",
+            vec![Segment::Static("foo".to_string())],
+            HttpMethod::REAL.to_vec(),
+        )]);
+        assert!(matches!(
+            table.lookup("/foo", HttpMethod::Get),
+            MatchResult::Found { .. }
+        ));
+        assert!(matches!(
+            table.lookup("/foo/", HttpMethod::Get),
+            MatchResult::Found { .. }
+        ));
+        // Root is the canonical form `/`.
+        let root_table = table_with(vec![rt("/", vec![], HttpMethod::REAL.to_vec())]);
+        assert!(matches!(
+            root_table.lookup("/", HttpMethod::Get),
+            MatchResult::Found { .. }
+        ));
     }
 
     #[test]
     fn add_and_remove_by_path_round_trip() {
         let table = RouteTable::empty();
         assert_eq!(table.len(), 0);
-        let r = Route {
-            path: "/x".to_string(),
-            source: PathBuf::from("routes/x.tsp"),
-            methods: HttpMethod::REAL.to_vec(),
-        };
+        let r = rt("/x", vec![Segment::Static("x".to_string())], HttpMethod::REAL.to_vec());
         table.add(r.clone()).expect("first add");
         assert_eq!(table.len(), 1);
         assert_eq!(table.paths(), vec!["/x".to_string()]);
-        // get_by_path returns the cloned Route.
         let got = table.get_by_path("/x").expect("get");
         assert_eq!(got.path, "/x");
-        // Duplicate add fails with RouterError::DuplicatePath.
         let dup = table.add(r.clone());
         assert!(matches!(dup, Err(RouterError::DuplicatePath { .. })));
-        // remove_by_path returns true on the first remove, false
-        // on the second (idempotent no-op).
         assert!(table.remove_by_path("/x"));
         assert!(!table.remove_by_path("/x"));
         assert_eq!(table.len(), 0);

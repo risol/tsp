@@ -1019,12 +1019,14 @@ mod tests {
 
     #[test]
     fn unregister_path_drops_all_method_slots() {
-        use crate::router::{HttpMethod, Route};
+        use crate::router::{HttpMethod, Route, Segment};
         let r = PageRegistry::new();
         let route = Route {
             path: "/x".to_string(),
             source: PathBuf::from("routes/x.tsp"),
             methods: vec![HttpMethod::Get, HttpMethod::Post],
+            segments: vec![Segment::Static("x".to_string())],
+            params: std::collections::HashMap::new(),
         };
         r.register_route(&route);
         assert_eq!(r.all_page_refs().len(), 2);
@@ -1037,12 +1039,14 @@ mod tests {
 
     #[test]
     fn unregister_one_page_ref_does_not_drop_siblings() {
-        use crate::router::{HttpMethod, Route};
+        use crate::router::{HttpMethod, Route, Segment};
         let r = PageRegistry::new();
         let route = Route {
             path: "/x".to_string(),
             source: PathBuf::from("routes/x.tsp"),
             methods: vec![HttpMethod::Get, HttpMethod::Post],
+            segments: vec![Segment::Static("x".to_string())],
+            params: std::collections::HashMap::new(),
         };
         r.register_route(&route);
         let get_ref = PageRef { route: "/x".to_string(), method: HttpMethod::Get };
