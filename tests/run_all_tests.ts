@@ -1,30 +1,26 @@
-#!/usr/bin/env -S deno run --allow-all
+#!/usr/bin/env bun
 
 /**
  * Run all tests (unit + E2E)
  */
 
-import { assertEquals } from "https://deno.land/std@0.210.0/testing/asserts.ts";
-
 let totalTests = 0;
 let passedTests = 0;
 let failedTests = 0;
 
-async function runTestSuite(name: string, command: string): Promise<boolean> {
+async function runTestSuite(name: string, args: string[]): Promise<boolean> {
   console.log(`\n▶ Running test suite: ${name}`);
   console.log("═".repeat(50));
 
-  const parts = command.split(" ");
-  const denoCommand = new Deno.Command(parts[0], {
-    args: parts.slice(1),
-    stdout: "piped",
-    stderr: "piped",
+  const child = Bun.spawn([process.execPath, ...args], {
+    stdio: ["ignore", "pipe", "pipe"],
   });
 
-  const { code, stdout, stderr } = await denoCommand.output();
-
-  const output = new TextDecoder().decode(stdout);
-  const errorOutput = new TextDecoder().decode(stderr);
+  const [code, output, errorOutput] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
 
   if (output) console.log(output);
   if (errorOutput) console.error(errorOutput);
@@ -49,7 +45,7 @@ async function main() {
   // Run unit tests
   const unitPassed = await runTestSuite(
     "Unit Tests",
-    "deno run --allow-all tests/run_unit_tests.ts",
+    ["run", "tests/run_unit_tests.ts"],
   );
 
   totalTests++;
@@ -59,7 +55,7 @@ async function main() {
   // Run E2E tests
   const e2ePassed = await runTestSuite(
     "E2E Tests",
-    "deno run --allow-all tests/run_e2e_tests.ts",
+    ["run", "tests/run_e2e_tests.ts"],
   );
 
   totalTests++;
@@ -81,10 +77,10 @@ async function main() {
 
   if (failedTests === 0) {
     console.log("\n🎉 All test suites passed!");
-    Deno.exit(0);
+    process.exit(0);
   } else {
     console.log("\n❌ Some test suites failed!");
-    Deno.exit(1);
+    process.exit(1);
   }
 }
 

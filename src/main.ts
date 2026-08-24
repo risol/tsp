@@ -225,8 +225,9 @@ export async function logAccess(
     const rotationConfig = accessLogConfig.rotation;
     const rotatorKey = `${accessLogConfig.file}-${JSON.stringify(rotationConfig)}`;
 
-    if (!accessLogRotator) {
+    if (!accessLogRotator || accessLogRotatorKey !== rotatorKey) {
       accessLogRotator = new LogRotator(accessLogConfig.file, rotationConfig);
+      accessLogRotatorKey = rotatorKey;
     }
 
     try {
@@ -313,6 +314,7 @@ let currentConfig: Config | null = null;
 let configFilepath: string | null = null;
 let configMtime: number | null = null; // Config file modification time
 let accessLogRotator: LogRotator | null = null; // Access log rotator instance
+let accessLogRotatorKey: string | null = null;
 
 /**
  * Reload config file if it has been modified

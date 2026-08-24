@@ -2,7 +2,8 @@
  * Hot Reload E2E Tests
  */
 
-import { getTestRoot, TEST_PORT, RELOAD_DELAY, printSubsection, printTestResult, COLORS, assertEquals, assertExists } from "../run_e2e_tests.ts";
+import { getTestRoot, TEST_PORT, RELOAD_DELAY, printSubsection, printTestResult, COLORS, assertEquals, assertExists } from "./helpers.ts";
+import { rm, writeFile } from "node:fs/promises";
 
 export function getHotReloadTests() {
   return [
@@ -20,23 +21,23 @@ export function getHotReloadTests() {
         const utilsPath = `${testRoot}/components/HotReloadUtils.ts`;
 
         try {
-          await Deno.remove(componentPath);
+          await rm(componentPath, { force: true });
         } catch {}
         try {
-          await Deno.remove(wrapperPath);
+          await rm(wrapperPath, { force: true });
         } catch {}
         try {
-          await Deno.remove(utilsPath);
+          await rm(utilsPath, { force: true });
         } catch {}
 
         // Create initial files
-        await Deno.writeTextFile(
+        await writeFile(
           utilsPath,
           `export function getVersion(): string {
   return "INITIAL_VERSION";
 }`,
         );
-        await Deno.writeTextFile(
+        await writeFile(
           componentPath,
           `import { getVersion } from "./HotReloadUtils.ts";
 
@@ -44,7 +45,7 @@ export function HotReloadComponent() {
   return <div data-testid="component">{getVersion()}</div>;
 }`,
         );
-        await Deno.writeTextFile(
+        await writeFile(
           wrapperPath,
           `import { HotReloadComponent } from "./HotReloadComponent.tsx";
 
@@ -67,7 +68,7 @@ export function HotReloadWrapper() {
         printTestResult("Initial content verified", true);
 
         // Modify .ts utility file (three-level dependency)
-        await Deno.writeTextFile(
+        await writeFile(
           utilsPath,
           `export function getVersion(): string {
   return "MODIFIED_VERSION";
@@ -98,13 +99,13 @@ export function HotReloadWrapper() {
 
         // Cleanup
         try {
-          await Deno.remove(componentPath);
+          await rm(componentPath, { force: true });
         } catch {}
         try {
-          await Deno.remove(wrapperPath);
+          await rm(wrapperPath, { force: true });
         } catch {}
         try {
-          await Deno.remove(utilsPath);
+          await rm(utilsPath, { force: true });
         } catch {}
 
         const duration = Date.now() - startTime;

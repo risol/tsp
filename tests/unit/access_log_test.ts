@@ -9,11 +9,13 @@ import {
   assertStringIncludes,
 } from "./asserts.ts";
 import { test } from "bun:test";
+import { resolve } from "node:path";
+import { cwd } from "node:process";
 import { type Config, logAccess } from "../../src/main.ts";
 import { runtime } from "../../src/runtime/platform.ts";
 // Temporary log file paths for testing
-const TEST_LOG_FILE = "./test_access.log";
-const TEST_LOG_FILE_2 = "./test_access_2.log";
+const TEST_LOG_FILE = resolve(cwd(), "test_access.log");
+const TEST_LOG_FILE_2 = resolve(cwd(), "test_access_2.log");
 
 /**
  * Cleanup test log files
@@ -31,7 +33,7 @@ test("access log - logAccess: console output (default config)", async () => {
     root: "./www",
     port: 9000,
     dev: false,
-    // Not setting accessLogPath, should output to console
+    // Not setting accessLog, should output to console
   };
 
   const request = new Request("http://localhost:9000/test/path?param=value", {
@@ -46,7 +48,7 @@ test("access log - logAccess: console output (default config)", async () => {
   // This test mainly verifies no errors are thrown
   await logAccess(request, response, config);
 
-  // If accessLogPath is not configured, log should go to console
+  // If accessLog is not configured, log should go to console
   // We can't directly test console output but can verify function doesn't throw error
   assertEquals(true, true);
 });
@@ -58,7 +60,7 @@ test("access log - logAccess: file output - basic request", async () => {
     root: "./www",
     port: 9000,
     dev: false,
-    accessLogPath: TEST_LOG_FILE,
+    accessLog: { file: TEST_LOG_FILE },
   };
 
   const request = new Request("http://localhost:9000/test/path?param=value", {
@@ -100,7 +102,7 @@ test("access log - logAccess: file output - multiple appends", async () => {
     root: "./www",
     port: 9000,
     dev: false,
-    accessLogPath: TEST_LOG_FILE_2,
+    accessLog: { file: TEST_LOG_FILE_2 },
   };
 
   // Log three entries
@@ -167,7 +169,7 @@ test("access log - logAccess: no User-Agent", async () => {
     root: "./www",
     port: 9000,
     dev: false,
-    accessLogPath: TEST_LOG_FILE,
+    accessLog: { file: TEST_LOG_FILE },
   };
 
   const request = new Request("http://localhost:9000/test", {
@@ -196,7 +198,7 @@ test("access log - logAccess: various HTTP methods", async () => {
     root: "./www",
     port: 9000,
     dev: false,
-    accessLogPath: TEST_LOG_FILE,
+    accessLog: { file: TEST_LOG_FILE },
   };
 
   const methods = [
@@ -242,7 +244,7 @@ test("access log - logAccess: various status codes", async () => {
     root: "./www",
     port: 9000,
     dev: false,
-    accessLogPath: TEST_LOG_FILE,
+    accessLog: { file: TEST_LOG_FILE },
   };
 
   const statusCodes = [200, 201, 301, 302, 400, 401, 403, 404, 500, 502, 503];
@@ -280,7 +282,7 @@ test("access log - logAccess: path contains query parameters", async () => {
     root: "./www",
     port: 9000,
     dev: false,
-    accessLogPath: TEST_LOG_FILE,
+    accessLog: { file: TEST_LOG_FILE },
   };
 
   const request = new Request(
@@ -313,7 +315,7 @@ test("access log - logAccess: complex User-Agent", async () => {
     root: "./www",
     port: 9000,
     dev: false,
-    accessLogPath: TEST_LOG_FILE,
+    accessLog: { file: TEST_LOG_FILE },
   };
 
   const userAgent =

@@ -1,10 +1,8 @@
-#!/usr/bin/env -S deno run --allow-net --allow-read --allow-run
+#!/usr/bin/env bun
 
 /**
  * Run unit tests
  */
-
-import { assertEquals } from "https://deno.land/std@0.210.0/testing/asserts.ts";
 
 const UNIT_TEST_FILES = [
   "tests/unit/router_test.ts",
@@ -13,6 +11,8 @@ const UNIT_TEST_FILES = [
   "tests/unit/injection_test.ts",
   "tests/unit/access_log_test.ts",
   "tests/unit/static_test.ts",
+  "tests/unit/htmx_helpers_test.ts",
+  "tests/unit/module_graph_test.ts",
 ];
 
 let totalTests = 0;
@@ -24,40 +24,22 @@ async function runTestFile(testFile: string): Promise<boolean> {
   console.log("─".repeat(50));
 
   // Switch to project root directory, ensure relative paths are correct
-  const command = new Deno.Command("deno", {
-    args: [
-      "test",
-      "--allow-all",
-      testFile,
-    ],
-    cwd: ".", // Explicitly specify working directory as project root
-    stdout: "piped",
-    stderr: "piped",
+  const child = Bun.spawn([process.execPath, "test", testFile], {
+    cwd: ".",
+    stdio: ["ignore", "pipe", "pipe"],
   });
 
-  const child = command.spawn();
-
   try {
-    // Get child process exit status
-    const status = await child.status;
-
-    // Get output
-    let output = "";
-    let errorOutput = "";
-    try {
-      const outputResult = await child.output;
-      if (outputResult) {
-        output = new TextDecoder().decode(outputResult.stdout);
-        errorOutput = new TextDecoder().decode(outputResult.stderr);
-      }
-    } catch {
-      // Output may already be unavailable
-    }
+    const [code, output, errorOutput] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
 
     if (output) console.log(output);
     if (errorOutput) console.error(errorOutput);
 
-    const passed = status.code === 0;
+    const passed = code === 0;
     if (passed) {
       console.log(`✓ ${testFile} passed`);
     } else {
@@ -104,13 +86,13 @@ async function main() {
 
   if (failedTests === 0) {
     console.log("\n🎉 All unit tests passed!");
-    Deno.exit(0);
+    process.exit(0);
   } else {
     console.log("\n❌ Some tests failed!");
     results.filter((r) => !r.passed).forEach((r) =>
       console.log(`  ✗ ${r.file}`)
     );
-    Deno.exit(1);
+    process.exit(1);
   }
 }
 

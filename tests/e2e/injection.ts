@@ -2,7 +2,7 @@
  * Injection E2E Tests
  */
 
-import { TEST_PORT, printSubsection, printTestResult, COLORS, assertEquals, assertExists } from "../run_e2e_tests.ts";
+import { TEST_PORT, printSubsection, printTestResult, COLORS, assertEquals, assertExists } from "./helpers.ts";
 
 export function getInjectionTests() {
   return [

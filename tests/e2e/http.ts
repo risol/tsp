@@ -2,7 +2,7 @@
  * HTTP E2E Tests
  */
 
-import { testHttpRequest, TEST_PORT, printSubsection, printTestResult, COLORS } from "../run_e2e_tests.ts";
+import { testHttpRequest, TEST_PORT, printSubsection, printTestResult, COLORS } from "./helpers.ts";
 
 export function getHttpTests() {
   return [

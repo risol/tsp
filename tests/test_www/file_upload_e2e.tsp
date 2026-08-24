@@ -3,6 +3,8 @@
  * Used to test file upload, save and other features
  */
 
+import { mkdir, readdir, rm, stat } from "node:fs/promises";
+
 export default Page(async function(ctx, { response, query, createZod }) {
   const z = await createZod();
   const { action = 'demo' } = query(z.object({
@@ -24,7 +26,7 @@ export default Page(async function(ctx, { response, query, createZod }) {
       // Create test upload directory
       const uploadDir = "./test-uploads";
       try {
-        await Deno.mkdir(uploadDir, { recursive: true });
+        await mkdir(uploadDir, { recursive: true });
       } catch {
         // Directory may already exist
       }
@@ -35,7 +37,7 @@ export default Page(async function(ctx, { response, query, createZod }) {
       await file.save(filepath);
 
       // Verify file was saved
-      const stat = await Deno.stat(filepath);
+      const fileStat = await stat(filepath);
 
       return response.json({
         success: true,
@@ -45,7 +47,7 @@ export default Page(async function(ctx, { response, query, createZod }) {
           type: file.type,
           size: file.size,
           savedAs: filename,
-          verifiedSize: stat.size,
+          verifiedSize: fileStat.size,
         },
       });
     } catch (error) {
@@ -72,7 +74,7 @@ export default Page(async function(ctx, { response, query, createZod }) {
     try {
       const uploadDir = "./test-uploads";
       try {
-        await Deno.mkdir(uploadDir, { recursive: true });
+        await mkdir(uploadDir, { recursive: true });
       } catch {
         // Directory may already exist
       }
@@ -84,13 +86,13 @@ export default Page(async function(ctx, { response, query, createZod }) {
         const filepath = `${uploadDir}/${filename}`;
         await file.save(filepath);
 
-        const stat = await Deno.stat(filepath);
+        const fileStat = await stat(filepath);
 
         uploadedFiles.push({
           name: file.name,
           size: file.size,
           savedAs: filename,
-          verifiedSize: stat.size,
+          verifiedSize: fileStat.size,
         });
       }
 
@@ -132,12 +134,12 @@ export default Page(async function(ctx, { response, query, createZod }) {
   if (action === "list") {
     try {
       const uploadDir = "./test-uploads";
-      const entries = Deno.readDir(uploadDir);
+      const entries = await readdir(uploadDir, { withFileTypes: true });
       const files = [];
 
-      for await (const entry of entries) {
-        if (entry.isFile && entry.name.startsWith("test_")) {
-          const info = await Deno.stat(`${uploadDir}/${entry.name}`);
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name.startsWith("test_")) {
+          const info = await stat(`${uploadDir}/${entry.name}`);
           files.push({
             name: entry.name,
             size: info.size,
@@ -164,11 +166,11 @@ export default Page(async function(ctx, { response, query, createZod }) {
   if (action === "cleanup") {
     try {
       const uploadDir = "./test-uploads";
-      const entries = Deno.readDir(uploadDir);
+      const entries = await readdir(uploadDir, { withFileTypes: true });
 
-      for await (const entry of entries) {
-        if (entry.isFile && entry.name.startsWith("test_")) {
-          await Deno.remove(`${uploadDir}/${entry.name}`);
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name.startsWith("test_")) {
+          await rm(`${uploadDir}/${entry.name}`, { force: true });
         }
       }
 

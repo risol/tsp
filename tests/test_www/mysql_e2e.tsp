@@ -10,11 +10,11 @@ export default Page(async function(ctx, { createMySQL, createZod, response, quer
 
   try {
     const db = await createMySQL({
-      host: Deno.env.get("MYSQL_HOST") || "127.0.0.1",
-      port: Number(Deno.env.get("MYSQL_PORT")) || 3306,
-      user: Deno.env.get("MYSQL_USER") || "test_user",
-      password: Deno.env.get("MYSQL_PASSWORD") || "test123456",
-      database: Deno.env.get("MYSQL_DATABASE") || "test_db"
+      host: process.env.MYSQL_HOST || "127.0.0.1",
+      port: Number(process.env.MYSQL_PORT) || 3306,
+      user: process.env.MYSQL_USER || "test_user",
+      password: process.env.MYSQL_PASSWORD || "test123456",
+      database: process.env.MYSQL_DATABASE || "test_db"
     }, z);
 
     // Define Schema

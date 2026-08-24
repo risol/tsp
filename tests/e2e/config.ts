@@ -2,7 +2,7 @@
  * Config Reload E2E Tests
  */
 
-import { TEST_PORT, printSubsection, printTestResult, COLORS, assertEquals } from "../run_e2e_tests.ts";
+import { TEST_PORT, printSubsection, printTestResult, COLORS, assertEquals } from "./helpers.ts";
 
 export function getConfigTests() {
   return [

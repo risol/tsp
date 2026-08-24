@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-all
+#!/usr/bin/env bun
 
 /**
  * Run E2E tests (binary tests)
@@ -9,11 +9,15 @@
 import {
   assertEquals,
   assertExists,
-} from "https://deno.land/std@0.210.0/testing/asserts.ts";
+  assertStringIncludes,
+} from "./unit/asserts.ts";
 
 // Re-export for e2e test modules
-export { assertEquals, assertExists };
-import { join } from "std/path";
+export { assertEquals, assertExists, assertStringIncludes };
+import { resolve } from "node:path";
+import { cwd } from "node:process";
+import { spawn } from "node:child_process";
+import { statSync } from "node:fs";
 
 // Import E2E test modules
 import { getHttpTests } from "./e2e/http.ts";
@@ -34,27 +38,40 @@ import { getFragmentTests } from "./e2e/fragments.ts";
 export const TEST_PORT = 9001;
 export const RELOAD_DELAY = 1000;
 // TEST_ROOT will be dynamically calculated based on current directory at runtime
-const STARTUP_DELAY = 2000;
 
 /**
  * Get test website root directory path
  */
 export function getTestRoot(): string {
-  const cwd = Deno.cwd();
-  if (cwd.endsWith("tests")) {
-    return "./test_www"; // Run from tests/ directory
-  } else if (cwd.endsWith("tsp")) {
-    return "./tests/test_www"; // Run from project root
+  const currentDirectory = cwd();
+  if (currentDirectory.endsWith("\\tests") || currentDirectory.endsWith("/tests")) {
+    return resolve(currentDirectory, "test_www");
   } else {
-    throw new Error(`Cannot determine test root directory. Current directory: ${cwd}`);
+    return resolve(currentDirectory, "tests", "test_www");
   }
 }
 
 // Global server process
-let serverProcess: Deno.ChildProcess | null = null;
+let serverProcess: ReturnType<typeof spawn> | null = null;
 
 // Server startup log (for analyzing compilation behavior)
 let serverStartupLog: string = "";
+
+export async function runCommand(command: string, args: string[] = []): Promise<{
+  code: number;
+  stdout: string;
+  stderr: string;
+}> {
+  const child = Bun.spawn([command, ...args], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const [code, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  return { code, stdout, stderr };
+}
 
 // ANSI color codes
 export const COLORS = {
@@ -68,103 +85,12 @@ export const COLORS = {
   cyan: "\x1b[36m",
 };
 
-/**
- * Get version from deno.json
- */
-function getVersion(): string {
-  const cwd = Deno.cwd();
-  const denoJsonPath = cwd.endsWith("tests")
-    ? "../deno.json"
-    : "./deno.json";
-
-  try {
-    const content = Deno.readTextFileSync(denoJsonPath);
-    const json = JSON.parse(content);
-    return json.version || "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
-}
-
-/**
- * Get OS type (same as tsp.sh)
- */
-function getOsType(): string {
-  // Match the behavior of tsp.sh get_os_type function
-  // Windows: CYGWIN*|MINGW*|MSYS* -> "win"
-  // Linux: Linux -> "linux"
-  // macOS: Darwin -> "macos"
-  const platform = Deno.build.os;
-  switch (platform) {
-    case "windows":
-      return "win";
-    case "linux":
-      return "linux";
-    case "darwin":
-      return "macos";
-    default:
-      return platform;
-  }
-}
-
-/**
- * Get architecture (same as tsp.sh)
- */
-function getArch(): string {
-  const arch = Deno.build.arch;
-  switch (arch) {
-    case "x86_64":
-      return "x64";
-    case "aarch64":
-      return "arm64";
-    default:
-      return arch;
-  }
-}
-
-/**
- * Get binary file path (from dist/debug)
- */
+/** Get the Bun-compiled test server path. */
 export function getBinaryPath(): string {
-  const binaryName = Deno.build.os === "windows"
+  const binaryName = process.platform === "win32"
     ? "tspserver.exe"
     : "tspserver";
-  const osType = getOsType();
-  const arch = getArch();
-  const version = getVersion();
-  const platformPath = `tsp-${osType}-${arch}`; // Add tsp- prefix
-  const cwd = Deno.cwd();
-
-  // Determine dist path based on current directory (<os>-<arch>-v<version>)
-  let relPath: string;
-  if (cwd.endsWith("tests")) {
-    relPath = `../dist/${platformPath}-v${version}/${binaryName}`;
-  } else if (cwd.endsWith("tsp")) {
-    relPath = `dist/${platformPath}-v${version}/${binaryName}`;
-  } else {
-    throw new Error(`Cannot determine binary file path. Current directory: ${cwd}`);
-  }
-
-  // Resolve to absolute path for reliable file access
-  try {
-    return Deno.realPathSync(relPath);
-  } catch {
-    // If realPathSync fails, try joining with cwd
-    return join(cwd, relPath);
-  }
-}
-
-/**
- * Verify binary exists
- */
-export async function verifyBinary(): Promise<boolean> {
-  const binaryPath = getBinaryPath();
-  try {
-    const info = await Deno.stat(binaryPath);
-    return info.isFile;
-  } catch {
-    return false;
-  }
+  return resolve(cwd(), "dist", "bun", binaryName);
 }
 
 /**
@@ -175,29 +101,13 @@ export async function cleanupBinary(): Promise<boolean> {
 
   // First kill all tspserver processes
   try {
-    if (Deno.build.os === "windows") {
+    if (process.platform === "win32") {
       // Windows: use taskkill to kill all tspserver processes
-      const taskkillCommand = new Deno.Command("taskkill", {
-        args: ["/F", "/IM", "tspserver.exe"],
-        stdout: "piped",
-        stderr: "piped",
-      });
-      await taskkillCommand.output();
-
-      const taskkillTestCommand = new Deno.Command("taskkill", {
-        args: ["/F", "/IM", "tspserver-test.exe"],
-        stdout: "piped",
-        stderr: "piped",
-      });
-      await taskkillTestCommand.output();
+      await runCommand("taskkill", ["/F", "/IM", "tspserver.exe"]);
+      await runCommand("taskkill", ["/F", "/IM", "tspserver-test.exe"]);
     } else {
       // Linux/macOS: use pkill
-      const pkillCommand = new Deno.Command("pkill", {
-        args: ["-f", "tspserver"],
-        stdout: "piped",
-        stderr: "piped",
-      });
-      await pkillCommand.output();
+      await runCommand("pkill", ["-f", "tspserver"]);
     }
 
     // Wait for processes to terminate
@@ -208,8 +118,7 @@ export async function cleanupBinary(): Promise<boolean> {
 
   // Verify binary exists (do not delete - we use production build for testing)
   try {
-    const info = await Deno.stat(binaryPath);
-    return info.isFile;
+    return statSync(binaryPath).isFile();
   } catch {
     return false;
   }
@@ -232,29 +141,23 @@ export async function startServer(devMode: boolean = true): Promise<void> {
     `  ${COLORS.dim}[DEBUG] Mode: ${devMode ? "development" : "production"}${COLORS.reset}`,
   );
 
-  // Ensure Windows paths use correct format
-  // If path does not contain directory separator, add ./ prefix
-  let commandPath: string;
-  if (Deno.build.os === "windows") {
-    commandPath = binaryPath.includes("\\") || binaryPath.includes("/")
-      ? binaryPath
-      : `.${binaryPath.startsWith(".") ? "" : "\\"}${binaryPath}`;
-  } else {
-    commandPath = binaryPath;
-  }
-
   const args = ["--root", testRoot, "--port", TEST_PORT.toString()];
   if (devMode) {
     args.push("--dev");
   }
 
-  const command = new Deno.Command(commandPath, {
-    args,
-    stdout: "piped",
-    stderr: "piped",
+  // Node's child-process bridge reliably starts the compiled Bun binary on
+  // Windows when its console handles are inherited.
+  serverProcess = spawn(binaryPath, args, { stdio: "inherit" });
+  console.log(`  ${COLORS.dim}[DEBUG] Spawned server process: ${serverProcess.pid}${COLORS.reset}`);
+  serverProcess.once("error", (error) => {
+    console.error(`  ${COLORS.red}[DEBUG] Server process error: ${String(error)}${COLORS.reset}`);
   });
-
-  serverProcess = command.spawn();
+  serverProcess.once("exit", (code, signal) => {
+    console.error(
+      `  ${COLORS.red}[DEBUG] Server process exited: code=${code}, signal=${signal}${COLORS.reset}`,
+    );
+  });
 
   // Async read server logs (for analyzing compilation behavior)
   serverStartupLog = "";
@@ -277,24 +180,32 @@ export async function startServer(devMode: boolean = true): Promise<void> {
     readStream(serverProcess.stderr).catch(() => {});
   }
 
-  // Wait for server startup (production mode needs longer pre-compilation time)
-  const delay = devMode ? STARTUP_DELAY : STARTUP_DELAY * 3;
-  await new Promise((resolve) => setTimeout(resolve, delay));
-
-  // Verify server started successfully
-  try {
-    const testResponse = await fetch(`http://localhost:${TEST_PORT}/`);
-    if (testResponse.status === 404) {
-      // 404 is normal, server is running
-      console.log(
-        `  ${COLORS.dim}[DEBUG] Server responded normally (404 expected for /)${COLORS.reset}`,
-      );
-    } else if (testResponse.status === 200) {
-      console.log(`  ${COLORS.dim}[DEBUG] Server responded normally (200)${COLORS.reset}`);
+  // Compiled binaries may need several seconds for their first startup.
+  // Poll readiness instead of relying on a fixed delay.
+  const startupDeadline = Date.now() + 15_000;
+  let lastStartupError: unknown = null;
+  while (Date.now() < startupDeadline) {
+    try {
+      const testResponse = await fetch(`http://localhost:${TEST_PORT}/`);
+      if (testResponse.status === 404) {
+        console.log(
+          `  ${COLORS.dim}[DEBUG] Server responded normally (404 expected for /)${COLORS.reset}`,
+        );
+      } else {
+        console.log(
+          `  ${COLORS.dim}[DEBUG] Server responded normally (${testResponse.status})${COLORS.reset}`,
+        );
+      }
+      return;
+    } catch (error) {
+      lastStartupError = error;
+      await new Promise((resolve) => setTimeout(resolve, 250));
     }
-  } catch (error) {
-    throw new Error(`Server failed to start: ${error.message}`);
   }
+
+  throw new Error(
+    `Server failed to start: ${String(lastStartupError)}\nStartup log:\n${serverStartupLog}`,
+  );
 }
 
 /**
@@ -318,15 +229,9 @@ export async function killProcessOnPort(port: number): Promise<void> {
   try {
     let pids: number[] = [];
 
-    if (Deno.build.os === "windows") {
-      const netstatCommand = new Deno.Command("netstat", {
-        args: ["-ano"],
-        stdout: "piped",
-        stderr: "piped",
-      });
-
-      const { stdout } = await netstatCommand.output();
-      const output = new TextDecoder().decode(stdout);
+    if (process.platform === "win32") {
+      const { stdout } = await runCommand("netstat", ["-ano"]);
+      const output = stdout;
 
       const lines = output.split("\n");
       for (const line of lines) {
@@ -339,17 +244,10 @@ export async function killProcessOnPort(port: number): Promise<void> {
         }
       }
     } else {
-      const lsofCommand = new Deno.Command("lsof", {
-        args: ["-ti", `:${port}`],
-        stdout: "piped",
-        stderr: "piped",
-      });
-
-      const { stdout, code } = await lsofCommand.output();
+      const { stdout, code } = await runCommand("lsof", ["-ti", `:${port}`]);
 
       if (code === 0) {
-        const output = new TextDecoder().decode(stdout);
-        const pidsStr = output.trim().split("\n");
+        const pidsStr = stdout.trim().split("\n");
         pids = pidsStr.map((pid) => parseInt(pid)).filter((pid) => !isNaN(pid));
       }
     }
@@ -357,15 +255,10 @@ export async function killProcessOnPort(port: number): Promise<void> {
     if (pids.length > 0) {
       for (const pid of pids) {
         try {
-          if (Deno.build.os === "windows") {
-            const killCommand = new Deno.Command("taskkill", {
-              args: ["/PID", pid.toString(), "/F"],
-              stdout: "piped",
-              stderr: "piped",
-            });
-            await killCommand.output();
+          if (process.platform === "win32") {
+            await runCommand("taskkill", ["/PID", pid.toString(), "/F"]);
           } else {
-            Deno.kill(pid, "SIGKILL");
+            await runCommand("kill", ["-9", pid.toString()]);
           }
         } catch {
           // Ignore termination failures
@@ -476,7 +369,7 @@ async function runE2ETests(): Promise<void> {
       }
       console.log(`  ${COLORS.green}✓ Old processes cleaned up${COLORS.reset}`);
       const binaryPath = getBinaryPath();
-      const stat = await Deno.stat(binaryPath);
+      const stat = statSync(binaryPath);
       const sizeMB = (stat.size / 1024 / 1024).toFixed(2);
       console.log(
         `  ${COLORS.green}✓ Binary found (${sizeMB} MB)${COLORS.reset}`,
@@ -593,7 +486,7 @@ async function runE2ETests(): Promise<void> {
     console.log(
       `\n${COLORS.red}${COLORS.bright}❌ Some tests failed!${COLORS.reset}`,
     );
-    Deno.exit(1);
+    process.exit(1);
   }
 }
 

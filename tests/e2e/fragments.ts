@@ -18,7 +18,7 @@ import {
   printSubsection,
   printTestResult,
   TEST_PORT,
-} from "../run_e2e_tests.ts";
+} from "./helpers.ts";
 
 const BASE = `http://localhost:${TEST_PORT}`;
 const PAGE = `${BASE}/fragments_demo.tsp`;

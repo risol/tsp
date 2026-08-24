@@ -2,7 +2,7 @@
  * MySQL E2E Tests
  */
 
-import { TEST_PORT, printSubsection, printTestResult, COLORS, assertEquals } from "../run_e2e_tests.ts";
+import { TEST_PORT, printSubsection, printTestResult, COLORS, assertEquals, runCommand } from "./helpers.ts";
 
 export function getMysqlTests() {
   return [
@@ -18,14 +18,10 @@ export function getMysqlTests() {
 
         let mysqlRunning = false;
         try {
-          const checkCommand = new Deno.Command("docker", {
-            args: ["ps", "--filter", "name=tsp-mysql", "--format", "{{.Status}}"],
-            stdout: "piped",
-            stderr: "piped",
-          });
-
-          const { stdout } = await checkCommand.output();
-          const status = new TextDecoder().decode(stdout).trim();
+          const { stdout } = await runCommand("docker", [
+            "ps", "--filter", "name=tsp-mysql", "--format", "{{.Status}}",
+          ]);
+          const status = stdout.trim();
 
           if (status.includes("Up")) {
             mysqlRunning = true;

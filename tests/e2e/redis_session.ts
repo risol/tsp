@@ -10,7 +10,10 @@ import {
   COLORS,
   assertEquals,
   getTestRoot,
-} from "../run_e2e_tests.ts";
+  runCommand,
+} from "./helpers.ts";
+import { cwd } from "node:process";
+import { rm, writeFile } from "node:fs/promises";
 
 // Use ports 19001 and 19002 for the two test servers
 const TEST_PORT_1 = 19001;
@@ -30,14 +33,10 @@ export function getRedisSessionTests() {
 
         let redisRunning = false;
         try {
-          const checkCommand = new Deno.Command("docker", {
-            args: ["ps", "--filter", "name=tsp-redis", "--format", "{{.Status}}"],
-            stdout: "piped",
-            stderr: "piped",
-          });
-
-          const { stdout } = await checkCommand.output();
-          const status = new TextDecoder().decode(stdout).trim();
+          const { stdout } = await runCommand("docker", [
+            "ps", "--filter", "name=tsp-redis", "--format", "{{.Status}}",
+          ]);
+          const status = stdout.trim();
 
           if (status.includes("Up")) {
             redisRunning = true;
@@ -58,13 +57,13 @@ export function getRedisSessionTests() {
         }
 
         // Get test root - use absolute path from project root
-        const cwd = Deno.cwd();
-        const testRoot = cwd + "/tests/test_www";
+        const projectRoot = cwd();
+        const testRoot = getTestRoot();
         console.log(`  ${COLORS.dim}Test root: ${testRoot}${COLORS.reset}`);
 
         // Create config files in project directory (not temp) so paths resolve correctly
-        const configPath = cwd + "/test_redis_session_config1.json";
-        const configPath2 = cwd + "/test_redis_session_config2.json";
+        const configPath = `${projectRoot}/test_redis_session_config1.json`;
+        const configPath2 = `${projectRoot}/test_redis_session_config2.json`;
 
         const config1Content = JSON.stringify({
           root: testRoot,
@@ -88,24 +87,22 @@ export function getRedisSessionTests() {
           },
         }, null, 2);
 
-        await Deno.writeTextFile(configPath, config1Content);
-        await Deno.writeTextFile(configPath2, config2Content);
+        await writeFile(configPath, config1Content, "utf8");
+        await writeFile(configPath2, config2Content, "utf8");
 
         console.log(`    ${COLORS.dim}Config 1: ${config1Content}${COLORS.reset}`);
 
         // Start server 1
         console.log(`  ${COLORS.dim}Starting TSP server 1 on port ${TEST_PORT_1}...${COLORS.reset}`);
 
-        const server1Process = new Deno.Command(Deno.execPath(), {
-          args: [
-            "run",
-            "--allow-all",
-            "src/main.ts",
-            "--config",
-            configPath,
-          ],
-          stdout: "piped",
-          stderr: "piped",
+        const server1Process = Bun.spawn([
+          process.execPath,
+          "run",
+          "src/main.ts",
+          "--config",
+          configPath,
+        ], {
+          stdio: ["ignore", "pipe", "pipe"],
         }).spawn();
 
         // Wait a bit and then read output
@@ -117,16 +114,14 @@ export function getRedisSessionTests() {
         // Start server 2
         console.log(`  ${COLORS.dim}Starting TSP server 2 on port ${TEST_PORT_2}...${COLORS.reset}`);
 
-        const server2Process = new Deno.Command(Deno.execPath(), {
-          args: [
-            "run",
-            "--allow-all",
-            "src/main.ts",
-            "--config",
-            configPath2,
-          ],
-          stdout: "piped",
-          stderr: "piped",
+        const server2Process = Bun.spawn([
+          process.execPath,
+          "run",
+          "src/main.ts",
+          "--config",
+          configPath2,
+        ], {
+          stdio: ["ignore", "pipe", "pipe"],
         }).spawn();
 
         // Wait for server 2 to start
@@ -342,8 +337,8 @@ export function getRedisSessionTests() {
 
           // Cleanup config files
           try {
-            await Deno.remove(configPath);
-            await Deno.remove(configPath2);
+            await rm(configPath, { force: true });
+            await rm(configPath2, { force: true });
           } catch {
             // Ignore cleanup errors
           }

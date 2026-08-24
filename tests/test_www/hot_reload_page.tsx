@@ -3,12 +3,14 @@
  * Directly reads file content to avoid component import issues in compiled binary
  */
 
+import { readFile } from "node:fs/promises";
+
 export default Page(async function(ctx) {
   // Directly read HotReloadUtils.ts file to get version
   let version = "UNKNOWN";
   try {
     const utilsPath = "./tests/test_www/components/HotReloadUtils.ts";
-    const content = await Deno.readTextFile(utilsPath);
+    const content = await readFile(utilsPath, "utf8");
     const match = content.match(/return "([^"]+)"/);
     if (match) {
       version = match[1];
