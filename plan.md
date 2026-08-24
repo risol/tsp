@@ -2074,6 +2074,25 @@ tspserver(.exe) + www/
 - 删除 Deno submodule/patch/build pipeline；
 - docs 全部切换 Bun-TSP Runtime。
 
+## 28.1 当前实施状态（2026-08-24）
+
+以下状态反映当前 `bun` 分支已经实际完成并验证的范围：
+
+- [x] M0：Bun Fork 已完成 Windows 编译，继续使用 upstream 预编译 JSC。
+- [x] M1：same-URL targeted module eviction 已完成并通过测试。
+- [x] M2：`.tsp` native loader 已完成，支持 TSX 页面加载。
+- [x] M3：TSP dependency/reverse-dependency graph 已接入页面 reload。
+- [x] M4：nested/shared dependency 的定向失效与重新实例化已完成。
+- [ ] M5：旧请求完成、新 generation 并发隔离的完整验证仍待补齐。
+- [ ] M6：Windows watcher 已验证；Linux atomic-save/stat fallback 测试仍待补齐。
+- [x] M7：Windows `tspserver.exe + www/` 外部目录热更新已验证。
+- [x] M8：TSP 运行时已迁移到 Bun API；React/JSX、React DOM server 以及运行时 npm 包由 Bun Fork 内置 namespace 提供，外部 `www` 不需要携带 `dist/node_modules`。
+- [ ] M9：session、Redis/DB/logger 和 config 的持久化 reload 语义仍待完成。
+- [ ] M10：Windows 单元测试与 E2E 已通过；memory stress 和 Linux package tests 仍待补齐。
+- [x] M11：Deno/denort 相关源码、构建产物和旧说明已清理。
+
+本轮验证记录：`sh tsp.sh check` 通过；93 个单元测试通过；Windows E2E 通过 32/32；使用不带 `node_modules` 的外部 `www` 启动 `tspserver.exe`，React 页面成功进入业务重定向流程。
+
 ---
 
 # 29. 建议的 Git Commit / PR 粒度
