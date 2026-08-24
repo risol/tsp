@@ -229,7 +229,7 @@ is green.
   `bun_runtime`; `cargo build -p bun_runtime_tsp` is 1.37s
   incremental.
 
-### Slice 8 — Phase 0 docs freeze (done, commit TBD)
+### Slice 8 — Phase 0 docs freeze (done, commit `043a832`)
 
 - **Why:** Sol picked the Phase 0 path in the post-slice-7 sync to
   protect later slices from ABI drift. The 12 freeze items are
@@ -560,6 +560,70 @@ is green.
   Phase 5+ is feature work, not infra. Sol to pick the next
   direction.
 
+### Slice 14a -- HEAD / OPTIONS fallback per spec sect.6.5/6.6 (done, bun commit `39b95599`)
+
+- **Why:** the DeepSeek plan/spec consistency audit (2026-08-24)
+  flagged that spec sect.6.5 requires the runtime to synthesise
+  a body-less `HEAD` from `GET` when no explicit `HEAD` export
+  exists, and sect.6.6 requires an automatic `OPTIONS` response
+  with `Allow` when no explicit `OPTIONS` export exists. Before
+  this slice, `HEAD /` returned 400 (the verb was not in the
+  `HttpMethod` enum at all) and `OPTIONS /` returned 405. Both
+  were spec MUSTs, so the gap was high-priority book-keeping
+  rather than feature work.
+- **What landed (in `bun/src/runtime/tsp/`):**
+  - `router.rs`: `HttpMethod::Head` variant + `from_request_line`
+    recognises `"HEAD"`. New `HttpMethod::REAL` constant (Get,
+    Post, Put, Patch, Delete) excludes Head and Options so the
+    slice 5 detector does not falsely claim support for the
+    two fallback-handled verbs. `RouteTable::scan` switched
+    from `ALL.to_vec()` to `REAL.to_vec()`. New
+    `MatchResult::FoundHeadOverGet` arm in `lookup` for the
+    "GET but no explicit HEAD" case.
+  - `host.rs`: `handle_connection` now matches
+    `FoundHeadOverGet` -> run GET, emit body-less 200; and
+    `MethodNotAllowed { requested: Options, .. }` with at least
+    one other method exported -> 204 + `Allow`.
+- **Verify:** `cargo test -p bun_runtime_tsp --lib` 47 passed
+  (no new tests -- the change is path-level routing semantics,
+  not unit-test-worthy). E2E (TSP_PORT=9127) end-to-end:
+  ```
+  GET /     -> 200 <h1>Hello from TSP v2</h1>
+  HEAD /    -> 200 (empty body, Content-Length 0)
+  OPTIONS / -> 204 with Allow: GET, POST, PUT, PATCH, DELETE
+  GET /nope -> 404
+  POST /    -> 405 (no POST export)
+  DELETE /  -> 405 (no DELETE export)
+  ```
+- **Known limitation (deferred to slice 14b):** the current
+  `HEAD` response has `Content-Length: 0`, not the GET body's
+  length. Spec sect.6.5 says the body MUST be omitted but the
+  `Content-Length` header SHOULD match the body that would have
+  been sent. Preserving the length requires a response-writer
+  refactor (the current `handle_connection` formats the headers
+  from the `body.len()` of the return tuple, which discards the
+  GET's actual length when we substitute an empty body). Slice
+  14b will split response writing into a dedicated helper that
+  takes a `head_mode: bool` and a `declared_length: usize`.
+- **Out of slice 14a (still deferred):**
+  - Dynamic route segments `[name].tsp` (spec sect.11.3) --
+    router still rejects with `RouterError::UnsupportedShape`.
+  - Catch-all `[...name].tsp` (sect.11.4) -- same.
+  - URL percent-decode + 400 malformed (sect.11.8) -- not
+    implemented.
+  - Trailing slash normalisation (sect.11.9) -- not
+    implemented.
+  - Route precedence (sect.11.6) -- linear scan, no priority.
+  - Full Context bridge (`ctx.request` / `ctx.url` /
+    `ctx.params` / `ctx.signal`, spec sect.13) -- not
+    implemented; PoC 1 fixtures use a zero-arg `GET()`.
+  These are Phase 5+ per plan sect.61; tracked in the
+  audit-issue list (issue 4 / 14).
+- **Next:** Sol to pick. Candidates: slice 14b (HEAD
+  Content-Length refactor), Phase 5 feature work (Context
+  bridge, dynamic routing, fragments), or ADR work for the
+  remaining plan/spec gaps surfaced in the audit.
+
 ## Realistic next-step options (post-Slice 7)
 
 The in-process bridge is genuinely multi-session work. Other
@@ -604,20 +668,41 @@ interface. v1 (`src/main.ts`, `www/`, `tsp.sh`) is unchanged
 throughout the refactor; the side-by-side coexistence strategy
 holds.
 
-### Plan sect.74 DoD items satisfied by PoC 1
+### Plan sect.74 DoD items satisfied by PoC 1 (reconciled post-slice 13)
+
+> Reconciled 2026-08-24 after the slice 9-12 + 13 review: the
+> original "deferred (slice 7+)" bullets were written before
+> slices 9-12 landed. The slice column now reflects actual
+> delivery; the original PoC 1 closure check (slice 6 ledger)
+> predates that work. See slice 9-12 entries for evidence.
+>
+> Items still genuinely deferred (Context bridge full ABI,
+> session / persistent services, multi-worker) are flagged
+> explicitly as such below.
 
 - [x] `tspserver_v2` does not depend on `main.ts`
 - [x] HTTP lifecycle is native (Rust stdlib TcpListener)
 - [x] `.tsp` is transpile + execute (jsx.rs -> bun.exe)
 - [x] filesystem routing correct (routes/index.tsp -> /)
-- [x] Context / Response ABI stable enough for the smoke test
-      (full Context bridge is slice 7+)
-- [x] generation atomic publish correct -- **deferred** (slice 7+)
-- [x] LKG correct -- **deferred** (slice 7+)
-- [x] reload does not restart HTTP server -- **deferred** (slice 7+)
+- [x] Context / Response ABI stable enough for the smoke test --
+      **partial** (full Context bridge with `tsp:server` import +
+      `ctx.request` / `ctx.url` / `ctx.params` etc. is slice 14+;
+      PoC 1 `.tsp` fixtures use a zero-arg `GET()` signature
+      that is intentionally simpler than the spec §6.2
+      `(ctx: Context) => HandlerResult` form)
+- [x] generation atomic publish correct -- landed (slices 9-10b)
+- [x] LKG correct -- landed (slice 10a; first-commit LKG = candidate,
+      subsequent-commit LKG = previous current, failed-commit
+      LKG unchanged)
+- [x] reload does not restart HTTP server -- landed (slice 11
+      watcher: any change marks slots dirty, next request rebuilds)
 - [x] reload does not rebuild session / persistent services --
-      **deferred** (slice 7+)
-- [x] generation can be retired -- **deferred** (slice 7+)
+      N/A (no session / no persistent services yet; those are
+      Phase 8 work)
+- [x] generation can be retired -- landed (slice 12 Arc<String>
+      payload reference counting: old generation's payload is
+      dropped when no request holds a pin, even after `current`
+      is overwritten)
 
 ### What is NOT yet built (deferred to slice 7+)
 

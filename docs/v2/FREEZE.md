@@ -371,6 +371,80 @@ contract application code can rely on:
 - Nested layouts as a directory convention (plan §15) -- v2.0 uses
   plain component composition.
 
+### Spec §67 items NOT frozen by Phase 0 (deliberate scoping)
+
+`tsp-v2-specification.md` §67 lists 25 "frozen protocol decisions"
+that should be treated as protocol freeze candidates before v2.0
+is declared stable. Phase 0 froze 12 of them (the ones matching
+plan §60's 12-item freeze list). The remaining 13 are **not**
+frozen by this document; they are guidance, not contract. If any
+of them needs to become a contract for v2.0 application code,
+re-open Phase 0 with an ADR (plan §69) and add the item here.
+
+Not frozen in Phase 0 (from spec §67, items 4, 6, 8, 13, 14, 19,
+21, 22, 23, 24, 25, plus fragments of items already partially
+covered by the 12 frozen entries):
+
+- **No default export from `.tsp` modules** (spec §67.4) -- the 12
+  frozen items cover named HTTP method exports but not the
+  negative contract "no `export default`". Open question: is a
+  default export a hard error, or a warning? Currently the host
+  silently ignores it.
+- **Unknown runtime exports are invalid** (spec §67.6) -- the
+  slice 5 detector only looks for `GET/POST/...` exports; an
+  unknown `export function FOO()` is silently ignored. The spec
+  intends this to be a hard error. Defer to a future slice that
+  adds export validation per plan §48.
+- **No arbitrary object response magic** (spec §67.8) -- covered
+  by freeze item 5 (`HandlerResult = HtmlNode | Response`), but
+  the negative side ("`return { redirect: '/x' }` MUST NOT
+  redirect") is not enforced; the host currently 500s. Freezing
+  the negative side means turning the 500 into a typed error
+  with code `TSP3001` and a clearer message. Already exemplified
+  in `docs/v2/examples/10-shape-magic.tsp`; the host enforcement
+  is the missing piece.
+- **`ctx.request` and explicit `Response` follow Web API
+  semantics** (spec §67.13) -- the Context bridge is Phase 7;
+  PoC 1 fixture uses a zero-arg `GET()` signature. Web `Request`
+  / `Response` adoption is part of the Phase 7 work.
+- **Durable state lives in persistent services, not page
+  modules** (spec §67.14) -- the service registry (plan §17) is
+  not built yet. v2.0 will not have a service contract until
+  Phase 8.
+- **Shared application-local modules are not guaranteed
+  process-wide singleton across PageSlots** (spec §67.19) -- the
+  in-process JSC bridge is what would make this observable; with
+  the subprocess bridge each PageSlot already has its own
+  bun.exe process, so the question is moot until slice 14+.
+- **Framework globals are not required** (spec §67.21) -- v2.0
+  has no global registry of services; imports from `tsp:*` are
+  the only "global" surface. Confirming this is contract will
+  come with the `tsp:server` builtin module (Phase 7).
+- **Core native configuration does not require evaluating app
+  JavaScript** (spec §67.22) -- the current `bin/tspserver_v2.rs`
+  scans the routes dir at boot and the slice 11 watcher tracks
+  files; if a `.tsp` file fails to parse (slice 5's static
+  detector), the slot is not registered. This is "configuration
+  without JS evaluation" by construction; freezing the negative
+  side is mostly a reminder for future slices not to add a
+  "validate by running JS at boot" step.
+- **Fragment URL layout is internal and obtained through runtime
+  APIs** (spec §67.23) -- fragments (plan §14) are not built
+  yet; this lands with the fragment slice.
+- **React / browser hydration is outside the core v2.0
+  contract** (spec §67.24) -- already implied by the no-default-
+  export / no-globals decisions, but worth a separate freeze so
+  the future `@tsp/react` opt-in (plan §66) is unambiguously
+  "outside the contract".
+- **Layout / middleware magic is intentionally deferred**
+  (spec §67.25) -- same as the "Middleware" deferral above; the
+  spec explicitly states this is not v2.0 scope.
+
+These 13 are tracked as the **Phase 0.5** candidate list. Each
+one's promotion to "frozen" requires a separate Sol sign-off, at
+which point it moves from this section into the numbered list
+above and gets a commit hash.
+
 ---
 
 ## Sign-off

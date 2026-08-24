@@ -1624,7 +1624,21 @@ reload = "eager"
 - dev：await 同一个 build future；
 - production：可配置继续使用 LKG 或 await。
 
-推荐生产默认：继续 LKG，build 成功后下一请求切换。
+> **Implementation note (slice 12, 2026-08-24):** the original
+> "推荐生产默认：继续 LKG" recommendation is **superseded**.
+> Slice 12 chose to await the shared build future for both dev
+> and prod -- concurrent waiters all serve the new body once
+> the build completes, instead of seeing stale LKG. Rationale:
+> LKG is a stale-by-construction body, while a successful build
+> is the correct answer; "fall back to LKG" only matters if the
+> build fails, which `InFlightBuild::Done(Failed)` handles
+> explicitly (host serves LKG only on Failed/Abandoned). The
+> spec §32.4 contract ("deduplicate the in-flight build or
+> provide equivalent correctness") is satisfied by the await
+> path. The original plan recommendation was a default that
+> turned out to optimise for a wrong priority (latency over
+> freshness); the new default is documented in `docs/v2/progress.md`
+> slice 12.
 
 ---
 
