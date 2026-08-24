@@ -238,11 +238,47 @@ pub fn wrap_for_bun_cli(
         // page does not have to read process.env (and
         // so a context-shape mismatch breaks the
         // build rather than silently mis-rendering).
-        let escaped = json.replace('\\', "\\\\").replace('`', "\\`");
+        //
+        // `{json:?}` (Rust Debug for str) emits a valid JS
+        // string literal: it escapes `"` / `\` / control
+        // chars exactly like JS needs. Do NOT pre-escape the
+        // JSON with a manual `replace` on top -- the Debug
+        // formatter would then double-escape backslashes
+        // (body text containing `\"` broke `JSON.parse`
+        // before slice 16d fixed this).
         let _ = write!(
             out,
             "const __tspContext = JSON.parse({json:?});\n",
-            json = escaped
+            json = json
+        );
+        // Slice 16d: build the Web-standard request-facing
+        // context from the wire Context. `ctx.url` is a real
+        // `URL` (spec sect.13.4), `ctx.query` is
+        // `ctx.url.searchParams` (spec sect.13.5),
+        // `ctx.request` is a real Web `Request` (spec
+        // sect.13.3 -- text() / json() / formData() all
+        // come from Bun's native Request), and `ctx.signal`
+        // is a live AbortSignal (spec sect.13.7). The host
+        // does not abort it yet (no timeout / disconnect
+        // detection), but pages can register listeners.
+        // The request body is attached only for methods that
+        // carry one (a GET/HEAD Request with a body is a
+        // Web API TypeError). The page's own `content-length`
+        // header is dropped -- the host computes the real
+        // length from the lossy body it read.
+        out.push_str(
+            "const __tspReqHost = (__tspContext.headers && __tspContext.headers.host) ? __tspContext.headers.host : 'localhost';\n\
+             const __tspReqUrl = new URL('http://' + __tspReqHost + __tspContext.path + (__tspContext.query ? '?' + __tspContext.query : ''));\n\
+             __tspContext.url = __tspReqUrl;\n\
+             __tspContext.query = __tspReqUrl.searchParams;\n\
+             const __tspReqHeaders = new Headers(__tspContext.headers || {});\n\
+             __tspReqHeaders.delete('content-length');\n\
+             const __tspReqInit = { method: __tspContext.method, headers: __tspReqHeaders };\n\
+             if (__tspContext.method !== 'GET' && __tspContext.method !== 'HEAD' && __tspContext.body) {\n\
+             \x20 __tspReqInit.body = __tspContext.body;\n\
+             }\n\
+             __tspContext.request = new Request(__tspReqUrl, __tspReqInit);\n\
+             __tspContext.signal = new AbortController().signal;\n"
         );
     }
     // Existence check + invocation + envelope emission.
@@ -257,13 +293,13 @@ pub fn wrap_for_bun_cli(
         "if (typeof {method} !== 'function') {{\n  throw new Error('page does not export function {method}()');\n}}\n"
     );
     let call = if ctx_json.is_some() {
-        format!("const __tspResult__ = {method}(__tspContext);\n")
+        format!("const __tspResultPromise__ = {method}(__tspContext);\n")
     } else {
-        format!("const __tspResult__ = {method}();\n")
+        format!("const __tspResultPromise__ = {method}();\n")
     };
     out.push_str(&call);
     out.push_str(
-        "(async () => {\n         \x20let __tspBody__, __tspStatus__, __tspHeaders__, __tspType__;\n         \x20if (__tspResult__ instanceof Response) {\n         \x20\x20__tspType__ = 'response';\n         \x20\x20__tspStatus__ = __tspResult__.status;\n         \x20\x20__tspHeaders__ = {};\n         \x20\x20for (const [__k__, __v__] of __tspResult__.headers) __tspHeaders__[__k__] = __v__;\n         \x20\x20__tspBody__ = await __tspResult__.text();\n         \x20} else if (typeof __tspResult__ === 'string') {\n         \x20\x20__tspType__ = 'html';\n         \x20\x20__tspStatus__ = 200;\n         \x20\x20__tspHeaders__ = {};\n         \x20\x20__tspBody__ = __tspResult__;\n         \x20} else {\n         \x20\x20throw new Error('page returned invalid value (expected string or Response, got ' + (typeof __tspResult__) + ')');\n         \x20}\n         \x20const __tspEnvelope__ = JSON.stringify({type: __tspType__, status: __tspStatus__, headers: __tspHeaders__, body: __tspBody__});\n         \x20__tspConsoleLog('__TSP_OUT_V1__' + '\\n' + __tspEnvelope__);\n         })().catch((e) => { console.error(String(e && e.stack || e)); process.exit(1); });\n"
+        "(async () => {\n         \x20let __tspBody__, __tspStatus__, __tspHeaders__, __tspType__;\n         \x20const __tspResult__ = await __tspResultPromise__;\n         \x20if (__tspResult__ instanceof Response) {\n         \x20\x20__tspType__ = 'response';\n         \x20\x20__tspStatus__ = __tspResult__.status;\n         \x20\x20__tspHeaders__ = {};\n         \x20\x20for (const [__k__, __v__] of __tspResult__.headers) __tspHeaders__[__k__] = __v__;\n         \x20\x20__tspBody__ = await __tspResult__.text();\n         \x20} else if (typeof __tspResult__ === 'string') {\n         \x20\x20__tspType__ = 'html';\n         \x20\x20__tspStatus__ = 200;\n         \x20\x20__tspHeaders__ = {};\n         \x20\x20__tspBody__ = __tspResult__;\n         \x20} else {\n         \x20\x20throw new Error('page returned invalid value (expected string or Response, got ' + (typeof __tspResult__) + ')');\n         \x20}\n         \x20const __tspEnvelope__ = JSON.stringify({type: __tspType__, status: __tspStatus__, headers: __tspHeaders__, body: __tspBody__});\n         \x20__tspConsoleLog('__TSP_OUT_V1__' + '\\n' + __tspEnvelope__);\n         })().catch((e) => { console.error(String(e && e.stack || e)); process.exit(1); });\n"
     );
     out.push_str(transformed);
     out
@@ -321,7 +357,7 @@ mod tests {
         // No Context -> call the method with no argument.
         let body = "function GET() { return 'ok'; }\n";
         let wrapped = wrap_for_bun_cli(body, "GET", None);
-        assert!(wrapped.contains("const __tspResult__ = GET();"));
+        assert!(wrapped.contains("const __tspResultPromise__ = GET();"));
         assert!(wrapped.contains("__TSP_OUT_V1__"));
         // And the ctx-json is NOT in the output.
         assert!(!wrapped.contains("__tspContext"));
@@ -335,8 +371,40 @@ mod tests {
         let json = r#"{"method":"GET"}"#;
         let wrapped = wrap_for_bun_cli(body, "GET", Some(json));
         assert!(wrapped.contains("const __tspContext = JSON.parse("));
-        assert!(wrapped.contains("const __tspResult__ = GET(__tspContext);"));
+        assert!(wrapped.contains("const __tspResultPromise__ = GET(__tspContext);"));
         assert!(wrapped.contains("__TSP_OUT_V1__"));
+    }
+
+    #[test]
+    fn wrap_builds_request_url_query_signal() {
+        // Slice 16d: the preamble decorates the context with
+        // the Web-standard request surface -- a real URL, a
+        // URLSearchParams query, a Web Request, and a live
+        // AbortSignal. All four must appear in the wrapped
+        // output when a ctx_json is provided.
+        let body = "function POST(ctx) { return ctx.request.text(); }\n";
+        let json = r#"{"method":"POST","path":"/","query":"a=1","headers":{"host":"localhost:9000"},"body":"hi"}"#;
+        let wrapped = wrap_for_bun_cli(body, "POST", Some(json));
+        assert!(wrapped.contains("new URL("), "got: {wrapped}");
+        assert!(wrapped.contains("searchParams"), "got: {wrapped}");
+        assert!(wrapped.contains("new Request("), "got: {wrapped}");
+        assert!(wrapped.contains("new AbortController().signal"), "got: {wrapped}");
+        // The request body is passed to Bun's native Request
+        // for body-bearing methods (POST).
+        assert!(wrapped.contains("__tspReqInit.body"), "got: {wrapped}");
+    }
+
+    #[test]
+    fn wrap_get_request_has_no_body() {
+        // GET/HEAD Requests must not carry a body (Web API
+        // TypeError), so the init object only gains `.body`
+        // for other methods.
+        let body = "function GET(ctx) { return 'x'; }\n";
+        let json = r#"{"method":"GET","path":"/","query":"","headers":{},"body":""}"#;
+        let wrapped = wrap_for_bun_cli(body, "GET", Some(json));
+        // The GET branch skips attaching a body; verify the
+        // method-check guard is present in the preamble.
+        assert!(wrapped.contains("__tspContext.method !== 'GET'"), "got: {wrapped}");
     }
 
     #[test]

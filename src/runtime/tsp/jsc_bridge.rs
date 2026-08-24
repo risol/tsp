@@ -125,8 +125,12 @@ pub fn execute(
         // the env var directly still gets the Context); the
         // env var is here for completeness so JS code that
         // wants the raw JSON (e.g. for streaming, or for
-        // debug) can read it.
-        cmd.env("TSP_CONTEXT_JSON", json);
+        // debug) can read it. Slice 16d strips the request
+        // body from the env form -- env blocks on Windows are
+        // capped at ~32 KiB while bodies can reach the 1 MiB
+        // default limit; the body always rides inside the
+        // embedded literal.
+        cmd.env("TSP_CONTEXT_JSON", crate::host::ctx_json_for_env(json));
     }
     let output = cmd.output().map_err(JscError::Spawn)?;
 

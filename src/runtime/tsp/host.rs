@@ -38,12 +38,14 @@ use crate::router::{HttpMethod, MatchResult, RouteTable};
 use std::sync::Arc;
 
 /// Per-request Context exposed to the `.tsp` page handler
-/// (spec sect.13, plan sect.8). The slice 16a surface is the
-/// minimum useful subset: HTTP method, URL path, raw query
-/// string. `params` is an empty object for now -- dynamic
-/// route segments (spec sect.11.3) land in a later slice.
-/// `signal` (AbortSignal) and `body` (Web Request) are slice
-/// 16b/c; `cookies` is Phase 8.
+/// (spec sect.13, plan sect.8). Slice 16a landed the minimum
+/// subset (method / path / query / params); slice 16d adds
+/// `body` + `headers` so the JS wrapper can build the Web
+/// `Request` object (spec sect.13.3) and derive `ctx.url` /
+/// `ctx.query` (spec sect.13.4/13.5) on the JS side.
+/// `params` is still an empty map -- dynamic route segments
+/// (spec sect.11.3) land in a later slice; `cookies` and
+/// `session` are Phase 8.
 #[derive(Debug, Clone)]
 pub struct Context {
     /// HTTP method the request came in with (uppercase).
@@ -51,22 +53,29 @@ pub struct Context {
     /// URL path the route matched (e.g. `/`, `/about`).
     pub path: String,
     /// Raw query string without the leading `?`, or empty
-    /// when the request had no query. The page can parse it
-    /// via `new URLSearchParams(ctx.query)` (the JS API
-    /// does the percent-decoding for us).
+    /// when the request had no query. The JS wrapper turns
+    /// this into `ctx.url.searchParams` (spec sect.13.5).
     pub query: String,
     /// Route parameters from file-system routing (spec
     /// sect.11.3). Empty for slice 16a because dynamic
     /// segments are not implemented yet.
     pub params: std::collections::HashMap<String, String>,
+    /// Request body as a UTF-8-lossy string, or empty when
+    /// the request had no body / no Content-Length. The JS
+    /// wrapper exposes it via `ctx.request.text()` etc.
+    pub body: String,
+    /// Request headers with lower-cased names, wire order.
+    /// Duplicate names are joined with ", " (the Web `Headers`
+    /// combine rule for non-Set-Cookie headers).
+    pub headers: Vec<(String, String)>,
 }
 
 impl Context {
     /// Serialise to a JSON string the JS side parses via
     /// `JSON.parse(...)`. The format is intentionally
     /// minimal: top-level keys are method / path / query /
-    /// params. Adding more fields here is a contract
-    /// change for `.tsp` page authors.
+    /// params / body / headers. Adding more fields here is a
+    /// contract change for `.tsp` page authors.
     pub fn to_json(&self) -> String {
         // Hand-rolled to avoid pulling in a JSON crate. The
         // method comes from `HttpMethod::as_str` (one of
@@ -76,8 +85,12 @@ impl Context {
         // percent-encoded bytes that we surface verbatim.
         // `.tsp` authors that want decoded forms parse
         // them on the JS side via `decodeURIComponent` /
-        // `URLSearchParams`.
-        let mut out = String::with_capacity(64 + self.path.len() + self.query.len());
+        // `URLSearchParams`. The body may contain arbitrary
+        // UTF-8 text and goes through `json_string` like
+        // every other string field. Headers serialise as a
+        // flat object (name -> value).
+        let mut out =
+            String::with_capacity(64 + self.path.len() + self.query.len() + self.body.len());
         out.push_str("{\"method\":");
         json_string(&mut out, self.method.as_str());
         out.push_str(",\"path\":");
@@ -87,6 +100,19 @@ impl Context {
         out.push_str(",\"params\":{");
         let mut first = true;
         for (k, v) in &self.params {
+            if !first {
+                out.push(',');
+            }
+            first = false;
+            json_string(&mut out, k);
+            out.push(':');
+            json_string(&mut out, v);
+        }
+        out.push_str("},\"body\":");
+        json_string(&mut out, &self.body);
+        out.push_str(",\"headers\":{");
+        let mut first = true;
+        for (k, v) in &self.headers {
             if !first {
                 out.push(',');
             }
@@ -200,6 +226,50 @@ impl JsonValue {
         match self {
             JsonValue::Number(n) => Some(n.round() as u16),
             _ => None,
+        }
+    }
+
+    /// Serialise back to a JSON string. Used by
+    /// `ctx_json_for_env` (strip the request body from the
+    /// env-var side channel). The shapes round-trip exactly:
+    /// parse_json(serialize(v)) == v for the subsets the
+    /// parser accepts.
+    fn serialize(&self, out: &mut String) {
+        use std::fmt::Write as _;
+        match self {
+            JsonValue::Null => out.push_str("null"),
+            JsonValue::Bool(true) => out.push_str("true"),
+            JsonValue::Bool(false) => out.push_str("false"),
+            JsonValue::Number(n) => {
+                let _ = write!(out, "{n}");
+            }
+            JsonValue::String(s) => json_string(out, s),
+            JsonValue::Array(items) => {
+                out.push('[');
+                let mut first = true;
+                for item in items {
+                    if !first {
+                        out.push(',');
+                    }
+                    first = false;
+                    item.serialize(out);
+                }
+                out.push(']');
+            }
+            JsonValue::Object(entries) => {
+                out.push('{');
+                let mut first = true;
+                for (k, v) in entries {
+                    if !first {
+                        out.push(',');
+                    }
+                    first = false;
+                    json_string(out, k);
+                    out.push(':');
+                    v.serialize(out);
+                }
+                out.push('}');
+            }
         }
     }
 }
@@ -469,6 +539,29 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
     }
 }
 
+/// The `TSP_CONTEXT_JSON` env var carries the Context the
+/// bun subprocess can read directly. Slice 16d: we strip the
+/// request `body` from the env-var form (the body travels in
+/// the wrapper's embedded literal instead) because env blocks
+/// on Windows are capped at ~32 KiB and request bodies can be
+/// up to the 1 MiB default limit. The JS page itself never
+/// needs the env var -- the wrapper preamble bakes the full
+/// Context (body included) into the script.
+pub fn ctx_json_for_env(json: &str) -> String {
+    match parse_json(json) {
+        Some(JsonValue::Object(entries)) => {
+            let entries: Vec<(String, JsonValue)> = entries
+                .into_iter()
+                .filter(|(k, _)| k != "body")
+                .collect();
+            let mut out = String::with_capacity(json.len());
+            JsonValue::Object(entries).serialize(&mut out);
+            out
+        }
+        _ => json.to_string(),
+    }
+}
+
 /// Map an HTTP status code to its canonical reason-phrase
 /// (the wire form the host emits). Unknown codes fall back
 /// to "HTTP/1.1 200 OK" -- accepting a page that returns a
@@ -528,6 +621,23 @@ fn status_line_for(status: u16) -> &'static str {
 }
 
 const DEFAULT_PORT: u16 = 3000;
+
+/// Hard cap for the header block (request line + headers),
+/// spec sect.6.4-ish sanity: a client that never sends the
+/// `\r\n\r\n` terminator must not make us buffer forever.
+const MAX_HEADER_BYTES: usize = 64 * 1024;
+
+/// Default request body limit (spec sect.14.2: the runtime
+/// MUST enforce a configured body limit before unbounded
+/// buffering). Override via `TSP_MAX_BODY_BYTES` (bytes).
+const DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
+
+fn resolve_max_body_bytes() -> usize {
+    match std::env::var("TSP_MAX_BODY_BYTES") {
+        Ok(s) => s.parse::<usize>().unwrap_or(DEFAULT_MAX_BODY_BYTES),
+        Err(_) => DEFAULT_MAX_BODY_BYTES,
+    }
+}
 
 #[derive(Debug)]
 pub enum HostError {
@@ -597,10 +707,32 @@ fn handle_connection(
     registry: &PageRegistry,
     bun: &BunRuntime,
 ) -> Result<(), HostError> {
-    let mut buf = [0u8; 8192];
-    let n = stream.read(&mut buf).map_err(HostError::Connection)?;
-    let request = std::str::from_utf8(&buf[..n]).unwrap_or("");
-    let parsed = parse_request(request);
+    // Slice 16d: read the full request (header block up to
+    // CRLFCRLF + exactly Content-Length body bytes). Body
+    // over the configured limit (TSP_MAX_BODY_BYTES,
+    // default 1 MiB) is rejected with 413 before the page
+    // sees it (spec sect.14.2).
+    let max_body = resolve_max_body_bytes();
+    let (head, body) = match read_request(&mut stream, max_body)? {
+        ReadOutcome::Complete { head, body } => (head, body),
+        ReadOutcome::BodyTooLarge { limit } => {
+            let body_text = format!(
+                "TSP v2 PoC 1 slice 16d: request body exceeds configured limit of {limit} bytes\n"
+            );
+            let head = format!(
+                "HTTP/1.1 413 Payload Too Large\r\n\
+                 Content-Type: text/plain; charset=utf-8\r\n\
+                 Content-Length: {}\r\n\
+                 Connection: close\r\n\r\n",
+                body_text.len()
+            );
+            stream.write_all(head.as_bytes()).map_err(HostError::Connection)?;
+            stream.write_all(body_text.as_bytes()).map_err(HostError::Connection)?;
+            let _ = stream.shutdown(Shutdown::Both);
+            return Ok(());
+        }
+    };
+    let parsed = parse_request(&head);
 
     let (status_line, content_type, allow_header, body, extra_headers) = match parsed {
         ParsedRequest::Unknown => (
@@ -610,18 +742,21 @@ fn handle_connection(
             "TSP v2 PoC 1 slice 10b: malformed request line\n".to_string(),
             Vec::new(),
         ),
-        ParsedRequest::Known { method, path, query } => {
+        ParsedRequest::Known { method, path, query, headers } => {
             // Build the per-request Context the page handler
             // receives as its single argument. `params` is
             // empty for slice 16a (dynamic route segments
             // are not implemented yet). The query string is
-            // passed verbatim -- the JS side decodes it via
-            // `URLSearchParams` if it wants parsed forms.
+            // passed verbatim -- the JS side turns it into
+            // `ctx.url.searchParams` (spec sect.13.5). `body`
+            // and `headers` are slice 16d (spec sect.13.3).
             let ctx = Context {
                 method,
                 path: path.clone(),
                 query,
                 params: std::collections::HashMap::new(),
+                body,
+                headers,
             };
             match routes.lookup(&path, method) {
             MatchResult::Found { route, method: req_method } => {
@@ -629,35 +764,56 @@ fn handle_connection(
                     route: route.path.clone(),
                     method: req_method,
                 };
-                // render_for_route does the heavy lifting
-                // (begin_build, InFlightBuild dedup, build
-                // pipeline, payload caching); we only use its
-                // body string and then parse the envelope.
-                let (_status_line, _ct, allow_header, body) = render_for_route(
-                    &route, req_method, &page_ref, registry, bun, &ctx,
-                );
+                // Slice 16d: a request that carries a query
+                // string or a body is inherently per-request --
+                // the page's output depends on those per-request
+                // inputs, which differ from request to request.
+                // The registry cache keys on (route, method), so
+                // a cached payload would replay the FIRST
+                // request's output (e.g. the first query string,
+                // the first body echo) to every later request on
+                // the same route+method. Such requests therefore
+                // bypass the generation cache and rebuild via
+                // the pipeline directly (spec sect.20-22 cache
+                // semantics only cover body-less, query-less
+                // GET-style rendering). render_with_body does
+                // the 405 / 500 shaping itself.
+                let (_status_line, _ct, allow_header, body) = if !ctx.body.is_empty()
+                    || !ctx.query.is_empty()
+                {
+                    render_per_request(&route, req_method, bun, &ctx)
+                } else {
+                    render_for_route(&route, req_method, &page_ref, registry, bun, &ctx)
+                };
                 // Slice 16b: bun emits a `__TSP_OUT_V1__` envelope
                 // with the page's return value classified as
                 // either HtmlNode (string) or Web Response.
                 // parse_envelope unpacks it and surfaces the
                 // correct status / content-type / body / headers.
-                // The legacy branch (envelope tag absent) treats
-                // the body as raw HTML, which is the slice 6
-                // behaviour and stays compatible with the
-                // fixtures that pre-date slice 16b.
                 let outcome = parse_envelope(&body);
-                // The status_line from `render_for_route` is
-                // always "HTTP/1.1 200 OK" (the placeholder
-                // before the bun subprocess is called); the
-                // envelope is the source of truth for the
-                // page's actual status.
-                //
-                // Slice 16b covers status / content_type /
-                // body propagation. Header propagation
-                // (extra_headers) lands in slice 16c with a
-                // proper JSON object walker; for now we pass
-                // an empty vec so the writer skips the loop.
-                (outcome.status_line, outcome.content_type, allow_header, outcome.body, outcome.headers)
+                // The envelope is the source of truth for the
+                // page's actual status when the page ran. When
+                // the envelope is absent (Legacy), the body is
+                // an error page produced by the host (405 / 500)
+                // and the host's own status line must win --
+                // otherwise a method rejection would be served
+                // as 200 OK.
+                let use_envelope = outcome.kind != EnvelopeKind::Legacy;
+                (
+                    if use_envelope {
+                        outcome.status_line
+                    } else {
+                        _status_line
+                    },
+                    if use_envelope {
+                        outcome.content_type
+                    } else {
+                        _ct.to_string()
+                    },
+                    allow_header,
+                    outcome.body,
+                    outcome.headers,
+                )
             }
             MatchResult::FoundHeadOverGet { route } => {
                 // Spec sect.6.5: HEAD with no explicit HEAD export.
@@ -768,6 +924,75 @@ fn handle_connection(
         .map_err(HostError::Connection)?;
     let _ = stream.shutdown(Shutdown::Both);
     Ok(())
+}
+
+/// Slice 16d: build a page for a request whose output depends
+/// on per-request inputs (query string or body), bypassing the
+/// PageRegistry generation cache entirely.
+///
+/// The registry keys payloads on `(route, method)`, which is
+/// correct for body-less, query-less GET-style rendering
+/// (idempotent, no per-request variance) but wrong for
+/// requests whose output depends on the query / body -- a
+/// cached payload would replay the first request's output to
+/// every later request on the same route+method. So these
+/// requests go straight to the pipeline: prepare + bun
+/// subprocess, no `begin_build` / `commit`, no LKG fallback.
+/// 405 (method not exported) and 500 (build failure) still
+/// shape correctly.
+fn render_per_request(
+    route: &crate::router::Route,
+    requested: HttpMethod,
+    bun: &BunRuntime,
+    ctx: &Context,
+) -> (&'static str, &'static str, Option<String>, String) {
+    // Mirror render_for_route's 405 conversion: the page must
+    // export the requested method. We use the static detector
+    // (page::prepare) rather than the registry because we are
+    // deliberately outside the registry path.
+    match crate::page::prepare(route) {
+        Ok(page) if page.methods.contains(&requested) => {
+            match pipeline::build(route, requested, bun, &ctx.to_json()) {
+                Ok(body) => ("HTTP/1.1 200 OK", "text/html; charset=utf-8", None, body),
+                Err(e) => {
+                    let msg = format!("{e}");
+                    eprintln!(
+                        "TSPv2PoC1: build error on {}: {e}",
+                        route.source.display()
+                    );
+                    (
+                        "HTTP/1.1 500 Internal Server Error",
+                        "text/plain; charset=utf-8",
+                        None,
+                        format!(
+                            "TSP v2 PoC 1 slice 16d: build error on {}\n  {msg}\n",
+                            route.source.display()
+                        ),
+                    )
+                }
+            }
+        }
+        Ok(page) => {
+            let allow = build_allow_header(&page.methods);
+            let body = format!(
+                "TSP v2 PoC 1 slice 16d: method {} not exported by {}\n",
+                requested.as_str(),
+                route.source.display()
+            );
+            (
+                "HTTP/1.1 405 Method Not Allowed",
+                "text/plain; charset=utf-8",
+                if allow.is_empty() { None } else { Some(allow) },
+                body,
+            )
+        }
+        Err(e) => (
+            "HTTP/1.1 500 Internal Server Error",
+            "text/plain; charset=utf-8",
+            None,
+            format!("TSP v2 PoC 1 slice 16d: prepare error: {e}\n"),
+        ),
+    }
 }
 
 /// Slice 12 dispatch. The page may be Unloaded, Clean, Dirty,
@@ -1028,12 +1253,18 @@ enum ParsedRequest {
         /// Raw query string without the leading `?`, or
         /// empty when the request had no query.
         query: String,
+        /// Request headers with lower-cased names, wire
+        /// order, duplicates joined with ", ".
+        headers: Vec<(String, String)>,
     },
     Unknown,
 }
 
-fn parse_request(request: &str) -> ParsedRequest {
-    let Some(first_line) = request.lines().next() else {
+/// Parse the request line + header block. `head` is the
+/// complete header section (request line through the blank
+/// line), NOT the body -- `read_request` splits them first.
+fn parse_request(head: &str) -> ParsedRequest {
+    let Some(first_line) = head.lines().next() else {
         return ParsedRequest::Unknown;
     };
     let mut parts = first_line.split_whitespace();
@@ -1057,7 +1288,109 @@ fn parse_request(request: &str) -> ParsedRequest {
         method,
         path: path[..end].to_string(),
         query,
+        headers: parse_headers(head),
     }
+}
+
+/// Split a raw request into (head, body). Reads the header
+/// block (up to `\r\n\r\n`, capped at MAX_HEADER_BYTES),
+/// then reads exactly Content-Length body bytes (spec
+/// sect.14.2 -- a body over the configured limit is
+/// rejected before buffering completes).
+fn read_request(
+    stream: &mut TcpStream,
+    max_body: usize,
+) -> Result<ReadOutcome, HostError> {
+    let mut buf: Vec<u8> = Vec::with_capacity(4096);
+    let mut tmp = [0u8; 4096];
+    let mut head_end: Option<usize> = None;
+    loop {
+        let n = stream.read(&mut tmp).map_err(HostError::Connection)?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&tmp[..n]);
+        if let Some(pos) = find_subsequence(&buf, b"\r\n\r\n") {
+            head_end = Some(pos + 4);
+            break;
+        }
+        if buf.len() > MAX_HEADER_BYTES {
+            // No terminator within the cap: treat everything
+            // received as head (the parser will likely fail
+            // to find a request line; the caller 400s).
+            break;
+        }
+    }
+    let head_end = head_end.unwrap_or(buf.len());
+    let head = String::from_utf8_lossy(&buf[..head_end]).into_owned();
+    let content_length = parse_content_length(&head);
+    if content_length > max_body {
+        return Ok(ReadOutcome::BodyTooLarge { limit: max_body });
+    }
+    let mut body: Vec<u8> = buf[head_end..].to_vec();
+    while body.len() < content_length {
+        let n = stream.read(&mut tmp).map_err(HostError::Connection)?;
+        if n == 0 {
+            break;
+        }
+        body.extend_from_slice(&tmp[..n]);
+    }
+    body.truncate(content_length);
+    Ok(ReadOutcome::Complete {
+        head,
+        body: String::from_utf8_lossy(&body).into_owned(),
+    })
+}
+
+/// Result of `read_request`.
+#[derive(Debug)]
+enum ReadOutcome {
+    /// Head + body (lossy UTF-8) ready for parsing.
+    Complete { head: String, body: String },
+    /// Content-Length exceeded the configured body limit
+    /// (spec sect.14.2 -> 413 before body buffering completes).
+    BodyTooLarge { limit: usize },
+}
+
+fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// Parse the header block into (name, value) pairs. The
+/// request line is skipped. Names are lower-cased; a name
+/// that repeats is folded into a single entry with values
+/// joined by ", " (the Web `Headers` combine rule for
+/// non-Set-Cookie headers). Set-Cookie-style multi-value
+/// handling (semicolon join) lands with cookies in Phase 8.
+fn parse_headers(head: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for line in head.lines().skip(1) {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let name = name.trim().to_ascii_lowercase();
+        let value = value.trim().to_string();
+        match out.iter_mut().find(|(k, _)| *k == name) {
+            Some((_, v)) => {
+                v.push_str(", ");
+                v.push_str(&value);
+            }
+            None => out.push((name, value)),
+        }
+    }
+    out
+}
+
+fn parse_content_length(head: &str) -> usize {
+    parse_headers(head)
+        .iter()
+        .find(|(k, _)| k == "content-length")
+        .and_then(|(_, v)| v.trim().parse::<usize>().ok())
+        .unwrap_or(0)
 }
 
 fn build_allow_header(methods: &[HttpMethod]) -> String {
@@ -1094,6 +1427,8 @@ mod tests {
             path: "/".to_string(),
             query: "".to_string(),
             params: std::collections::HashMap::new(),
+            body: String::new(),
+            headers: Vec::new(),
         };
         let s = ctx.to_json();
         // The exact wire form is part of the slice 16a
@@ -1102,6 +1437,8 @@ mod tests {
         assert!(s.contains("\"path\":\"/\""), "got: {s}");
         assert!(s.contains("\"query\":\"\""), "got: {s}");
         assert!(s.contains("\"params\":{}"), "got: {s}");
+        assert!(s.contains("\"body\":\"\""), "got: {s}");
+        assert!(s.contains("\"headers\":{}"), "got: {s}");
     }
 
     #[test]
@@ -1111,6 +1448,8 @@ mod tests {
             path: "/search".to_string(),
             query: "q=hello&page=2".to_string(),
             params: std::collections::HashMap::new(),
+            body: String::new(),
+            headers: Vec::new(),
         };
         let s = ctx.to_json();
         assert!(s.contains("\"q=hello&page=2\""), "got: {s}");
@@ -1126,13 +1465,134 @@ mod tests {
             path: "/users/42".to_string(),
             query: String::new(),
             params,
+            body: String::new(),
+            headers: Vec::new(),
         };
         let s = ctx.to_json();
         assert!(s.contains("\"id\":\"42\""), "got: {s}");
     }
 
-#[cfg(test)]
-    
+    #[test]
+    fn context_to_json_serialises_body_and_headers() {
+        let ctx = Context {
+            method: HttpMethod::Post,
+            path: "/".to_string(),
+            query: String::new(),
+            params: std::collections::HashMap::new(),
+            body: "hello=world".to_string(),
+            headers: vec![
+                ("content-type".to_string(), "application/x-www-form-urlencoded".to_string()),
+                ("x-trace".to_string(), "abc".to_string()),
+            ],
+        };
+        let s = ctx.to_json();
+        assert!(s.contains("\"body\":\"hello=world\""), "got: {s}");
+        assert!(
+            s.contains("\"headers\":{\"content-type\":\"application/x-www-form-urlencoded\",\"x-trace\":\"abc\"}"),
+            "got: {s}"
+        );
+    }
+
+    #[test]
+    fn parse_request_extracts_headers() {
+        // The head block carries the request line + headers;
+        // the body is split off by read_request, so
+        // parse_request only sees the header section.
+        let head = "POST /submit HTTP/1.1\r\nHost: localhost:3000\r\nContent-Type: text/plain\r\nX-Multi: a\r\nX-Multi: b\r\n\r\n";
+        match parse_request(head) {
+            ParsedRequest::Known { method, path, query, headers } => {
+                assert_eq!(method, HttpMethod::Post);
+                assert_eq!(path, "/submit");
+                assert_eq!(query, "");
+                assert_eq!(headers.len(), 3);
+                assert!(headers.contains(&("host".to_string(), "localhost:3000".to_string())));
+                assert!(headers.contains(&("content-type".to_string(), "text/plain".to_string())));
+                // Duplicate header names fold with ", " join.
+                assert!(headers.contains(&("x-multi".to_string(), "a, b".to_string())));
+            }
+            ParsedRequest::Unknown => panic!("expected Known"),
+        }
+    }
+
+    #[test]
+    fn parse_content_length_reads_header() {
+        let head = "POST / HTTP/1.1\r\nContent-Length: 11\r\n\r\n";
+        assert_eq!(parse_content_length(head), 11);
+        let no_body = "GET / HTTP/1.1\r\n\r\n";
+        assert_eq!(parse_content_length(no_body), 0);
+    }
+
+    /// Build a connected (client, server) TcpStream pair for
+    /// read_request tests.
+    fn socket_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
+        let addr = listener.local_addr().expect("local addr");
+        let client = TcpStream::connect(addr).expect("connect");
+        let (server, _) = listener.accept().expect("accept");
+        (client, server)
+    }
+
+    #[test]
+    fn read_request_splits_head_and_body() {
+        let (mut client, mut server) = socket_pair();
+        let wire = "POST / HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello";
+        client.write_all(wire.as_bytes()).expect("write");
+        let outcome = read_request(&mut server, 1024).expect("read");
+        match outcome {
+            ReadOutcome::Complete { head, body } => {
+                assert!(head.starts_with("POST / HTTP/1.1"));
+                assert!(head.ends_with("\r\n\r\n"));
+                assert_eq!(body, "hello");
+            }
+            ReadOutcome::BodyTooLarge { .. } => panic!("not too large"),
+        }
+    }
+
+    #[test]
+    fn read_request_rejects_body_over_limit() {
+        // spec sect.14.2: a body over the configured limit is
+        // rejected before buffering completes (413).
+        let (mut client, mut server) = socket_pair();
+        let wire = "POST / HTTP/1.1\r\nContent-Length: 2048\r\n\r\n";
+        client.write_all(wire.as_bytes()).expect("write");
+        let outcome = read_request(&mut server, 1024).expect("read");
+        assert!(matches!(outcome, ReadOutcome::BodyTooLarge { limit: 1024 }));
+    }
+
+    #[test]
+    fn read_request_body_split_across_reads() {
+        // Head and body may arrive in separate TCP segments;
+        // read_request must keep reading until Content-Length
+        // is satisfied.
+        let (mut client, mut server) = socket_pair();
+        client.write_all(b"POST / HTTP/1.1\r\nContent-Length: 6\r\n\r\nab").expect("write part 1");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        client.write_all(b"cdef").expect("write part 2");
+        let outcome = read_request(&mut server, 1024).expect("read");
+        match outcome {
+            ReadOutcome::Complete { body, .. } => assert_eq!(body, "abcdef"),
+            ReadOutcome::BodyTooLarge { .. } => panic!("not too large"),
+        }
+    }
+
+    #[test]
+    fn ctx_json_for_env_strips_body_field() {
+        let json = r#"{"method":"POST","path":"/","query":"","params":{},"body":"BIG_BODY","headers":{"x":"y"}}"#;
+        let env = ctx_json_for_env(json);
+        assert!(!env.contains("BIG_BODY"), "got: {env}");
+        assert!(env.contains("\"x\":\"y\""), "got: {env}");
+        assert!(env.contains("\"method\":\"POST\""), "got: {env}");
+    }
+
+    #[test]
+    fn json_value_serialize_roundtrips() {
+        // The serializer used by ctx_json_for_env.
+        let json = r#"{"type":"response","status":201,"headers":{"x-comma":"a,b,c"},"body":"created"}"#;
+        let v = parse_json(json).expect("parse");
+        let mut out = String::new();
+        v.serialize(&mut out);
+        assert_eq!(out, json);
+    }
 
     #[test]
     fn envelope_parses_html() {
