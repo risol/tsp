@@ -3277,6 +3277,15 @@ fn tsp_embedded_builtin_path(specifier: &[u8]) -> Option<&'static [u8]> {
         b"react/jsx-runtime" => Some(b"tsp:embedded/react/jsx-runtime"),
         b"react/jsx-dev-runtime" => Some(b"tsp:embedded/react/jsx-dev-runtime"),
         b"react-dom/server" => Some(b"tsp:embedded/react-dom/server"),
+        b"bcryptjs" => Some(b"tsp:embedded/bcryptjs"),
+        b"compressing" => Some(b"tsp:embedded/compressing"),
+        b"exceljs" => Some(b"tsp:embedded/exceljs"),
+        b"jsonc-parser" => Some(b"tsp:embedded/jsonc-parser"),
+        b"ldapts" => Some(b"tsp:embedded/ldapts"),
+        b"mysql2/promise" => Some(b"tsp:embedded/mysql2/promise"),
+        b"nanoid" => Some(b"tsp:embedded/nanoid"),
+        b"redis" => Some(b"tsp:embedded/redis"),
+        b"zod" => Some(b"tsp:embedded/zod"),
         _ => None,
     }
 }

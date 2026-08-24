@@ -3932,12 +3932,74 @@ export const renderToString = m.renderToString;
 export const version = m.version;
 "#;
 
+const TSP_PACKAGE_SOURCE: &[u8] = br#"
+const key = import.meta.url.slice("tsp:embedded/".length);
+const m = globalThis.__tspBuiltins[key];
+export default m;
+export const Attribute = m.Attribute;
+export const Change = m.Change;
+export const Client = m.Client;
+export const Types = m.Types;
+export const Workbook = m.Workbook;
+export const ZodError = m.ZodError;
+export const ZodNumber = m.ZodNumber;
+export const ZodObject = m.ZodObject;
+export const ZodSchema = m.ZodSchema;
+export const ZodString = m.ZodString;
+export const applyEdits = m.applyEdits;
+export const array = m.array;
+export const boolean = m.boolean;
+export const compare = m.compare;
+export const compareSync = m.compareSync;
+export const compress = m.compress;
+export const createClient = m.createClient;
+export const createCluster = m.createCluster;
+export const createConnection = m.createConnection;
+export const createPool = m.createPool;
+export const customAlphabet = m.customAlphabet;
+export const date = m.date;
+export const escape = m.escape;
+export const findNodeAtLocation = m.findNodeAtLocation;
+export const format = m.format;
+export const genSalt = m.genSalt;
+export const genSaltSync = m.genSaltSync;
+export const gzip = m.gzip;
+export const hash = m.hash;
+export const hashSync = m.hashSync;
+export const literal = m.literal;
+export const modify = m.modify;
+export const nanoid = m.nanoid;
+export const number = m.number;
+export const object = m.object;
+export const parse = m.parse;
+export const parseTree = m.parseTree;
+export const random = m.random;
+export const record = m.record;
+export const renderToString = m.renderToString;
+export const string = m.string;
+export const tar = m.tar;
+export const tuple = m.tuple;
+export const union = m.union;
+export const urlAlphabet = m.urlAlphabet;
+export const zip = m.zip;
+export const z = m.z;
+"#;
+
 fn tsp_embedded_builtin_source(specifier: &[u8]) -> Option<&'static [u8]> {
     match specifier {
         b"tsp:embedded/react" => Some(TSP_REACT_SOURCE),
         b"tsp:embedded/react/jsx-runtime" => Some(TSP_REACT_JSX_RUNTIME_SOURCE),
         b"tsp:embedded/react/jsx-dev-runtime" => Some(TSP_REACT_JSX_DEV_RUNTIME_SOURCE),
         b"tsp:embedded/react-dom/server" => Some(TSP_REACT_DOM_SERVER_SOURCE),
+        b"tsp:embedded/bcryptjs"
+        | b"tsp:embedded/compressing"
+        | b"tsp:embedded/exceljs"
+        | b"tsp:embedded/jsonc-parser"
+        | b"tsp:embedded/ldapts"
+        | b"tsp:embedded/mysql2/promise"
+        | b"tsp:embedded/nanoid"
+        | b"tsp:embedded/redis"
+        | b"tsp:embedded/zod" => Some(TSP_PACKAGE_SOURCE),
         _ => None,
     }
 }
