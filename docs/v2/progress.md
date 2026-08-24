@@ -1178,6 +1178,99 @@ is green.
   queue before starting so the raw-bytes path also
   enables future file-upload + body streaming work.
 
+### Slice 16g -- raw-bytes body channel + formData (done, bun commit `aeb5dbc0`)
+
+- **Why:** spec sect.14.3 requires `request.formData()`
+  for multipart parsing. The slice 16d body was a
+  UTF-8-lossy `String` -- a binary multipart payload
+  with 0x00 / non-UTF-8 bytes (a real file upload)
+  would have U+FFFD substitution before Bun's
+  `Request.formData()` ever saw it. The slice 16d
+  progress note also flagged this as a Phase 7
+  blocker: "binary multipart payloads need a raw-bytes
+  transport slice before formData is genuinely
+  spec-compliant." 16g is that slice.
+- **What landed (in `bun/src/runtime/tsp/`):**
+  - `host.rs` -- `Context.body` is now `Vec<u8>` (the
+    lossy String is gone). `to_json` emits the body as
+    a base64 string under the new field name `body_b64`
+    (the JSON wire format has no native bytes shape;
+    the wrap preamble atob-decodes it back to bytes).
+    `read_request` no longer runs `from_utf8_lossy` on
+    the body; only the head block is lossy-decoded
+    (HTTP header lines are required to be ASCII; the
+    lossy fallback is defence-in-depth for misbehaving
+    clients). `ReadOutcome::Complete.body` is
+    `Vec<u8>`. `ctx_json_for_env` strips `body_b64`
+    (the env side channel still drops the body, since
+    Windows env blocks cap at ~32 KiB while bodies can
+    reach the 1 MiB default limit; the body rides in the
+    embedded literal in the generated JS). New
+    `base64_encode` is hand-rolled (no new dep) and
+    tested against the RFC 4648 section 10 vectors.
+  - `jsx.rs` -- the wrap preamble atob-decodes
+    `__tspContext.body_b64` into a `Uint8Array` and
+    feeds it to `new Request(url, { body: Uint8Array })`
+    so binary multipart reaches Bun's native
+    `formData()` parser without U+FFFD corruption. The
+    previous slice 16d "drop the page's content-length
+    header" line is removed: the host now reports the
+    raw body length in the content-length header, and
+    Bun needs that length to finalise a multipart
+    stream-parse.
+  - `routes/upload.tsp` (new fixture) -- the
+    `request.formData()` demonstration. Text fields
+    parse cleanly; file parts hit a known Bun 1.4
+    multipart parser hang when fed a Blob body (see
+    "Out of slice 16g" below).
+- **Verify:** 86 lib tests pass (was 83; +3: RFC 4648
+  base64 vectors, binary body round-trip through
+  `to_json`, raw binary body survives `read_request`).
+  E2E:
+  ```
+  GET /                    -> 200 (16f fixture, raw bytes path is transparent)
+  POST /  text/plain       -> 201 echo (slice 16f fixture, body round-trip ok)
+  POST /upload  text-only multipart
+    -> 200, a=1; b=2; c=3   (formData() parses 3 text fields)
+  POST /upload  raw binary [0,1,2,3] (not multipart)
+    -> 500 formData-error: ERR_FORMDATA_PARSE_ERROR
+       (formData() correctly rejects non-multipart
+       bodies; this is the proof the raw bytes
+       actually reach Bun intact)
+  POST / body [0,1,2,3] via / echo endpoint
+    -> 201 echo + 4 bytes (raw bytes round-trip
+       verified, no U+FFFD)
+  ```
+- **Out of slice 16g (deferred to 16h+):**
+  - **File upload with byte-fidelity** (multipart
+    `file=` parts). Bun 1.4's `Request.formData()` hangs
+    when the body is a `Blob` constructed in JS (the
+    Blob-fed stream has no proper end-of-stream
+    signal that the multipart parser can detect). The
+    hang is reproducible with both `Uint8Array` and
+    `Blob` body shapes plus `duplex: 'half'`; the
+    underlying cause is in Bun's stream layer, not in
+    our wire transport. 16g ships text fields + raw
+    body round-trip; file parts need a future slice
+    that streams the body through the host instead of
+    buffering it, or that switches to a Bun-side
+    implementation once the engine bug is fixed.
+  - `ctx.signal` abort triggers (16d deferred).
+  - spec sect.6.3 typed error codes TSP3xxx.
+  - URL percent-decode on dynamic segment values
+    (spec sect.11.8) -- 16e deferred.
+  - Cookie full `CookieOptions` interface (16f deferred).
+  - `ctx.session` (Phase 8).
+- **Next:** slice 16h = the remaining Phase 7 items.
+  The two real gaps left are: (a) spec sect.6.3 typed
+  error codes (TSP3xxx) -- a host-side change that
+  threads a stable code + phase + route into the 500
+  / 400 / 413 pages; and (b) `ctx.signal` abort triggers
+  (timeout / disconnect detection) -- a runtime change
+  that requires per-request book-keeping. Pick based
+  on which slice the next application work needs.
+  Read plan sect.61 + spec sect.6.3 / 13.7 to decide.
+
 ## Realistic next-step options (post-Slice 7) -- STALE
 
 > Note (2026-08-24): the in-process JSC bridge was closed
