@@ -698,12 +698,46 @@ is green.
     `PageRegistry` are hot).
   - Phase 5+ feature work (Context bridge, dynamic
     routes, fragments, etc.).
-- **Next:** candidates: slice 15b (precise dirty via
-  `ModuleGraph.importers_of` + a registry reverse map);
-  slice 15c (ModuleGraph hot-reload); or move to Phase 5
-  feature work. Sol to pick.
+- **Slice 15 status (closed by Sol 2026-08-24):** 15a
+  landed; 15b (precise per-module dirty) and 15c
+  (ModuleGraph hot-reload) are explicitly **deferred** --
+  the current "any change dirties every slot" watcher is
+  acceptable for the small-app dev use case, and precise
+  invalidation lands in a future phase if/when a real
+  app's rebuild cost makes it worth the watcher's
+  reverse-graph + per-page reverse-index bookkeeping.
 
-## Realistic next-step options (post-Slice 7)
+- **Next:** Phase 5+ feature work. Candidates:
+  - **Context bridge** (spec sect.13, plan sect.8) -- the
+    host currently calls `GET()` with no argument; spec
+    says `ctx.request` / `ctx.url` / `ctx.query` /
+    `ctx.params` / `ctx.signal` / `ctx.cookies` and
+    `ctx.formData()`. Biggest single gap between PoC 1
+    and any non-trivial app.
+  - **Dynamic route segments** (spec sect.11.3-11.4) --
+    `routes/users/[id].tsp` currently rejected at boot
+    with `RouterError::UnsupportedShape`.
+  - **URL percent-decode + trailing slash** (spec
+    sect.11.8-11.9) -- not implemented.
+  - **Fragments** (spec sect.23, plan sect.14) -- not
+    implemented.
+  - **ModuleGraph hot-reload** -- a future slice if a
+    real app needs it.
+
+## Realistic next-step options (post-Slice 7) -- STALE
+
+> Note (2026-08-24): the in-process JSC bridge was closed
+> via ADR-0001 (slice 13) as future work, and the
+> "next-step" options below were all delivered:
+> - (a) Phase 0 docs freeze -> slices 8 + Phase 0 sign-off.
+> - (b) Watcher + atomic reload -> slices 11, 15a.
+> - (c) In-process JSC bridge -> ADR-0001 (subprocess is
+>   the production path; in-process is future work
+>   triggered by Bun-side API changes).
+>
+> The "next-step" below is kept for historical context;
+> the real next step is the Phase 5+ candidate list at
+> the end of the slice 15a entry.
 
 The in-process bridge is genuinely multi-session work. Other
 options for the next session that are cheaper and don't depend
