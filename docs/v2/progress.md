@@ -447,6 +447,68 @@ is green.
 - **Next:** slice 12 = in-flight dedup + request pinning (plan
   sect.21.3 + 22.4) on top of the registry state machine.
 
+### Slice 12 -- In-flight dedup + request pinning (done, bun commit 3c092afa)
+
+- **Why:** plan sect.21.3 (request pinning) + 22.4 (in-flight
+  dedup). Slice 10b's Building fallback was "second request
+  gets `NotBuildable(Building)` and serves LKG or 503"; slice
+  22.4 requires concurrent requests on a dirty slot to share
+  ONE build. Sect.21.3 requires a request that started on
+  generation N to finish on N even if N+1 publishes mid-flight.
+- **What landed (in `bun/src/runtime/tsp/`):**
+  - `generation.rs`:
+    - `Generation.payload: Option<String>` ->
+      `Option<Arc<String>>`. Concurrent requests share the same
+      buffer; a request that pinned a body keeps it alive even
+      after `current` is overwritten by a later commit.
+    - `PageSlot.in_flight: Option<Arc<InFlightBuild>>` -- the
+      shared build future for Building slots.
+    - `InFlightBuild { state: Mutex<InFlightState>, cvar }`
+      with `InFlightState::{Running, Done(BuildOutcome),
+      Abandoned}` and `BuildOutcome::{Ok(Arc<String>),
+      Failed(String)}`. `wait()` blocks on the condvar.
+    - `PublishGuard::commit` writes `Done(Ok)` + notifies;
+      `fail` writes `Done(Failed)` + notifies; Drop writes
+      `Abandoned` so a panic never leaves waiters stuck.
+    - New registry APIs: `join_in_flight(page)` (get the
+      shared future), `read_current_arc(page)` /
+      `read_lkg_arc(page)` (pin the Arc, no String clone).
+    - `read_current_payload` / `read_lkg_payload` kept
+      (String-clone form) for tests + one-off reads.
+  - `host.rs` (`render_for_route`):
+    - Unloaded/Dirty/Failed: win the `begin_build` race, run
+      the pipeline, `commit`, pin the payload via
+      `read_current_arc`, serve.
+    - Building: `join_in_flight` -> wait on the condvar ->
+      serve the committed Arc; on Failed/Abandoned fall back
+      to LKG (no more raw 503).
+    - Clean: pin `current` Arc and serve.
+    - Removed `serve_lkg_or_503`; `serve_current_or_500` /
+      `serve_lkg_or_500` replaced by the pinned-Arc variants.
+- **Verify:** `cargo test -p bun_runtime_tsp --lib` 46 passed
+  (was 42), 4 new tests: `in_flight_dedup_shares_one_future`,
+  `in_flight_waiter_sees_failure_outcome`,
+  `request_pinning_survives_commit_overwrite`,
+  `generation_release_drops_old_payload`.
+  `cargo build -p bun_runtime_tsp` 0.42s incremental.
+  e2e (TSP_PORT=9108): serial request serves from cache on
+  repeat; 15 concurrent first-load curls all returned
+  `<h1>Hello from TSP v2</h1>` with zero 503/500/5xx and no
+  panic (server accepted all 15 connections; the 503 code path
+  is now unreachable from Building, which was the point).
+- **Out of slice 12 (deferred to slice 13+):**
+  - Precise per-module invalidation (source->PageRef index for
+    the watcher -- currently "any change dirties every slot").
+  - New-route pickup without restart.
+  - In-process JSC bridge (plan sect.25.3): replace the
+    `bun.exe` subprocess path with `bun_runtime`.
+  - Explicit generation-id release bookkeeping (the Arc
+    already drops old payloads automatically; id-based
+    release tracking is a future optimisation).
+- **Next:** slice 13 = in-process JSC bridge (plan sect.25.3,
+  multi-session). The subprocess path stays as the production
+  path until the in-process VM + tsp:* builtins land.
+
 ## Realistic next-step options (post-Slice 7)
 
 The in-process bridge is genuinely multi-session work. Other
