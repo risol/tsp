@@ -275,6 +275,42 @@ is green.
   subprocess bridge stays as the production path until the
   in-process bridge lands.
 
+### Slice 9 -- Module Graph (done, bun commit `3c036f7e`)
+
+- **Why:** plan sect.61 Phase 4. Module Graph is the data
+  foundation slice 10 (Generation + Atomic Reload) and slice
+  11 (Watcher) build on top.
+- **What landed (in `bun/src/runtime/tsp/module_graph.rs`):**
+  - `ModuleId(PathBuf)` -- canonical path-based identity with
+    best-effort canonicalisation (symlink policy is a future
+    slice concern).
+  - `ModuleNode { id, path, imports, page_roots, source_hash }`
+    per plan sect.20.2.
+  - `PageId { route, method }` per HTTP method export.
+  - `SourceHash(u64)` -- FNV-1a 64-bit; swap to BLAKE3 in
+    slice 10 if the empirical false-positive rate is bad.
+  - `ModuleGraph` with `nodes` + `reverse` maps; `importers_of`
+    is the watcher (slice 11) entry point.
+  - `extract_imports` (line-anchored, regex-based) for the
+    conventional `import ... from "...";` and side-effect
+    `import "...";` forms.
+  - `ModuleGraph::from_routes_dir` walks the routes root and
+    reads every `.tsp` / `.ts` / `.tsx` / `.js` / `.jsx` file.
+  - 7 unit tests.
+- **Out of slice 9:** the actual transpile + evaluate +
+  Generation publish (slice 10); the watcher (slice 11);
+  the AST pass on imports / methods / re-exports (slice 7+
+  bun_js_parser integration).
+- **Verify:** `cargo test -p bun_runtime_tsp --lib` 29 passed
+  (was 22); `cargo build -p bun_runtime_tsp` 2.57s incremental;
+  slice-6 binary regress-tested clean (`curl /` still returns
+  `<h1>Hello from TSP v2</h1>`).
+- **Next:** slice 10 = plan sect.20.3-20.4 + sect.21
+  (Generation + PageSlot + PageState). Data structures
+  first, then the atomic-publish / LKG / request-pinning
+  semantics. Sub-sliced so each commit is a clean
+  verification step.
+
 ## Realistic next-step options (post-Slice 7)
 
 The in-process bridge is genuinely multi-session work. Other
