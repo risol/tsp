@@ -106,21 +106,78 @@ is green.
   reads `routes/index.tsp`, transpiles, evaluates, finds `GET`, calls
   it, and returns the rendered `<h1>Hello from TSP v2</h1>`.
 
-### Slices 4..N (planned, not started)
+### Slice 4 — JSC + transpiler deps (done, commit `b9a7b0a2`)
 
-- **Slice 4 — JSC + transpiler deps.** Add `bun_jsc` + `bun_transpiler`
-  to the crate. First `cargo build` here is heavy (Bun workspace
-  compile, 20–30 min on cold cache). Run it in the background while
-  writing Slice 5 code.
-- **Slice 5 — Hello vertical.** Read `routes/index.tsp`, transpile
-  TSX, evaluate in JSC, find `GET` export, call it with an empty
-  context, convert result to a 200 `text/html` response.
-  **Verify:** `curl http://localhost:3000/` returns
-  `<h1>Hello from TSP v2</h1>`.
-- **Slice 6 — Ledger close + sync with Sol.** Mark PoC 1 done in this
-  log, commit, then ask Sol which phase of plan §61 to enter next
-  (Phase 0 docs freeze / Phase 1 native skeleton widening / direct
-  Phase 4 module graph / etc.).
+- **Why:** slice 5 needs the JSC bindings + a transpiler reachable
+  from the host crate. The dep pull is large (bun_transpiler ->
+  bun_bundler; bun_jsc -> ~50 transitive crates), so this slice
+  isolates the cold compile and proves the dep graph is sane before
+  any real JSC code lands.
+- **What landed:** `bun_jsc` and `bun_transpiler` added to
+  `bun/src/runtime/tsp/Cargo.toml` via the workspace table.
+- **Verify:** `cargo check -p bun_runtime_tsp` 1m 34s on the cold
+  cache; `cargo build -p bun_runtime_tsp` 2m 15s; the slice-3
+  binary still serves the same 200/404/405/400 responses.
+- **Pivot discovered:** `bun_jsc` is the *binding* crate Bun uses
+  internally; it is not a standalone embeddable VM. The actual VM
+  is created via `WebWorker__createVM` (or `Zig::GlobalObject::create`)
+  in `bun_runtime`, and the transpiler init needs the full bundler
+  pipeline (resolver, linker, env, fs, log, etc.). Slice 5 was
+  scoped to the "read + static-analyse" half; slice 6+ is the
+  "actually execute via bun_runtime" half and is its own pivot.
+
+### Slice 5 — page source reader + static export detector (done, commit `7d867e49`)
+
+- **Why:** slice 6 cannot do the real 200/405 dispatch without
+  knowing what methods the `.tsp` file actually exports. Plan sect.4.2
+  and sect.42 describe the contract; slice 5 lands a line-anchored
+  detector that satisfies the slice-5 surface (sync + async
+  `export function X(` at line start) and explicitly defers the AST
+  pass to slice 7.
+- **What landed:**
+  - `bun/src/runtime/tsp/page.rs` — `PageSource`, `PrepareError`,
+    `prepare(&Route)`, `detect_methods`. 7 unit tests cover
+    sync / async / multiple / none / non-exported / string-literal /
+    comment-line / trailing-space cases.
+  - `host.rs` — on `Found`, per-request `page::prepare`; 200 with
+    source path / byte count / detected methods / "JSC deferred to
+    slice 6+"; on a method that is not in the page's exports, 405
+    with a real `Allow:` header from the same prepare pass; on
+    prepare error, 500.
+- **Verify:** `cargo test -p bun_runtime_tsp --lib` 15 passed;
+  `cargo build -p bun_runtime_tsp` 1.98s incremental; end-to-end
+  `GET /` -> 200, `POST /` -> 405 `Allow: GET`, `DELETE /` -> 405,
+  `GET /nope` -> 404, `GET /?foo=bar` -> 200 (query stripped).
+- **Out of slice 5:** real TSX transform, real JSC call, real
+  HTML render. All three are slice 6+ and require the bun_runtime
+  pivot (see Slice 4 note).
+
+### Slice 6 (planned, pivot required)
+
+- **Scope:** land the bun_runtime integration that actually
+  evaluates the prepared `.tsp` and renders the result. The
+  minimum is:
+  1. Drop `bun_jsc` + `bun_transpiler` direct deps; add
+     `bun_runtime` as a single dep that owns both.
+  2. Create a JSC VM per worker, wire its `Bun__transpileSourceCode`
+     + module loader for `tsp:server` / `tsp:jsx-runtime` builtins.
+  3. Read `routes/index.tsp`, transpile TSX, evaluate as a module,
+     find `GET`, call it with a stub Context, render the result.
+- **Why this is a pivot, not a slice:** the dep change re-shapes
+  the crate's compile-time boundary (bun_runtime is huge and is
+  designed to be the *binary's* runtime, not a library), and the
+  module loader is non-trivial. Sol and MiniMax have already agreed
+  to defer this; the next user-side decision is whether to:
+  (a) spend the time on the bun_runtime pivot now (cold compile +
+      real JSC bridge), or
+  (b) shift to a Phase 0 docs freeze per plan sect.61 (freeze the
+      12 contract items, then come back to slice 6 with the spec
+      solid).
+- **Next user-side decision:** ask Sol which path. (a) keeps the
+  vertical-slice momentum but adds a heavy compile; (b) trades
+  momentum for spec stability and is the plan-recommended way
+  to enter Phase 0 before more code lands.
+
 - **Slice 4 — JSC + transpiler deps.** Add `bun_jsc` + `bun_transpiler`
   to the crate. First `cargo build` here is heavy (Bun workspace
   compile, 20–30 min on cold cache). Run it in the background while
