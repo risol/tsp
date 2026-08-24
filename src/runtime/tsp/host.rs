@@ -1,45 +1,42 @@
-//! TCP listener + minimal HTTP/1.1 responder for TSP v2 PoC 1 slices 2..6.
+//! TCP listener + request dispatcher for TSP v2 PoC 1 slices 2..10b.
 //!
-//! See `tsp-v2-plan.md` sect.61 Phase 1. Responsibilities across slices:
+//! See `tsp-v2-plan.md` sect.61 Phase 1 + sect.20-21. Responsibilities:
 //!
 //! 2. Bind to `0.0.0.0:<port>` (default 3000; override via `TSP_PORT`).
 //! 3. Accept each connection on its own thread.
 //! 4. Read a single request into a fixed-size buffer.
-//! 5. Slice 3: look up `(path, method)` in the [`RouteTable`].
-//! 6. Slice 5: re-prepare the matched route on every request; use the
-//!    real method set to pick 200 vs 405.
-//! 7. Slice 6: on the 200 path, call [`jsc_bridge::execute`] which
-//!    spawns the vendored `bun.exe` to evaluate the page.
-//! 8. Close the connection.
+//! 5. `RouteTable::lookup` resolves the (path, method) to a route.
+//! 6. Slice 5: re-prepare the matched route; real method set drives
+//!    200 vs 405.
+//! 7. Slice 6: spawn `bun.exe` via `jsc_bridge::execute` and return
+//!    the rendered body.
+//! 8. Slice 10b: thread the request through `PageRegistry` so a
+//!    page that already built serves from `current.payload`
+//!    without re-running `prepare + execute` on every request.
 //!
-//! Production HTTP lives behind `bun_uws` (plan sect.25.3) and arrives
-//! when the HTTP path needs async / multi-worker / uWS-grade
-//! throughput. Keeping slice 2-6 stdlib-only means the bootstrap stays
-//! auditable line-by-line.
+//! Out of slice 10b (deferred to slice 10c):
+//! - In-flight dedup: concurrent requests on a Building slot share
+//!   the build future; for now the second request sees
+//!   `BeginBuildError::NotBuildable(Building)` and falls back to
+//!   LKG (or 503 if no LKG).
+//! - Request pinning: a request that started on generation N
+//!   finishes on N even if N+1 publishes mid-flight.
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
-use crate::jsc_bridge::{self, BunRuntime};
-use crate::page;
+use crate::generation::{self, BeginBuildError, PageRef, PageRegistry, PageState};
+use crate::jsc_bridge::BunRuntime;
+use crate::pipeline;
 use crate::router::{HttpMethod, MatchResult, RouteTable};
 
-/// Default TCP port for the PoC listener.
 const DEFAULT_PORT: u16 = 3000;
 
-/// Hand-rolled error type. We deliberately avoid pulling `thiserror` or
-/// any other error crate for slice 2 -- one variant per failure mode
-/// and `Display` is enough.
 #[derive(Debug)]
 pub enum HostError {
-    /// `TcpListener::bind` failed (port in use, permission denied, etc.).
     Bind(io::Error),
-    /// A per-connection `accept` returned an error other than a closed
-    /// listener (interrupted system call, EMFILE, etc.).
     Accept(io::Error),
-    /// A connection handler failed. Logged with `eprintln!` and the loop
-    /// continues -- a single bad client must not take the server down.
     Connection(io::Error),
 }
 
@@ -55,25 +52,24 @@ impl std::fmt::Display for HostError {
 
 impl std::error::Error for HostError {}
 
-/// Global "stop the accept loop" flag.
 static STOP: AtomicBool = AtomicBool::new(false);
 
-/// Bind to `host:port`, accept connections forever, hand each one to a
-/// fresh thread running [`handle_connection`]. Slice 6: `bun` is the
-/// handle the host uses to evaluate matched pages; it is borrowed for
-/// the entire process lifetime.
+/// Bind, accept, dispatch. `routes` and `registry` are
+/// `&'static` because the slice-6 binary Box::leaks them; the
+/// in-process bridge (slice 13) will swap the leak for
+/// `Arc`-style ownership.
 pub fn serve(
     host: &str,
     port: u16,
     routes: &'static RouteTable,
+    registry: &'static PageRegistry,
     bun: &'static BunRuntime,
 ) -> Result<(), HostError> {
     let addr = format!("{host}:{port}");
     let listener = TcpListener::bind(&addr).map_err(HostError::Bind)?;
     eprintln!(
-        "TSPv2PoC1: listening on http://{addr} (slice 6, {} route(s) loaded, bun={})",
-        routes.len(),
-        bun.bin.display()
+        "TSPv2PoC1: listening on http://{addr} (slice 10b, {} route(s) loaded)",
+        routes.len()
     );
 
     while !STOP.load(Ordering::Acquire) {
@@ -90,7 +86,7 @@ pub fn serve(
         };
         eprintln!("TSPv2PoC1: accepted {peer}");
         thread::spawn(move || {
-            if let Err(e) = handle_connection(stream, routes, bun) {
+            if let Err(e) = handle_connection(stream, routes, registry, bun) {
                 eprintln!("TSPv2PoC1: {e}");
             }
         });
@@ -101,6 +97,7 @@ pub fn serve(
 fn handle_connection(
     mut stream: TcpStream,
     routes: &RouteTable,
+    registry: &PageRegistry,
     bun: &BunRuntime,
 ) -> Result<(), HostError> {
     let mut buf = [0u8; 8192];
@@ -113,24 +110,34 @@ fn handle_connection(
             "HTTP/1.1 400 Bad Request",
             "text/plain; charset=utf-8",
             None,
-            "TSP v2 PoC 1 slice 6: malformed request line\n".to_string(),
+            "TSP v2 PoC 1 slice 10b: malformed request line\n".to_string(),
         ),
         ParsedRequest::Known { method, path } => match routes.lookup(&path, method) {
             MatchResult::Found { route, method: req_method } => {
-                let prepared = page::prepare(route);
-                render_for_route(route, req_method, prepared, bun)
+                let page_ref = PageRef {
+                    route: route.path.clone(),
+                    method: req_method,
+                };
+                render_for_route(route, req_method, &page_ref, registry, bun)
             }
             MatchResult::MethodNotAllowed { route, requested } => {
-                let prepared = page::prepare(route);
+                // Slice-5 path: 405 with real Allow header from
+                // the static method detector (no registry needed).
+                let prepared = crate::page::prepare(route);
                 let (allow, body) = render_405_body(route, requested, prepared);
-                ("HTTP/1.1 405 Method Not Allowed", "text/plain; charset=utf-8", Some(allow), body)
+                (
+                    "HTTP/1.1 405 Method Not Allowed",
+                    "text/plain; charset=utf-8",
+                    Some(allow),
+                    body,
+                )
             }
             MatchResult::NotFound => (
                 "HTTP/1.1 404 Not Found",
                 "text/plain; charset=utf-8",
                 None,
                 format!(
-                    "TSP v2 PoC 1 slice 6: no route matches path={path} (table has {} route(s))\n",
+                    "TSP v2 PoC 1 slice 10b: no route matches path={path} (table has {} route(s))\n",
                     routes.len()
                 ),
             ),
@@ -160,57 +167,150 @@ fn handle_connection(
     Ok(())
 }
 
+/// Slice 10b dispatch. The page may be Unloaded, Dirty, Clean,
+/// Building, or Failed. We try to read from the registry; on
+/// Unloaded/Dirty we run a synchronous build; on Building we
+/// fall back to LKG; on Failed we fall back to LKG too.
+/// Slice 10c will add real in-flight dedup.
 fn render_for_route(
     route: &crate::router::Route,
     requested: HttpMethod,
-    prepared: Result<page::PageSource, page::PrepareError>,
+    page_ref: &PageRef,
+    registry: &PageRegistry,
     bun: &BunRuntime,
 ) -> (&'static str, &'static str, Option<String>, String) {
-    match prepared {
-        Ok(page) if page.methods.contains(&requested) => {
-            // Slice 6: the body is the JSC-executed page output. On
-            // any JscError, fall back to a 500 that names the source
-            // and the error so the operator can fix the page.
-            match jsc_bridge::execute(bun, &page.text, requested) {
-                Ok(rendered) => (
-                    "HTTP/1.1 200 OK",
-                    "text/html; charset=utf-8",
-                    None,
-                    rendered,
-                ),
-                Err(e) => {
-                    eprintln!("TSPv2PoC1: jsc error on {}: {e}", route.source.display());
+    // The route exists (router matched) but the boot-time
+    // method detector may not have registered this method
+    // because the .tsp file does not export it. That is
+    // semantically a 405, not a 500, so convert here before
+    // the state machine sees the request.
+    let snap = registry.snapshot(page_ref);
+    if snap.is_none() {
+        // Re-prepare to get the real method set for the
+        // `Allow:` header (cheap for slice 10b; slice 10c
+        // will cache the allow list per route).
+        let allow = match crate::page::prepare(route) {
+            Ok(p) => build_allow_header(&p.methods),
+            Err(_) => String::new(),
+        };
+        let body = format!(
+            "TSP v2 PoC 1 slice 10b: method {} not exported by {}\n",
+            requested.as_str(),
+            route.source.display()
+        );
+        return (
+            "HTTP/1.1 405 Method Not Allowed",
+            "text/plain; charset=utf-8",
+            if allow.is_empty() { None } else { Some(allow) },
+            body,
+        );
+    }
+    let state = snap.as_ref().map(|s| s.state.clone()).unwrap_or(PageState::Unloaded);
+
+    match state {
+        PageState::Unloaded | PageState::Dirty => {
+            // Build synchronously. The build pipeline (slice 6
+            // bridge + slice 5 prepare) is what fills the
+            // payload; slice 11+ will populate the dependency
+            // list properly.
+            match registry.begin_build(page_ref) {
+                Ok(guard) => {
+                    match pipeline::build(route, requested, bun) {
+                        Ok(body) => {
+                            let deps: Vec<crate::module_graph::ModuleId> = Vec::new();
+                            guard.commit(deps, body.clone());
+                            ("HTTP/1.1 200 OK", "text/html; charset=utf-8", None, body)
+                        }
+                        Err(e) => {
+                            let msg = format!("{e}");
+                            guard.fail(msg.clone());
+                            eprintln!("TSPv2PoC1: build error on {}: {e}", route.source.display());
+                            (
+                                "HTTP/1.1 500 Internal Server Error",
+                                "text/plain; charset=utf-8",
+                                None,
+                                format!("TSP v2 PoC 1 slice 10b: build error on {}\n  {e}\n", route.source.display()),
+                            )
+                        }
+                    }
+                }
+                Err(BeginBuildError::NotBuildable(other_state)) => {
+                    // The slot transitioned out of Unloaded /
+                    // Dirty between snapshot and begin_build
+                    // (another thread won the race, or the
+                    // slot was never Unloaded/Dirty to begin
+                    // with). Whatever the cause, the
+                    // authoritative answer is whatever the
+                    // slot's `current` is now. Fall back to
+                    // current.
+                    eprintln!(
+                        "TSPv2PoC1: build race -- snapshot said Unloaded/Dirty, begin_build returned NotBuildable({other_state:?})"
+                    );
+                    serve_current_or_500(registry, page_ref)
+                }
+                Err(BeginBuildError::UnknownPage) => {
+                    // Page was not registered. Should be
+                    // caught at boot; treat as 500.
                     (
                         "HTTP/1.1 500 Internal Server Error",
                         "text/plain; charset=utf-8",
                         None,
-                        format!(
-                            "TSP v2 PoC 1 slice 6: jsc error on {}\n  {e}\n",
-                            route.source.display()
-                        ),
+                        "TSP v2 PoC 1 slice 10b: page not registered in PageRegistry\n".to_string(),
                     )
                 }
             }
         }
-        Ok(page) => {
-            let allow = build_allow_header(&page.methods);
-            let body = format!(
-                "TSP v2 PoC 1 slice 6: method {} not exported by {}\n",
-                requested.as_str(),
-                route.source.display()
-            );
-            (
-                "HTTP/1.1 405 Method Not Allowed",
-                "text/plain; charset=utf-8",
-                Some(allow),
-                body,
-            )
-        }
-        Err(e) => (
+        PageState::Clean => serve_current_or_500(registry, page_ref),
+        PageState::Building => serve_lkg_or_503(registry, page_ref),
+        PageState::Failed => serve_lkg_or_500(registry, page_ref, route),
+    }
+}
+
+fn serve_current_or_500(
+    registry: &PageRegistry,
+    page_ref: &PageRef,
+) -> (&'static str, &'static str, Option<String>, String) {
+    match registry.read_current_payload(page_ref) {
+        Some(body) => ("HTTP/1.1 200 OK", "text/html; charset=utf-8", None, body),
+        None => (
             "HTTP/1.1 500 Internal Server Error",
             "text/plain; charset=utf-8",
             None,
-            format!("TSP v2 PoC 1 slice 6: prepare error: {e}\n"),
+            "TSP v2 PoC 1 slice 10b: Clean slot has no payload\n".to_string(),
+        ),
+    }
+}
+
+fn serve_lkg_or_503(
+    registry: &PageRegistry,
+    page_ref: &PageRef,
+) -> (&'static str, &'static str, Option<String>, String) {
+    match registry.read_lkg_payload(page_ref) {
+        Some(body) => ("HTTP/1.1 200 OK", "text/html; charset=utf-8", None, body),
+        None => (
+            "HTTP/1.1 503 Service Unavailable",
+            "text/plain; charset=utf-8",
+            None,
+            "TSP v2 PoC 1 slice 10b: concurrent build in flight, no LKG\n".to_string(),
+        ),
+    }
+}
+
+fn serve_lkg_or_500(
+    registry: &PageRegistry,
+    page_ref: &PageRef,
+    route: &crate::router::Route,
+) -> (&'static str, &'static str, Option<String>, String) {
+    match registry.read_lkg_payload(page_ref) {
+        Some(body) => ("HTTP/1.1 200 OK", "text/html; charset=utf-8", None, body),
+        None => (
+            "HTTP/1.1 500 Internal Server Error",
+            "text/plain; charset=utf-8",
+            None,
+            format!(
+                "TSP v2 PoC 1 slice 10b: page {} never built successfully\n",
+                route.source.display()
+            ),
         ),
     }
 }
@@ -218,13 +318,13 @@ fn render_for_route(
 fn render_405_body(
     route: &crate::router::Route,
     requested: HttpMethod,
-    prepared: Result<page::PageSource, page::PrepareError>,
+    prepared: Result<crate::page::PageSource, crate::page::PrepareError>,
 ) -> (String, String) {
     match prepared {
         Ok(page) => {
             let allow = build_allow_header(&page.methods);
             let body = format!(
-                "TSP v2 PoC 1 slice 6: method {} not exported by {}\n",
+                "TSP v2 PoC 1 slice 10b: method {} not exported by {}\n",
                 requested.as_str(),
                 route.source.display()
             );
@@ -232,7 +332,7 @@ fn render_405_body(
         }
         Err(e) => (
             String::new(),
-            format!("TSP v2 PoC 1 slice 6: prepare error: {e}\n"),
+            format!("TSP v2 PoC 1 slice 10b: prepare error: {e}\n"),
         ),
     }
 }
@@ -280,3 +380,8 @@ pub fn resolve_port() -> Result<u16, HostError> {
         }),
     }
 }
+
+// `_generation` re-exported to keep the import list honest for
+// slice 10c's planned additions.
+#[allow(dead_code)]
+fn _generation_anchor(_g: &generation::GenerationId) {}

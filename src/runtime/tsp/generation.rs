@@ -31,7 +31,6 @@
 //! - Request pinning + in-flight dedup (slice 10c).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -54,6 +53,12 @@ pub struct Generation {
     /// Result of the build (Ok or the first error). Empty for
     /// the placeholder; populated when the candidate completes.
     pub build_result: BuildResult,
+    /// The rendered HTTP body for the page handler. `None`
+    /// for `Failed` generations and for the placeholder
+    /// before `commit`; `Some(body)` for `Ok` generations.
+    /// The host reads this directly to avoid a per-request
+    /// re-build.
+    pub payload: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -225,6 +230,25 @@ impl PageRegistry {
         })
     }
 
+    /// Read the current generation's payload (the rendered
+    /// HTTP body). Clones the string; the lock is held only
+    /// for the duration of the clone. Returns `None` if the
+    /// slot is not in the registry, has no `current`, or the
+    /// `current` is a `Failed` build (no payload).
+    pub fn read_current_payload(&self, page: &PageRef) -> Option<String> {
+        let inner = self.inner.lock().expect("registry lock poisoned");
+        let slot = inner.slots.get(page)?;
+        slot.current.as_ref().and_then(|g| g.payload.clone())
+    }
+
+    /// Read the LKG generation's payload. Same shape as
+    /// `read_current_payload`.
+    pub fn read_lkg_payload(&self, page: &PageRef) -> Option<String> {
+        let inner = self.inner.lock().expect("registry lock poisoned");
+        let slot = inner.slots.get(page)?;
+        slot.last_known_good.as_ref().and_then(|g| g.payload.clone())
+    }
+
     /// Mark a slot dirty. Used by the watcher (slice 11) and
     /// the request hot path (when a request arrives for a
     /// `Clean` slot that the watcher already flagged).
@@ -281,8 +305,11 @@ impl PageRegistry {
                     dependencies: Vec::new(),
                     created_at: std::time::Instant::now(),
                     // Placeholder; `commit` overwrites with
-                    // `Ok` or `Failed(_)`.
+                    // `Ok` and fills `payload`. The `Failed`
+                    // arm also overwrites `build_result`
+                    // but leaves `payload` as None.
                     build_result: BuildResult::Failed(String::new()),
+                    payload: None,
                 };
                 slot.state = PageState::Building;
                 let slot_page = slot.page.clone();
@@ -362,10 +389,11 @@ impl PublishGuard {
     /// - The `failed-then-succeed` case (prev was Failed):
     ///   LKG = candidate (the new successful build is the
     ///   fallback for the next failure).
-    pub fn commit(mut self, deps: Vec<ModuleId>) {
+    pub fn commit(mut self, deps: Vec<ModuleId>, payload: String) {
         let mut candidate = self.candidate.take().expect("candidate already committed");
         candidate.dependencies = deps;
         candidate.build_result = BuildResult::Ok;
+        candidate.payload = Some(payload);
         let mut inner = self.registry.inner.lock().expect("registry lock poisoned");
         if let Some(slot) = inner.slots.get_mut(&self.slot_page) {
             let prev = slot.current.take();
@@ -429,6 +457,7 @@ impl std::ops::Drop for PublishGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn page(route: &str, method: HttpMethod) -> PageRef {
         PageRef {
@@ -451,7 +480,7 @@ mod tests {
         let guard = r.begin_build(&p).unwrap();
         let snap = r.snapshot(&p).unwrap();
         assert_eq!(snap.state, PageState::Building);
-        guard.commit(vec![modid("routes/index.tsp")]);
+        guard.commit(vec![modid("routes/index.tsp")], "<h1>Hello</h1>".to_string());
         let snap = r.snapshot(&p).unwrap();
         assert_eq!(snap.state, PageState::Clean);
         assert!(snap.current_id.is_some());
@@ -476,14 +505,14 @@ mod tests {
         r.register(p.clone(), modid("routes/index.tsp"));
         // First build succeeds
         let g1 = r.begin_build(&p).unwrap();
-        g1.commit(vec![]);
+        g1.commit(vec![], "body1".to_string());
         let snap = r.snapshot(&p).unwrap();
         let first = snap.current_id.unwrap();
         // Mark dirty
         assert_eq!(r.mark_dirty(&p), MarkDirtyResult::Marked);
         // Second build succeeds
         let g2 = r.begin_build(&p).unwrap();
-        g2.commit(vec![]);
+        g2.commit(vec![], "body2".to_string());
         let snap = r.snapshot(&p).unwrap();
         assert_eq!(snap.state, PageState::Clean);
         assert!(snap.current_id.is_some());
@@ -501,7 +530,7 @@ mod tests {
         // build", after the first commit LKG = g1 and
         // current = g1.
         let g1 = r.begin_build(&p).unwrap();
-        g1.commit(vec![]);
+        g1.commit(vec![], "body1".to_string());
         let first = r.snapshot(&p).unwrap().current_id.unwrap();
         assert_eq!(r.snapshot(&p).unwrap().last_known_good_id, Some(first));
         // Mark dirty and try a second build that fails.
@@ -535,14 +564,14 @@ mod tests {
         let p = page("/", HttpMethod::Get);
         r.register(p.clone(), modid("routes/index.tsp"));
         let g = r.begin_build(&p).unwrap();
-        g.commit(vec![]);
+        g.commit(vec![], "body".to_string());
         // Now Clean. begin_build must be rejected.
         let err = r.begin_build(&p).unwrap_err();
         assert_eq!(err, BeginBuildError::NotBuildable(PageState::Clean));
         // Mark dirty then begin_build succeeds.
         r.mark_dirty(&p);
         let g2 = r.begin_build(&p).unwrap();
-        g2.commit(vec![]);
+        g2.commit(vec![], "body2".to_string());
     }
 
     #[test]

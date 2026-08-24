@@ -17,19 +17,17 @@
 //! mod page_registry; // PageSlot, Generation tracking
 //! mod module_graph;  // forward/reverse edges
 //! mod generation;    // Generation + LKG
+//! mod pipeline;     // slice 10b sync build pipeline
 //! mod errors;        // TSP1xxx-5xxx codes
 //! mod jsc_bridge;    // JSC exec (PoC 1: spawns bun.exe)
 //! mod in_process_jsc; // JSC exec (slice 7+ spike: dep reachable, API not yet wired)
 //! ```
 //!
-//! Each `mod` is added the slice it lands in. Slice 1: library shell;
-//! slice 2 lands the listener; slice 3 lands the router; slice 4 lands
-//! the JSC deps; slice 5 lands `page.rs`; slice 6 lands `jsx.rs` and
-//! `jsc_bridge.rs`; slice 7 adds `in_process_jsc.rs`; slice 9 adds
-//! `module_graph.rs`; slice 10 adds `generation.rs`.
+//! Each `mod` is added the slice it lands in.
 
-#![doc = "Slice 10: generation + PageSlot + state machine. See `generation.rs`."]
+#![doc = "Slice 10b: build pipeline wired into the request flow."]
 
+pub mod pipeline;
 pub mod generation;
 pub mod host;
 pub mod in_process_jsc;

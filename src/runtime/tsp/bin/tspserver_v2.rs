@@ -1,17 +1,19 @@
-//! TSP v2 native host binary entry point (PoC 1, slice 6 of 6).
+//! TSP v2 native host binary entry point (PoC 1, slice 10b).
 //!
 //! See `tsp-v2-plan.md` sect.70 (PoC 1) and `tsp-v2-specification.md` for
 //! the contract this binary will eventually implement. v1's `src/main.ts`
 //! remains the default working server; this binary is the side-by-side
 //! v2 host.
 //!
-//! Slice 6 closes the PoC 1 vertical slice by spawning the vendored
-//! `bun.exe` to evaluate matched `.tsp` pages. Verify is `curl /`
-//! returns the rendered HTML from `routes/index.tsp`.
+//! Slice 10b boots a `PageRegistry`, walks the `routes/` directory
+//! once to discover exported HTTP methods (via `page::prepare`),
+//! registers one `PageSlot` per (route, method) pair, then
+//! hands the registry to the listener.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use bun_runtime_tsp::generation::{PageRef, PageRegistry};
 use bun_runtime_tsp::host;
 use bun_runtime_tsp::jsc_bridge::{self, BunRuntime};
 use bun_runtime_tsp::router::RouteTable;
@@ -36,6 +38,19 @@ fn main() -> ExitCode {
     };
     eprintln!("TSPv2PoC1: loaded {} route(s)", routes.len());
 
+    // Boot-time preparation: for each route, run the slice-5
+    // static method detector so we know which methods each file
+    // exports. Register one PageSlot per (route, method) pair
+    // in the PageRegistry. The host then consults the registry
+    // per request instead of re-detecting on every call.
+    let registry: &'static PageRegistry = match build_registry(routes) {
+        Ok(r) => leak_registry(r),
+        Err(e) => {
+            eprintln!("TSPv2PoC1: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
     let bun: &'static BunRuntime = match jsc_bridge::resolve_bun_bin() {
         Ok(p) => leak_bun(BunRuntime { bin: p }),
         Err(e) => {
@@ -45,7 +60,7 @@ fn main() -> ExitCode {
     };
     eprintln!("TSPv2PoC1: bun = {}", bun.bin.display());
 
-    if let Err(e) = host::serve("0.0.0.0", port, routes, bun) {
+    if let Err(e) = host::serve("0.0.0.0", port, routes, registry, bun) {
         eprintln!("TSPv2PoC1: {e}");
         return ExitCode::from(1);
     }
@@ -59,10 +74,37 @@ fn resolve_routes_dir() -> PathBuf {
     }
 }
 
+/// Walk the RouteTable and create one PageRef per HTTP method
+/// the source file actually exports. We read the source once
+/// at boot (instead of per request) so the registry's
+/// `state` is meaningful from the first call.
+fn build_registry(routes: &RouteTable) -> Result<PageRegistry, String> {
+    let registry = PageRegistry::new();
+    for route in routes.iter() {
+        let source = match bun_runtime_tsp::page::prepare(route) {
+            Ok(s) => s,
+            Err(e) => return Err(format!("prepare {}: {e}", route.source.display())),
+        };
+        for method in &source.methods {
+            let page_ref = PageRef {
+                route: route.path.clone(),
+                method: *method,
+            };
+            registry.register(
+                page_ref,
+                bun_runtime_tsp::module_graph::ModuleId::from_path(&route.source),
+            );
+        }
+    }
+    Ok(registry)
+}
+
 fn leak_table(table: RouteTable) -> &'static RouteTable {
     Box::leak(Box::new(table))
 }
-
+fn leak_registry(r: PageRegistry) -> &'static PageRegistry {
+    Box::leak(Box::new(r))
+}
 fn leak_bun(b: BunRuntime) -> &'static BunRuntime {
     Box::leak(Box::new(b))
 }

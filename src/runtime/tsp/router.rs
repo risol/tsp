@@ -165,6 +165,14 @@ impl RouteTable {
         self.routes.is_empty()
     }
 
+    /// Iterate over all routes. Used by the boot-time
+    /// `PageRegistry` builder to register one slot per
+    /// (route, method) pair without forcing the caller to
+    /// know the internal storage layout.
+    pub fn iter(&self) -> impl Iterator<Item = &Route> {
+        self.routes.iter()
+    }
+
     /// Walk `routes_dir` recursively, collect every `.tsp` file, and
     /// translate its path under `routes_dir` to a URL path. The
     /// directory must exist; an absent `routes/` is a configuration
