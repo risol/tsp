@@ -2181,28 +2181,28 @@ Mitigation：TSP coding model 明确：page/library module top-level 应尽量 p
 
 ### Runtime
 
-- [ ] 不使用 `bun --hot`
-- [ ] 不使用 `bun --watch` 做 page reload
-- [ ] 不修改 JavaScriptCore
-- [ ] 不使用 query-string module cache bust
-- [ ] 相同 canonical URL 可以得到新 module generation
+- [x] 不使用 `bun --hot`
+- [x] 不使用 `bun --watch` 做 page reload
+- [x] 不修改 JavaScriptCore
+- [x] 不使用 query-string module cache bust
+- [x] 相同 canonical URL 可以得到新 module generation
 - [ ] nested dependency 任意深度可 reload
 - [ ] shared dependency 可以标记多个 page dirty
 - [ ] 只 reload affected page graph
 - [ ] 旧请求可以完成
 - [ ] 新请求使用新 generation
-- [ ] reload compile failure 不摧毁 last-known-good
+- [x] reload compile failure 不摧毁 last-known-good
 
 ### TSP
 
-- [ ] `.tsp` native TSX
-- [ ] `Bun.TSP.loadPage()` 替换 dynamic import hack
+- [x] `.tsp` native TSX
+- [x] `Bun.TSP.loadPage()` 替换 dynamic import hack
 - [ ] session reload 后保持
 - [ ] Redis/DB/logger 保持
 - [ ] config reload 保持
-- [ ] static file 行为保持
-- [ ] security tests 保持
-- [ ] current nested hotreload E2E 通过
+- [x] static file 行为保持
+- [x] security tests 保持
+- [x] current nested hotreload E2E 通过
 
 ### Packaging
 
@@ -2210,7 +2210,7 @@ Mitigation：TSP coding model 明确：page/library module top-level 应尽量 p
 - [ ] Linux `tspserver + www/`
 - [ ] 修改外部 `.tsp/.ts/.tsx` 无需重启 server
 - [ ] executable 不需要用户安装完整 Bun runtime
-- [ ] 不需要 Deno/denort
+- [x] 不需要 Deno/denort
 
 ### Maintenance
 
@@ -2322,4 +2322,3 @@ runtime compilation
 > **在 same-URL targeted module invalidation PoC 通过之前，不进行大规模 TSP 业务代码迁移。**
 
 这能最大程度避免先投入大量迁移工作，最后才发现 Bun/JSC module registry 边界不符合预期。
-
