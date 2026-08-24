@@ -396,6 +396,57 @@ is green.
     current, no active requests, no runtime references ->
     free).
 
+### Slice 11 -- Watcher + lazy reload (done, bun commit 9d30c1fb)
+
+- **Why:** plan sect.61 Phase 4-6. The 7-step PoC 1 validated
+  "Rust host owns HTTP lifecycle, JSC page module is replaceable
+  execution generation"; slice 11 closes the "reload does not
+  restart HTTP server" DoD item by adding a filesystem watcher
+  that marks slots dirty on change, so the next request rebuilds
+  (lazy reload, plan sect.22.2).
+- **What landed (in `bun/src/runtime/tsp/`):**
+  - `watcher.rs` -- polling backend (plan sect.22.1): every
+    `poll_ms` (`DEFAULT_POLL_MS = 500`) reads all source files
+    under the routes root (`.tsp` / `.ts` / `.tsx` / `.js` /
+    `.jsx`), computes `SourceHash`, diffs against `last_seen`
+    (add / change / delete all detected), and marks affected
+    slots dirty via `PageRegistry::mark_dirty`. `WatchConfig`,
+    `WatcherHandle` (stop + Drop-join), `PollStats`,
+    `poll_once`, `spawn`. 4 unit tests (content change / new
+    file / deleted file / handle stops thread).
+  - `generation.rs` -- `PageRegistry::all_page_refs()` so the
+    watcher can enumerate registered slots.
+  - `bin/tspserver_v2.rs` -- builds the `ModuleGraph` at boot
+    and spawns the watcher thread over the routes dir; the
+    handle lives for the duration of `serve` and joins on drop.
+- **Slice 11 dirty granularity:** "any change dirties EVERY
+  registered slot" (conservative). The precise source->PageRef
+  index (via `ModuleGraph.importers_of` + a registry reverse
+  map) lands in slice 12 so only truly-affected pages rebuild.
+  The `graph` parameter stays in `poll_once`'s signature
+  (unused at this granularity) so slice 12 plugs the precise
+  path in without changing callers.
+- **Backend note:** polling (mtime + source-hash diff) instead of
+  `bun_watcher` native (inotify / ReadDirectoryChangesW) -- the
+  native backend needs the full Bun event-loop + FD lifecycle the
+  side-by-side v2 host does not have wired yet. Polling satisfies
+  the lazy-reload contract; swapping backends is a localized
+  change inside `watcher.rs`.
+- **Verify:** `cargo test -p bun_runtime_tsp --lib` 42 passed
+  (was 38); `cargo build -p bun_runtime_tsp` 2.76s incremental.
+  End-to-end hot reload (TSP_PORT=9107, TSP_ROUTES_DIR=routes):
+  1. `curl /` -> `<h1>Hello from TSP v2</h1>` (first request builds);
+  2. edit `routes/index.tsp` text -> watcher logs
+     `watch: 1 file(s) changed, 1 page(s) marked dirty`;
+  3. `curl /` again -> `<h1>Hello from TSP v2 after hot reload</h1>`
+     (next request rebuilds, no server restart).
+- **Out of slice 11 (deferred to slice 12+):** precise per-module
+  invalidation (source->PageRef index); new-route pickup without
+  restart; in-flight dedup + request pinning (plan sect.21.3);
+  generation release.
+- **Next:** slice 12 = in-flight dedup + request pinning (plan
+  sect.21.3 + 22.4) on top of the registry state machine.
+
 ## Realistic next-step options (post-Slice 7)
 
 The in-process bridge is genuinely multi-session work. Other
