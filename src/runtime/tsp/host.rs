@@ -60,10 +60,17 @@ pub struct Context {
     /// sect.11.3). Empty for slice 16a because dynamic
     /// segments are not implemented yet.
     pub params: std::collections::HashMap<String, String>,
-    /// Request body as a UTF-8-lossy string, or empty when
-    /// the request had no body / no Content-Length. The JS
-    /// wrapper exposes it via `ctx.request.text()` etc.
-    pub body: String,
+    /// Request body as raw bytes (slice 16g), or empty when
+    /// the request had no body / no Content-Length. The
+    /// previous slice 16d design stored a UTF-8-lossy
+    /// String; the raw-bytes form is required for
+    /// `request.formData()` (spec sect.14.3) to handle
+    /// binary multipart bodies without U+FFFD
+    /// substitutions. The wrap preamble base64-decodes
+    /// `body_b64` and feeds the bytes to Bun's native
+    /// `Request` constructor; pages that only need the
+    /// text form call `await ctx.request.text()` as usual.
+    pub body: Vec<u8>,
     /// Request headers with lower-cased names, wire order.
     /// Duplicate names are joined with ", " (the Web `Headers`
     /// combine rule for non-Set-Cookie headers).
@@ -74,8 +81,12 @@ impl Context {
     /// Serialise to a JSON string the JS side parses via
     /// `JSON.parse(...)`. The format is intentionally
     /// minimal: top-level keys are method / path / query /
-    /// params / body / headers. Adding more fields here is a
-    /// contract change for `.tsp` page authors.
+    /// params / body_b64 / headers. The body travels as
+    /// base64 (the JSON format has no native bytes shape);
+    /// the wrap preamble atob-decodes it back to bytes
+    /// before constructing `ctx.request`. Adding more
+    /// fields here is a contract change for `.tsp` page
+    /// authors.
     pub fn to_json(&self) -> String {
         // Hand-rolled to avoid pulling in a JSON crate. The
         // method comes from `HttpMethod::as_str` (one of
@@ -85,10 +96,9 @@ impl Context {
         // percent-encoded bytes that we surface verbatim.
         // `.tsp` authors that want decoded forms parse
         // them on the JS side via `decodeURIComponent` /
-        // `URLSearchParams`. The body may contain arbitrary
-        // UTF-8 text and goes through `json_string` like
-        // every other string field. Headers serialise as a
-        // flat object (name -> value).
+        // `URLSearchParams`. The body is base64 (slice
+        // 16g, raw bytes for spec sect.14.3 formData).
+        // Headers serialise as a flat object (name -> value).
         let mut out =
             String::with_capacity(64 + self.path.len() + self.query.len() + self.body.len());
         out.push_str("{\"method\":");
@@ -108,9 +118,9 @@ impl Context {
             out.push(':');
             json_string(&mut out, v);
         }
-        out.push_str("},\"body\":");
-        json_string(&mut out, &self.body);
-        out.push_str(",\"headers\":{");
+        out.push_str("},\"body_b64\":\"");
+        base64_encode(&mut out, &self.body);
+        out.push_str("\",\"headers\":{");
         let mut first = true;
         for (k, v) in &self.headers {
             if !first {
@@ -123,6 +133,48 @@ impl Context {
         }
         out.push_str("}}");
         out
+    }
+}
+
+/// Standard Base64 encoder (RFC 4648 section 4, with
+/// `+` / `/` / `=`). Used by `Context::to_json` to put
+/// the raw request body in the JSON wire form so Bun's
+/// `Request` constructor can receive `Uint8Array` for
+/// `formData()` multipart parsing. Hand-rolled to keep
+/// the slice-16 "no new dep" discipline (plan §25.3);
+/// the alphabet is short and the tests catch the
+/// obvious off-by-one / padding cases.
+fn base64_encode(out: &mut String, bytes: &[u8]) {
+    const ALPH: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut i = 0;
+    while i + 3 <= bytes.len() {
+        let b0 = bytes[i];
+        let b1 = bytes[i + 1];
+        let b2 = bytes[i + 2];
+        out.push(ALPH[(b0 >> 2) as usize] as char);
+        out.push(ALPH[((b0 & 0x03) << 4 | (b1 >> 4)) as usize] as char);
+        out.push(ALPH[((b1 & 0x0f) << 2 | (b2 >> 6)) as usize] as char);
+        out.push(ALPH[(b2 & 0x3f) as usize] as char);
+        i += 3;
+    }
+    match bytes.len() - i {
+        1 => {
+            let b0 = bytes[i];
+            out.push(ALPH[(b0 >> 2) as usize] as char);
+            out.push(ALPH[((b0 & 0x03) << 4) as usize] as char);
+            out.push('=');
+            out.push('=');
+        }
+        2 => {
+            let b0 = bytes[i];
+            let b1 = bytes[i + 1];
+            out.push(ALPH[(b0 >> 2) as usize] as char);
+            out.push(ALPH[((b0 & 0x03) << 4 | (b1 >> 4)) as usize] as char);
+            out.push(ALPH[((b1 & 0x0f) << 2) as usize] as char);
+            out.push('=');
+        }
+        _ => {}
     }
 }
 
@@ -581,18 +633,21 @@ fn parse_envelope_headers(v: Option<&JsonValue>) -> Vec<(String, String)> {
 
 /// The `TSP_CONTEXT_JSON` env var carries the Context the
 /// bun subprocess can read directly. Slice 16d: we strip the
-/// request `body` from the env-var form (the body travels in
+/// request body from the env-var form (the body travels in
 /// the wrapper's embedded literal instead) because env blocks
 /// on Windows are capped at ~32 KiB and request bodies can be
 /// up to the 1 MiB default limit. The JS page itself never
 /// needs the env var -- the wrapper preamble bakes the full
-/// Context (body included) into the script.
+/// Context (body included, base64-encoded as `body_b64` per
+/// slice 16g) into the script. Slice 16g renamed the field
+/// from `body` to `body_b64`; this strip matches the new
+/// field name.
 pub fn ctx_json_for_env(json: &str) -> String {
     match parse_json(json) {
         Some(JsonValue::Object(entries)) => {
             let entries: Vec<(String, JsonValue)> = entries
                 .into_iter()
-                .filter(|(k, _)| k != "body")
+                .filter(|(k, _)| k != "body_b64")
                 .collect();
             let mut out = String::with_capacity(json.len());
             JsonValue::Object(entries).serialize(&mut out);
@@ -1354,7 +1409,12 @@ fn parse_request(head: &str) -> ParsedRequest {
 /// block (up to `\r\n\r\n`, capped at MAX_HEADER_BYTES),
 /// then reads exactly Content-Length body bytes (spec
 /// sect.14.2 -- a body over the configured limit is
-/// rejected before buffering completes).
+/// rejected before buffering completes). The head is
+/// decoded as UTF-8 lossy (HTTP header lines are required
+/// to be ASCII; the lossy fallback is defence-in-depth for
+/// misbehaving clients); the body is the raw `Vec<u8>`
+/// so binary multipart payloads survive intact (spec
+/// sect.14.3 / 14.2).
 fn read_request(
     stream: &mut TcpStream,
     max_body: usize,
@@ -1394,17 +1454,16 @@ fn read_request(
         body.extend_from_slice(&tmp[..n]);
     }
     body.truncate(content_length);
-    Ok(ReadOutcome::Complete {
-        head,
-        body: String::from_utf8_lossy(&body).into_owned(),
-    })
+    Ok(ReadOutcome::Complete { head, body })
 }
 
 /// Result of `read_request`.
 #[derive(Debug)]
 enum ReadOutcome {
-    /// Head + body (lossy UTF-8) ready for parsing.
-    Complete { head: String, body: String },
+    /// Head + raw body bytes ready for parsing. The body
+    /// is the un-decoded `Vec<u8>` (spec sect.14.3
+    /// multipart bodies must survive binary transport).
+    Complete { head: String, body: Vec<u8> },
     /// Content-Length exceeded the configured body limit
     /// (spec sect.14.2 -> 413 before body buffering completes).
     BodyTooLarge { limit: usize },
@@ -1485,7 +1544,7 @@ mod tests {
             path: "/".to_string(),
             query: "".to_string(),
             params: std::collections::HashMap::new(),
-            body: String::new(),
+            body: Vec::new(),
             headers: Vec::new(),
         };
         let s = ctx.to_json();
@@ -1495,7 +1554,8 @@ mod tests {
         assert!(s.contains("\"path\":\"/\""), "got: {s}");
         assert!(s.contains("\"query\":\"\""), "got: {s}");
         assert!(s.contains("\"params\":{}"), "got: {s}");
-        assert!(s.contains("\"body\":\"\""), "got: {s}");
+        // Empty body base64-encodes to the empty string.
+        assert!(s.contains("\"body_b64\":\"\""), "got: {s}");
         assert!(s.contains("\"headers\":{}"), "got: {s}");
     }
 
@@ -1506,7 +1566,7 @@ mod tests {
             path: "/search".to_string(),
             query: "q=hello&page=2".to_string(),
             params: std::collections::HashMap::new(),
-            body: String::new(),
+            body: Vec::new(),
             headers: Vec::new(),
         };
         let s = ctx.to_json();
@@ -1523,7 +1583,7 @@ mod tests {
             path: "/users/42".to_string(),
             query: String::new(),
             params,
-            body: String::new(),
+            body: Vec::new(),
             headers: Vec::new(),
         };
         let s = ctx.to_json();
@@ -1537,18 +1597,41 @@ mod tests {
             path: "/".to_string(),
             query: String::new(),
             params: std::collections::HashMap::new(),
-            body: "hello=world".to_string(),
+            // Slice 16g: body is now raw Vec<u8> (the
+            // base64 wire form goes through to_json).
+            body: b"hello=world".to_vec(),
             headers: vec![
                 ("content-type".to_string(), "application/x-www-form-urlencoded".to_string()),
                 ("x-trace".to_string(), "abc".to_string()),
             ],
         };
         let s = ctx.to_json();
-        assert!(s.contains("\"body\":\"hello=world\""), "got: {s}");
+        // base64("hello=world") = "aGVsbG89d29ybGQ="
+        assert!(s.contains("\"body_b64\":\"aGVsbG89d29ybGQ=\""), "got: {s}");
         assert!(
             s.contains("\"headers\":{\"content-type\":\"application/x-www-form-urlencoded\",\"x-trace\":\"abc\"}"),
             "got: {s}"
         );
+    }
+
+    #[test]
+    fn context_to_json_serialises_binary_body() {
+        // Slice 16g: bytes that are NOT valid UTF-8 (e.g. 0xff
+        // in the middle) must round-trip through base64. The
+        // old lossy String path would have produced U+FFFD
+        // and the wrap preamble's `new TextDecoder().decode`
+        // would have read the corrupted body.
+        let ctx = Context {
+            method: HttpMethod::Post,
+            path: "/".to_string(),
+            query: String::new(),
+            params: std::collections::HashMap::new(),
+            body: vec![0x00, 0x01, 0x02, 0xff, 0xfe, 0x80],
+            headers: Vec::new(),
+        };
+        let s = ctx.to_json();
+        // base64([0x00,0x01,0x02,0xff,0xfe,0x80]) = "AAEC//6A"
+        assert!(s.contains("\"body_b64\":\"AAEC//6A\""), "got: {s}");
     }
 
     #[test]
@@ -1600,7 +1683,7 @@ mod tests {
             ReadOutcome::Complete { head, body } => {
                 assert!(head.starts_with("POST / HTTP/1.1"));
                 assert!(head.ends_with("\r\n\r\n"));
-                assert_eq!(body, "hello");
+                assert_eq!(body, b"hello".to_vec());
             }
             ReadOutcome::BodyTooLarge { .. } => panic!("not too large"),
         }
@@ -1628,18 +1711,65 @@ mod tests {
         client.write_all(b"cdef").expect("write part 2");
         let outcome = read_request(&mut server, 1024).expect("read");
         match outcome {
-            ReadOutcome::Complete { body, .. } => assert_eq!(body, "abcdef"),
+            ReadOutcome::Complete { body, .. } => assert_eq!(body, b"abcdef".to_vec()),
             ReadOutcome::BodyTooLarge { .. } => panic!("not too large"),
         }
     }
 
     #[test]
-    fn ctx_json_for_env_strips_body_field() {
-        let json = r#"{"method":"POST","path":"/","query":"","params":{},"body":"BIG_BODY","headers":{"x":"y"}}"#;
+    fn read_request_preserves_binary_body() {
+        // Slice 16g: spec sect.14.3 multipart bodies must
+        // survive transport -- a body containing a 0x00 byte
+        // and other binary garbage round-trips exactly
+        // through read_request. The previous slice 16d lossy
+        // String path would have substituted U+FFFD for the
+        // invalid UTF-8 sequences.
+        let (mut client, mut server) = socket_pair();
+        let payload: Vec<u8> = vec![0x00, 0x01, 0x02, 0xff, 0xfe, 0x80, 0x90, 0xa0, 0xb0, 0xc0];
+        let mut wire = b"POST / HTTP/1.1\r\nContent-Length: ".to_vec();
+        wire.extend_from_slice(format!("{}", payload.len()).as_bytes());
+        wire.extend_from_slice(b"\r\n\r\n");
+        wire.extend_from_slice(&payload);
+        client.write_all(&wire).expect("write");
+        let outcome = read_request(&mut server, 1024).expect("read");
+        match outcome {
+            ReadOutcome::Complete { body, .. } => assert_eq!(body, payload),
+            ReadOutcome::BodyTooLarge { .. } => panic!("not too large"),
+        }
+    }
+
+    #[test]
+    fn ctx_json_for_env_strips_body_b64_field() {
+        // Slice 16g: the env side channel must not carry the
+        // body (Windows env block cap ~32 KiB vs the
+        // 1 MiB body limit). The body travels inside the
+        // embedded literal instead.
+        let json = r#"{"method":"POST","path":"/","query":"","params":{},"body_b64":"QklH","headers":{"x":"y"}}"#;
         let env = ctx_json_for_env(json);
-        assert!(!env.contains("BIG_BODY"), "got: {env}");
+        assert!(!env.contains("QklH"), "got: {env}");
+        assert!(!env.contains("body_b64"), "got: {env}");
         assert!(env.contains("\"x\":\"y\""), "got: {env}");
         assert!(env.contains("\"method\":\"POST\""), "got: {env}");
+    }
+
+    #[test]
+    fn base64_encode_round_trips_known_vectors() {
+        // RFC 4648 section 10 test vectors.
+        let cases: &[(&[u8], &str)] = &[
+            (b"", ""),
+            (b"f", "Zg=="),
+            (b"fo", "Zm8="),
+            (b"foo", "Zm9v"),
+            (b"foob", "Zm9vYg=="),
+            (b"fooba", "Zm9vYmE="),
+            (b"foobar", "Zm9vYmFy"),
+            (b"hello=world", "aGVsbG89d29ybGQ="),
+        ];
+        for (input, want) in cases {
+            let mut out = String::new();
+            base64_encode(&mut out, input);
+            assert_eq!(&out, want, "input = {input:?}");
+        }
     }
 
     #[test]

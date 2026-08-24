@@ -272,10 +272,27 @@ pub fn wrap_for_bun_cli(
              __tspContext.url = __tspReqUrl;\n\
              __tspContext.query = __tspReqUrl.searchParams;\n\
              const __tspReqHeaders = new Headers(__tspContext.headers || {});\n\
-             __tspReqHeaders.delete('content-length');\n\
+             // Slice 16g: the body is raw bytes (base64 over\n\
+             // the wire -- JSON has no native bytes shape)\n\
+             // so binary multipart reaches Bun's native\n\
+             // `Request` constructor intact, ready for\n\
+             // `await ctx.request.formData()` (spec\n\
+             // sect.14.3). We atob the string to a\n\
+             // Uint8Array; for non-body methods (GET/HEAD)\n\
+             // the field is empty and we skip the\n\
+             // attachment.\n\
              const __tspReqInit = { method: __tspContext.method, headers: __tspReqHeaders };\n\
-             if (__tspContext.method !== 'GET' && __tspContext.method !== 'HEAD' && __tspContext.body) {\n\
-             \x20 __tspReqInit.body = __tspContext.body;\n\
+             if (__tspContext.method !== 'GET' && __tspContext.method !== 'HEAD' && __tspContext.body_b64) {\n\
+             \x20 // Wrap the decoded bytes in a Blob (with the\n\
+             \x20 // proper MIME type from the request header) so\n\
+             \x20 // Bun's `Request.formData()` can stream-parse\n\
+             \x20 // multipart -- a bare Uint8Array body has no\n\
+             \x20 // \"duplex half\" association and Bun's multipart\n\
+             \x20 // parser hangs on file parts without it.\n\
+             \x20 const __tspBodyBytes__ = Uint8Array.from(atob(__tspContext.body_b64), __c__ => __c__.charCodeAt(0));\n\
+             \x20 const __tspBodyMime__ = __tspReqHeaders.get('content-type') || 'application/octet-stream';\n\
+             \x20 __tspReqInit.body = new Blob([__tspBodyBytes__], { type: __tspBodyMime__ });\n\
+             \x20 __tspReqInit.duplex = 'half';\n\
              }\n\
              __tspContext.request = new Request(__tspReqUrl, __tspReqInit);\n\
              __tspContext.signal = new AbortController().signal;\n\
@@ -431,15 +448,19 @@ mod tests {
         // AbortSignal. All four must appear in the wrapped
         // output when a ctx_json is provided.
         let body = "function POST(ctx) { return ctx.request.text(); }\n";
-        let json = r#"{"method":"POST","path":"/","query":"a=1","headers":{"host":"localhost:9000"},"body":"hi"}"#;
+        let json = r#"{"method":"POST","path":"/","query":"a=1","headers":{"host":"localhost:9000"},"body_b64":"aGk="}"#;
         let wrapped = wrap_for_bun_cli(body, "POST", Some(json));
         assert!(wrapped.contains("new URL("), "got: {wrapped}");
         assert!(wrapped.contains("searchParams"), "got: {wrapped}");
         assert!(wrapped.contains("new Request("), "got: {wrapped}");
         assert!(wrapped.contains("new AbortController().signal"), "got: {wrapped}");
         // The request body is passed to Bun's native Request
-        // for body-bearing methods (POST).
-        assert!(wrapped.contains("__tspReqInit.body"), "got: {wrapped}");
+        // for body-bearing methods (POST). Slice 16g
+        // changed the wire form: base64 over the JSON
+        // field `body_b64`; the wrap preamble atob-decodes
+        // it to a Uint8Array so binary multipart survives.
+        assert!(wrapped.contains("atob(__tspContext.body_b64)"), "got: {wrapped}");
+        assert!(wrapped.contains("Uint8Array.from"), "got: {wrapped}");
     }
 
     #[test]
@@ -448,7 +469,7 @@ mod tests {
         // TypeError), so the init object only gains `.body`
         // for other methods.
         let body = "function GET(ctx) { return 'x'; }\n";
-        let json = r#"{"method":"GET","path":"/","query":"","headers":{},"body":""}"#;
+        let json = r#"{"method":"GET","path":"/","query":"","headers":{},"body_b64":""}"#;
         let wrapped = wrap_for_bun_cli(body, "GET", Some(json));
         // The GET branch skips attaching a body; verify the
         // method-check guard is present in the preamble.
