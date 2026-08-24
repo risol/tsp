@@ -347,6 +347,55 @@ is green.
 - **Verify:** `cargo test -p bun_runtime_tsp --lib` 38 passed
   (was 29).
 
+### Slice 10b -- registry wired into the request flow (done, bun commit `036b61e7`)
+
+- **Why:** the slice 6 bridge re-reads + re-runs every request.
+  Slice 10b is the first slice where the request actually hits
+  the `PageRegistry`: Unloaded/Dirty slots trigger a synchronous
+  build via the bun subprocess, Clean slots serve from
+  `current.payload` (a String clone, no JSC re-invocation), and
+  Building / Failed fall back to LKG. This is the
+  "atomic-publish + LKG" semantics in plan sect.21 + 24.
+- **What landed:**
+  - `pipeline.rs` (renamed from a draft `build.rs` because
+    `build.rs` is Cargo's build-script convention):
+    `pipeline::build(route, method, bun) -> Result<String, _>`
+    composes `page::prepare + jsc_bridge::execute`.
+  - `Generation.payload: Option<String>` so the request hot
+    path can read the rendered body without re-running the
+    build. `PublishGuard::commit` now takes a payload arg.
+  - `PageRegistry::read_current_payload` +
+    `read_lkg_payload` for the request hot path.
+  - `host::render_for_route` decision tree: snapshot the
+    state, build if Unloaded/Dirty, serve from current if
+    Clean, fall back to LKG (or 503) if Building, fall back
+    to LKG (or 500) if Failed. If the registry has no slot at
+    all (the .tsp file does not export the method), return
+    405 with the real `Allow:` header.
+  - `bin/tspserver_v2.rs` boot-time: walks the `RouteTable`,
+    runs the slice 5 method detector, registers one
+    `PageSlot` per (route, method) pair.
+  - `router::RouteTable::iter()` so the bin can walk.
+- **Verify:** 38 unit tests pass; end-to-end `curl GET /`
+  returns 200 with `<h1>Hello from TSP v2</h1>` (first
+  request triggers the build, second serves from cache);
+  `curl -X POST /` returns 405 `Allow: GET` (because the bin
+  only registered the GET slot); `curl /nope` returns 404.
+- **Out of slice 10b (deferred to slice 10c):**
+  - In-flight dedup: concurrent requests on a Building slot
+    share the build future. Slice 10b sees the second
+    request as `BeginBuildError::NotBuildable(Building)` and
+    falls back to LKG; the right answer is to await the same
+    future, but that needs `tokio` or a custom Condvar.
+  - Request pinning: a request that started on generation N
+    finishes on N even if N+1 publishes mid-flight. Without
+    this, a long request that overlaps a publish could see
+    two different generations' payloads in its headers and
+    body.
+  - Generation release (plan sect.21.3: a generation not
+    current, no active requests, no runtime references ->
+    free).
+
 ## Realistic next-step options (post-Slice 7)
 
 The in-process bridge is genuinely multi-session work. Other
