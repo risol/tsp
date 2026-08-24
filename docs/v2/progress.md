@@ -65,11 +65,62 @@ is green.
   `routes/index.tsp`, and returns a stub "route matched, no JSC yet"
   body for that path while every other path still 404s.
 
-### Slices 3..N (planned, not started)
+### Slice 3 — filesystem route scanner + matcher (done, commit `495a5253`)
 
-- **Slice 3 — Route scanner + matcher.** Read `routes/` directory, build
-  a linear matcher (PoC 1: only `/` via `routes/index.tsp`). Return a
-  stub "route matched but no JSC yet" body for `/`; 404 elsewhere.
+- **Why:** the listener must be able to *find* the right `.tsp` file
+  for a given `(path, method)` before slice 5 can execute it. Plan
+  §6 (filesystem routing) and §42 (method dispatch) describe the
+  full surface; slice 3 implements only the static + index shape and
+  the four-state response (200 / 405 / 404 / 400).
+- **What landed:**
+  - `bun/src/runtime/tsp/router.rs` — `HttpMethod` enum +
+    `from_request_line`, `Route { path, source, methods }`, linear
+    `RouteTable::scan(dir)` and `lookup(path, method)`. Only
+    `index.tsp`/static shapes accepted; dynamic + catch-all are
+    `RouterError::UnsupportedShape` so a typo'd `[id].tsp` refuses
+    to boot instead of silently 404'ing. 8 unit tests cover
+    index/static/nested/lookup + the dynamic-rejected branch.
+  - `host.rs` — `serve(host, port, &'static RouteTable)`, request
+    parser, status-line/Allow-header construction. 200 stub body
+    names the source file slice 5 will load; 405 lists supported
+    methods; 404 mentions table size; 400 covers malformed lines.
+  - `bin/tspserver_v2.rs` — scans `routes/` (env `TSP_ROUTES_DIR`
+    or default `routes`), `Box::leak`s the table to give
+    `host::serve` its `&'static`.
+  - `bun/.gitignore` — `.logs/` (the run-output dir produced by the
+    verify scripts).
+  - `lib.rs` — `pub mod router;`
+- **Verify:** `cargo test -p bun_runtime_tsp --lib` → 8 passed;
+  `cargo build -p bun_runtime_tsp` → 2.47s. End-to-end:
+  - `GET /` → 200, body names the source file
+  - `GET /nope` → 404, body says "no route matches path=/nope (table has 1 route(s))"
+  - `POST /` → 200 (slice 3 defaults every scanned route to all
+    methods; slice 5 narrows to actual exports)
+  - `BREW /` → 400 (unknown verb)
+- **Why linear, not radix tree:** the slice-3 table has at most
+  one entry; a `Vec<Route>` plus a `find` is O(n) but n is ~1. The
+  radix tree swap is local to `router.rs` and happens in slice 7+
+  alongside the rest of the route surface.
+- **Next:** Slice 4 pulls in `bun_jsc` + `bun_transpiler` and
+  triggers a cold cargo build (15-30 min on a clean cache). Slice 5
+  reads `routes/index.tsp`, transpiles, evaluates, finds `GET`, calls
+  it, and returns the rendered `<h1>Hello from TSP v2</h1>`.
+
+### Slices 4..N (planned, not started)
+
+- **Slice 4 — JSC + transpiler deps.** Add `bun_jsc` + `bun_transpiler`
+  to the crate. First `cargo build` here is heavy (Bun workspace
+  compile, 20–30 min on cold cache). Run it in the background while
+  writing Slice 5 code.
+- **Slice 5 — Hello vertical.** Read `routes/index.tsp`, transpile
+  TSX, evaluate in JSC, find `GET` export, call it with an empty
+  context, convert result to a 200 `text/html` response.
+  **Verify:** `curl http://localhost:3000/` returns
+  `<h1>Hello from TSP v2</h1>`.
+- **Slice 6 — Ledger close + sync with Sol.** Mark PoC 1 done in this
+  log, commit, then ask Sol which phase of plan §61 to enter next
+  (Phase 0 docs freeze / Phase 1 native skeleton widening / direct
+  Phase 4 module graph / etc.).
 - **Slice 4 — JSC + transpiler deps.** Add `bun_jsc` + `bun_transpiler`
   to the crate. First `cargo build` here is heavy (Bun workspace
   compile, 20–30 min on cold cache). Run it in the background while
