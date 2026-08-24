@@ -23,9 +23,10 @@
 //!
 //! Each `mod` is added the slice it lands in. Slice 1: library shell;
 //! slice 2 lands the listener; slice 3 lands the router; slice 4 lands
-//! the JSC bridge; etc.
+//! the JSC deps; slice 5 lands `page.rs`; etc.
 
-#![doc = "Slice 3: route scanner + matcher wired into the listener. See `router.rs` and `host.rs`."]
+#![doc = "Slice 5: page source reader + static export detector. See `page.rs`."]
 
 pub mod host;
+pub mod page;
 pub mod router;
