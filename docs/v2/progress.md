@@ -509,6 +509,57 @@ is green.
   multi-session). The subprocess path stays as the production
   path until the in-process VM + tsp:* builtins land.
 
+### Slice 13 -- ADR-0001: subprocess is the v2 production JSC path (done, bun commit a3faae0a)
+
+- **Why:** plan sect.25.3 recommends in-process JSC, but Bun v1.4.0
+  does not expose an embedder-facing API (`VirtualMachine::init` is
+  `pub(crate)`, hooks are crate-private statics). Slice 7 spiked
+  the gap; slice 13 closes it as a formal decision rather than a
+  "TODO" item.
+- **What landed (ADR-anchored, NOT a code feature):**
+  - `docs/v2/adr/0001-subprocess-as-production-jsc.md`: locks
+    slice 6's subprocess bridge as the v2 production JSC path.
+    The in-process bridge is future work, triggered by one of:
+    (1) Bun upstream exposes an embedder API, (2) the Bun fork
+    exposes `Run::boot` + the runtime/loader hooks, or (3) a
+    new use case (streaming, SSE) that subprocess cannot meet.
+  - `bun/src/runtime/tsp/in_process_jsc.rs`: ADR-anchored
+    reference code. Symbol-free of `bun_runtime` because the
+    rlib transitively pulls in C externs from the `bun` binary
+    that the foreign linker cannot resolve (2700+ unresolved
+    externs discovered during slice 13b). Integration checklist
+    is plain text in the module doc, not a typed constant.
+    `InProcessVm` placeholder type + 1 unit test
+    (`in_process_vm_is_placeholder`).
+  - `bun_runtime` dep in `Cargo.toml` stays (workspace-hygiene;
+    removal would force a cold recompile of the entire Bun
+    workspace for no functional gain).
+- **Critical finding (was not in the slice 7 spike):** naming any
+  `bun_runtime::*` symbol from `bun_runtime_tsp` -- even via a
+  `type X = bun_runtime::error::Error` alias with no use --
+  triggers 2700+ unresolved externals at link time. `cargo check`
+  succeeds (type-check only); `cargo test` and `cargo build` fail.
+  This is documented in ADR-0001's "Link constraint" section so
+  a future in-process slice does not waste a session on the
+  same false start.
+- **Verify:** `cargo test -p bun_runtime_tsp --lib` 47 passed
+  (was 46, 1 new test for the placeholder). `cargo build
+  -p bun_runtime_tsp` 3.54s incremental. e2e (`curl /`) still
+  returns `<h1>Hello from TSP v2</h1>` (subprocess path
+  unchanged).
+- **Out of slice 13 (deferred to slice 14+ if/when ADR-0001
+  triggers fire):** in-process JSC VM creation; `tsp:*` builtin
+  modules via `HardcodedModule`; per-worker VM threading
+  (sect.25.2); native module loader.
+- **Next:** PoC 1 is complete (all 7 DoD items in plan sect.74).
+  Phase 5+ (plan sect.61) candidates: JSC native module loader
+  (sect.7), full Context bridge (sect.6), fragments-as-HTML
+  rendering (sect.9), multi-worker (sect.25.2). The watcher +
+  generation + dedup + pinning work landed in slices 9-12
+  covers the Phase 4-6 "Generation + atomic reload" milestone;
+  Phase 5+ is feature work, not infra. Sol to pick the next
+  direction.
+
 ## Realistic next-step options (post-Slice 7)
 
 The in-process bridge is genuinely multi-session work. Other
