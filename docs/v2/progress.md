@@ -196,6 +196,63 @@ is green.
   charset=utf-8`. `curl -X POST` -> `405 Method Not Allowed,
   Allow: GET`.
 
+### Slice 7 — bun_runtime dep + in_process_jsc spike (done, commit `1e9a4b92`)
+
+- **Why:** Sol picked the in-process JSC bridge per plan sect.25.3
+  in the post-PoC-1 sync. The realistic scope is much larger than
+  one session's worth of work; this slice landed the dep + a
+  spike module that proves the wiring point exists, and a clear
+  document of the gap.
+- **What landed:**
+  - `bun/src/runtime/tsp/Cargo.toml`: `bun_runtime` added. Cold
+    compile was 1m 51s (most deps were already compiled from
+    slice 4's `bun_jsc` / `bun_transpiler` pull, so the additional
+    cost was small).
+  - `bun/src/runtime/tsp/in_process_jsc.rs`: spike module --
+    documentation only, plus a compile check that proves
+    `bun_runtime` is reachable from this crate. The actual VM
+    creation is multi-session work; see the module's module docs
+    for the integration checklist (dispatch hooks, loader
+    hooks, HardcodedModule wiring, etc.).
+  - `lib.rs`: `pub mod in_process_jsc;` so the future entry
+    point is reserved.
+- **What did NOT land:** a working in-process JSC bridge. Bun's
+  public Rust API is designed for Bun's own use -- the only
+  `VirtualMachine::init` call site lives inside Bun, and it
+  assumes a fully bootstrapped CLI / dispatch / loader hook
+  environment that an embedder has to replicate before the call.
+  Doing this in a single session would be a multi-day effort
+  with no functional regression (slice 6's subprocess path
+  already returns `<h1>Hello from TSP v2</h1>`).
+- **Verify (regression):** the slice-6 binary still serves
+  `<h1>Hello from TSP v2</h1>` for `curl /` after adding
+  `bun_runtime`; `cargo build -p bun_runtime_tsp` is 1.37s
+  incremental.
+
+## Realistic next-step options (post-Slice 7)
+
+The in-process bridge is genuinely multi-session work. Other
+options for the next session that are cheaper and don't depend
+on bun_runtime:
+
+(a) **Phase 0 docs freeze** (plan sect.61). Write
+    `docs/v2/spec.md` + `tsp-module.md` + `jsx-runtime.md` +
+    `context.md` (the 12 freeze items from plan sect.60) plus
+    10-20 `.tsp` fixtures. **No code.** Protects future slices
+    from ABI drift while we tackle the in-process bridge in
+    parallel.
+(b) **Watcher + atomic reload** (plan sect.22). PageSlot +
+    Generation + LKG + ModuleGraph + reverse edges. The
+    slice-7+ half of PoC 1's DoD. **Several sessions.** Closes
+    the rest of PoC 1 DoD but does not require bun_runtime.
+(c) **In-process JSC bridge** (the work slice 7 spiked). Cold
+    compile is now done; the remaining work is replicating
+    Bun's startup sequence in this crate. **Multi-session.**
+
+User-side decision required: pick (a), (b), or (c) for the next
+session. The slice ledger updates with the chosen path before
+more code lands.
+
 ## PoC 1 closure
 
 Plan sect.70 "PoC 1" is the 7-step vertical slice:
