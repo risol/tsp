@@ -46,6 +46,12 @@ pub const BUILTIN_LOGGER: &str = "logger";
 /// Built-in runtime-scoped session service name (spec
 /// sect.16, plan sect.61 Phase 8 `memory session`).
 pub const BUILTIN_SESSION: &str = "session";
+/// Built-in runtime-scoped time service name (16m).
+/// The page reads `ctx.services.time.iso` /
+/// `ctx.services.time.uptime_ms`; the host captures a
+/// fresh snapshot per request so the values are never
+/// stale even when the generation cache bypasses.
+pub const BUILTIN_TIME: &str = "time";
 
 /// Maximum number of live sessions kept in the in-memory
 /// store (spec sect.16.2: the store MUST survive page
@@ -140,6 +146,7 @@ impl ServiceRegistry {
         let mut reg = ServiceRegistry::new();
         reg.register(Arc::new(LoggerService::new()));
         reg.register(Arc::new(SessionService::new(SESSION_STORE_CAP_DEFAULT)));
+        reg.register(Arc::new(TimeService::new()));
         reg
     }
 
@@ -152,6 +159,7 @@ impl ServiceRegistry {
         let mut reg = ServiceRegistry::new();
         reg.register(Arc::new(LoggerService::new()));
         reg.register(Arc::new(SessionService::with_backend(session_backend)));
+        reg.register(Arc::new(TimeService::new()));
         reg
     }
 
@@ -601,6 +609,149 @@ impl Service for SessionService {
     }
 }
 
+// =====================================================================
+// Slice 16m: built-in `time` service (call-capable read-only snapshot)
+// =====================================================================
+
+/// Built-in `time` service (16m). Runtime-scoped (the
+/// host captures the snapshot per request) but
+/// `is_request_varying()` returns `true` so the
+/// generation cache bypasses every render -- a page
+/// that reads `ctx.services.time.iso` produces
+/// request-dependent output.
+///
+/// This is the first service that exposes a real
+/// *read* surface to the page (as opposed to the
+/// 16j logger, which is fire-and-forget). The host
+/// captures `iso` / `epoch_ms` / `uptime_ms` once per
+/// request and the wrap preamble freezes the result
+/// into `ctx.services.time` via `Object.freeze`, so
+/// the page sees a normal JS object and CANNOT call
+/// back into the host (spec 17.3: no wrapper identity
+/// across requests). A real persistent JS adapter
+/// realm with RPC stays a 16n+ follow-up; 16m is the
+/// snapshot shape that any such realm will round-trip
+/// through.
+pub struct TimeService {
+    started: std::time::Instant,
+}
+
+impl TimeService {
+    pub fn new() -> Self {
+        TimeService {
+            started: std::time::Instant::now(),
+        }
+    }
+
+    pub fn snapshot_now(&self) -> TimeSnapshot {
+        let now = std::time::SystemTime::now();
+        let epoch_ms = now
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let iso = format_iso8601_utc(now);
+        let uptime_ms = self.started.elapsed().as_millis() as i64;
+        TimeSnapshot {
+            iso,
+            epoch_ms,
+            uptime_ms,
+        }
+    }
+}
+
+impl Default for TimeService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimeSnapshot {
+    pub iso: String,
+    pub epoch_ms: i64,
+    pub uptime_ms: i64,
+}
+
+impl Service for TimeService {
+    fn name(&self) -> &str {
+        BUILTIN_TIME
+    }
+
+    fn scope(&self) -> ServiceScope {
+        ServiceScope::Runtime
+    }
+
+    fn is_request_varying(&self) -> bool {
+        true
+    }
+
+    fn describe_json(&self) -> String {
+        let s = self.snapshot_now();
+        format!(
+            "{{\"kind\":\"time\",\"scope\":\"{}\",\"iso\":{},\"epoch_ms\":{},\"uptime_ms\":{}}}",
+            self.scope().as_str(),
+            json_string_field(&s.iso),
+            s.epoch_ms,
+            s.uptime_ms,
+        )
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+fn json_string_field(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn format_iso8601_utc(t: std::time::SystemTime) -> String {
+    let secs = t
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let ms = t
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_millis())
+        .unwrap_or(0);
+    let days = (secs / 86_400) as i64;
+    let time_secs = (secs % 86_400) as u32;
+    let hour = time_secs / 3600;
+    let minute = (time_secs % 3600) / 60;
+    let second = time_secs % 60;
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y = if m <= 2 { y + 1 } else { y };
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(24);
+    let _ = write!(&mut out, "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z", y, m, d, hour, minute, second, ms);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -672,13 +823,16 @@ mod tests {
         let reg = ServiceRegistry::with_defaults();
         let snap = reg.snapshot(&[("req-x".to_string(), "{\"kind\":\"x\"}".to_string())]);
         // 16j shipped only the logger; 16k added the
-        // in-memory session service to the default set.
-        assert_eq!(snap.len(), 3);
+        // in-memory session service; 16m added the
+        // request-varying `time` service. Default set
+        // is now 3 runtime + 1 request-scoped.
+        assert_eq!(snap.len(), 4);
         // Runtime first, sorted by name (BTreeMap);
         // request-scoped appended.
         assert_eq!(snap[0].0, BUILTIN_LOGGER);
         assert_eq!(snap[1].0, BUILTIN_SESSION);
-        assert_eq!(snap[2].0, "req-x");
+        assert_eq!(snap[2].0, BUILTIN_TIME);
+        assert_eq!(snap[3].0, "req-x");
         assert!(
             snap[0].1.contains("\"kind\":\"logger\""),
             "got: {}",
@@ -699,9 +853,13 @@ mod tests {
             "got: {}",
             snap[1].1
         );
-        assert_eq!(snap[2].1, "{\"kind\":\"x\"}");
+        assert!(
+            snap[2].1.contains("\"kind\":\"time\""),
+            "got: {}",
+            snap[2].1
+        );
+        assert_eq!(snap[3].1, "{\"kind\":\"x\"}");
     }
-
     #[test]
     fn dummy_service_defaults_to_not_request_varying() {
         let mut reg = ServiceRegistry::new();
@@ -816,6 +974,68 @@ mod tests {
         logger.write_line("info", "still-alive");
         assert_eq!(logger.total_lines(), 1);
         assert!(reg.snapshot(&[])[0].1.contains("\"total_lines\":1"));
+    }
+
+    // ===================== Slice 16m: time service tests =====================
+
+    #[test]
+    fn time_service_is_registered_in_with_defaults() {
+        let reg = ServiceRegistry::with_defaults();
+        let t = reg.get(BUILTIN_TIME).expect("time registered");
+        assert_eq!(t.name(), BUILTIN_TIME);
+        assert_eq!(t.scope(), ServiceScope::Runtime);
+        assert!(t.is_request_varying());
+    }
+
+    #[test]
+    fn time_service_descriptor_carries_iso_epoch_and_uptime() {
+        let svc = TimeService::new();
+        let desc = svc.describe_json();
+        assert!(desc.starts_with("{"), "got: {desc}");
+        assert!(desc.contains("\"kind\":\"time\""), "got: {desc}");
+        assert!(desc.contains("\"scope\":\"runtime\""), "got: {desc}");
+        assert!(desc.contains("\"iso\":\""), "got: {desc}");
+        assert!(desc.contains("\"epoch_ms\":"), "got: {desc}");
+        assert!(desc.contains("\"uptime_ms\":"), "got: {desc}");
+    }
+
+    #[test]
+    fn time_service_snapshot_advances_uptime() {
+        let svc = TimeService::new();
+        let s1 = svc.snapshot_now();
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        let s2 = svc.snapshot_now();
+        assert!(s2.uptime_ms >= s1.uptime_ms);
+        assert!(s2.epoch_ms >= s1.epoch_ms);
+    }
+
+    #[test]
+    fn time_service_iso_matches_system_time() {
+        let svc = TimeService::new();
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let snap = svc.snapshot_now();
+        let after = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        assert!(snap.epoch_ms >= before);
+        assert!(snap.epoch_ms <= after + 5);
+        assert_eq!(snap.iso.len(), 24);
+        assert!(snap.iso.ends_with("Z"));
+        assert!(snap.iso.contains("T"));
+    }
+
+    #[test]
+    fn format_iso8601_utc_handles_known_epoch() {
+        let t = std::time::UNIX_EPOCH;
+        assert_eq!(format_iso8601_utc(t), "1970-01-01T00:00:00.000Z");
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_millis(1);
+        assert_eq!(format_iso8601_utc(t), "1970-01-01T00:00:00.001Z");
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1);
+        assert_eq!(format_iso8601_utc(t), "1970-01-01T00:00:01.000Z");
     }
 
     // ===================== Slice 16k: session tests =====================
