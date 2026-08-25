@@ -27,7 +27,6 @@
 
 #![doc = "Slice 11: filesystem watcher (polling backend) + lazy reload."]
 
-pub mod pipeline;
 pub mod generation;
 pub mod host;
 pub mod in_process_jsc;
@@ -35,6 +34,8 @@ pub mod jsc_bridge;
 pub mod jsx;
 pub mod module_graph;
 pub mod page;
+pub mod pipeline;
 pub mod router;
 pub mod services;
+pub mod session_backend;
 pub mod watcher;

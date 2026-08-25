@@ -34,9 +34,11 @@
 //! stores build on this registry in later Phase 8 slices.
 
 use std::any::Any;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
+use crate::session_backend::SessionBackend;
 
 /// Built-in runtime-scoped logger service name (spec sect.21
 /// logger surface; plan sect.61 Phase 8 `logger service`).
@@ -130,12 +132,26 @@ impl ServiceRegistry {
 
     /// Built-in service set. 16j ships the logger (in-memory
     /// sink; file / rotation backends are a later slice).
-    /// 16k ships the in-memory session store (Redis-backed
-    /// variant is a later slice).
+    /// 16k ships the in-memory session store; 16l
+    /// re-uses the same default for the dev / single-host
+    /// path. Production boots that want a Redis store
+    /// use [`with_backends`] instead.
     pub fn with_defaults() -> Self {
         let mut reg = ServiceRegistry::new();
         reg.register(Arc::new(LoggerService::new()));
         reg.register(Arc::new(SessionService::new(SESSION_STORE_CAP_DEFAULT)));
+        reg
+    }
+
+    /// 16l: build a registry with an explicit session
+    /// backend. The logger is the same default sink; the
+    /// session service is the only thing that varies.
+    /// The bin uses this with `MemoryBackend` /
+    /// `RedisBackend` (driven by `TSP_REDIS_URL`).
+    pub fn with_backends(session_backend: Arc<dyn SessionBackend>) -> Self {
+        let mut reg = ServiceRegistry::new();
+        reg.register(Arc::new(LoggerService::new()));
+        reg.register(Arc::new(SessionService::with_backend(session_backend)));
         reg
     }
 
@@ -340,7 +356,9 @@ impl SessionValue {
                 out.push('[');
                 let mut first = true;
                 for item in items {
-                    if !first { out.push(','); }
+                    if !first {
+                        out.push(',');
+                    }
                     first = false;
                     item.to_json(out);
                 }
@@ -350,7 +368,9 @@ impl SessionValue {
                 out.push('{');
                 let mut first = true;
                 for (k, v) in entries {
-                    if !first { out.push(','); }
+                    if !first {
+                        out.push(',');
+                    }
                     first = false;
                     json_string_session_value(out, k);
                     out.push(':');
@@ -395,15 +415,6 @@ pub struct SessionData {
     pub data: BTreeMap<String, SessionValue>,
 }
 
-impl SessionData {
-    fn new(id: String) -> Self {
-        SessionData {
-            id,
-            data: BTreeMap::new(),
-        }
-    }
-}
-
 /// A write a page applied during one request. Mirrors the
 /// `ctx.session.{set,delete,clear,regenerate,destroy}` calls:
 /// - `Set(name, value)`: insert a JSON-compatible value.
@@ -445,7 +456,9 @@ impl SessionView {
         out.push_str(",\"data\":{");
         let mut first = true;
         for (k, v) in &self.data {
-            if !first { out.push(','); }
+            if !first {
+                out.push(',');
+            }
             first = false;
             json_string_session_value(&mut out, k);
             out.push(':');
@@ -460,27 +473,45 @@ impl SessionView {
 /// Created at boot, `Box::leak`'d into the registry, shared
 /// by every connection thread. Never owned by a page
 /// generation (spec sect.16.2).
+/// Host-owned, runtime-scoped session service (spec
+/// sect.16, plan sect.61 Phase 8). 16k shipped the
+/// in-memory store inline; 16l factored the storage
+/// into the [`crate::session_backend::SessionBackend`]
+/// trait and plugged in two implementations: an
+/// in-memory `MemoryBackend` and a hand-rolled RESP
+/// `RedisBackend`. `SessionService` is now a thin
+/// facade that owns the backend handle and exposes
+/// the same 16k API to the host (so handle_connection
+/// / `ctx.session` flow is unchanged).
 pub struct SessionService {
-    store: Mutex<HashMap<String, SessionData>>,
-    /// FIFO insertion order so a full store evicts the
-    /// oldest entry deterministically.
-    order: Mutex<Vec<String>>,
-    cap: usize,
-    /// Monotonic mint counter so tests can rely on
-    /// "first request after fresh store -> sid contains
-    /// counter=0" without depending on randomness.
-    next_counter: AtomicU64,
+    backend: Arc<dyn SessionBackend>,
 }
 
 impl SessionService {
+    /// 16l factory: wire any backend implementation.
+    /// The bin uses this with `MemoryBackend` by
+    /// default and `RedisBackend` when `TSP_REDIS_URL`
+    /// is set.
+    pub fn with_backend(backend: Arc<dyn SessionBackend>) -> Self {
+        SessionService { backend }
+    }
+
+    /// 16k convenience: build a service backed by an
+    /// in-memory store with the given cap. Kept so
+    /// existing tests (`SessionService::new(N)`) and
+    /// the default boot path keep working without
+    /// any bin changes.
     pub fn new(cap: usize) -> Self {
-        assert!(cap > 0, "SessionService cap must be > 0");
-        SessionService {
-            store: Mutex::new(HashMap::new()),
-            order: Mutex::new(Vec::new()),
-            cap,
-            next_counter: AtomicU64::new(0),
-        }
+        use crate::session_backend::MemoryBackend;
+        Self::with_backend(Arc::new(MemoryBackend::new(cap)))
+    }
+
+    /// Backend identifier (`"memory"` / `"redis"`)
+    /// surfaced in the `ctx.services.session`
+    /// descriptor snapshot so the dev can confirm
+    /// which backend served a given request.
+    pub fn backend_name(&self) -> &'static str {
+        self.backend.name()
     }
 
     /// Look up an existing session by sid. Returns `None`
@@ -489,11 +520,7 @@ impl SessionService {
     /// sect.16.4: after destroy the session is no longer
     /// usable as an authenticated persistent session).
     pub fn lookup(&self, sid: &str) -> Option<SessionView> {
-        let store = self.store.lock().unwrap();
-        store.get(sid).map(|d| SessionView {
-            id: d.id.clone(),
-            data: d.data.clone(),
-        })
+        self.backend.lookup(sid)
     }
 
     /// Mint a fresh session id and insert an empty row.
@@ -501,18 +528,7 @@ impl SessionService {
     /// 16-byte block (predictable but unique; production
     /// uses a CSPRNG -- 16k keeps the test surface small).
     pub fn create(&self) -> SessionView {
-        let id = self.mint_sid();
-        let view = SessionView {
-            id: id.clone(),
-            data: BTreeMap::new(),
-        };
-        {
-            let mut store = self.store.lock().unwrap();
-            store.insert(id.clone(), SessionData::new(id.clone()));
-        }
-        self.push_order(&id);
-        self.enforce_cap();
-        view
+        self.backend.create()
     }
 
     /// Apply a list of writes from one request to the
@@ -532,141 +548,14 @@ impl SessionService {
         if writes.is_empty() {
             return current_sid.to_string();
         }
-        let mut new_sid = current_sid.to_string();
-        for w in writes {
-            match w {
-                SessionWrite::Set(name, value) => {
-                    if let Some(sid) = non_empty(&new_sid) {
-                        let mut store = self.store.lock().unwrap();
-                        if let Some(row) = store.get_mut(sid) {
-                            row.data.insert(name.clone(), value.clone());
-                        } else {
-                            eprintln!(
-                                "TSPv2PoC1: session write to unknown sid dropped (key={name})"
-                            );
-                        }
-                    }
-                }
-                SessionWrite::Delete(name) => {
-                    if let Some(sid) = non_empty(&new_sid) {
-                        let mut store = self.store.lock().unwrap();
-                        if let Some(row) = store.get_mut(sid) {
-                            row.data.remove(name);
-                        }
-                    }
-                }
-                SessionWrite::Clear => {
-                    if let Some(sid) = non_empty(&new_sid) {
-                        let mut store = self.store.lock().unwrap();
-                        if let Some(row) = store.get_mut(sid) {
-                            row.data.clear();
-                        }
-                    }
-                }
-                SessionWrite::Regenerate => {
-                    // Spec 16.3: keep the data, replace the
-                    // id. We move the data into a new row
-                    // under a new id and drop the old one.
-                    if let Some(sid) = non_empty(&new_sid) {
-                        let moved = {
-                            let mut store = self.store.lock().unwrap();
-                            store.remove(sid).map(|row| row.data)
-                        };
-                        if let Some(data) = moved {
-                            let fresh = self.mint_sid();
-                            self.store
-                                .lock()
-                                .unwrap()
-                                .insert(fresh.clone(), SessionData {
-                                    id: fresh.clone(),
-                                    data,
-                                });
-                            // FIFO order: drop old, push new.
-                            {
-                                let mut order = self.order.lock().unwrap();
-                                if let Some(pos) = order.iter().position(|s| s == &sid) {
-                                    order.remove(pos);
-                                }
-                                order.push(fresh.clone());
-                            }
-                            new_sid = fresh;
-                        }
-                    }
-                }
-                SessionWrite::Destroy => {
-                    if let Some(sid) = non_empty(&new_sid) {
-                        let mut store = self.store.lock().unwrap();
-                        store.remove(sid);
-                        let mut order = self.order.lock().unwrap();
-                        if let Some(pos) = order.iter().position(|s| s == &sid) {
-                            order.remove(pos);
-                        }
-                    }
-                    new_sid.clear();
-                }
-            }
-        }
-        new_sid
+        self.backend.apply_writes(current_sid, writes)
     }
 
     /// How many sessions the store currently holds. Used
     /// by tests + dev diagnostics; not exposed to pages.
     pub fn len(&self) -> usize {
-        self.store.lock().unwrap().len()
+        self.backend.len()
     }
-
-    fn mint_sid(&self) -> String {
-        let n = self.next_counter.fetch_add(1, Ordering::Relaxed);
-        // 32 hex chars from a counter-derived block. Two
-        // counters packed into 16 bytes give a fast,
-        // unique, dependency-free id; production swaps
-        // this for a CSPRNG.
-        let high = (n >> 32) as u32;
-        let low = n as u32;
-        let mut buf = [0u8; 16];
-        buf[0..4].copy_from_slice(&high.to_be_bytes());
-        buf[4..8].copy_from_slice(&low.to_be_bytes());
-        // Fill the rest with the high+low mix so the id
-        // is unique per counter even when only 1 counter
-        // has been consumed (avoids long zero tails in
-        // tests).
-        let mix = high ^ low;
-        for slot in buf[8..16].chunks_mut(4) {
-            let v = mix.wrapping_mul(0x9E37_79B9).wrapping_add(n as u32);
-            slot.copy_from_slice(&v.to_be_bytes());
-        }
-        let mut out = String::with_capacity(32);
-        for byte in buf.iter() {
-            use std::fmt::Write as _;
-            let _ = write!(out, "{byte:02x}");
-        }
-        out
-    }
-
-    fn push_order(&self, sid: &str) {
-        let mut order = self.order.lock().unwrap();
-        if let Some(pos) = order.iter().position(|s| s == sid) {
-            order.remove(pos);
-        }
-        order.push(sid.to_string());
-    }
-
-    fn enforce_cap(&self) {
-        let mut store = self.store.lock().unwrap();
-        let mut order = self.order.lock().unwrap();
-        while store.len() > self.cap {
-            if let Some(victim) = order.first().cloned() {
-                order.remove(0);
-                store.remove(&victim);
-            } else {
-                break;
-            }
-        }
-    }
-}
-
-fn non_empty(s: &str) -> Option<&str> {
-    if s.is_empty() { None } else { Some(s) }
 }
 
 impl Service for SessionService {
@@ -700,8 +589,9 @@ impl Service for SessionService {
         // now. Pages reach the live view through
         // `ctx.session` only.
         format!(
-            "{{\"kind\":\"session\",\"scope\":\"{}\",\"live\":{}}}",
+            "{{\"kind\":\"session\",\"scope\":\"{}\",\"backend\":\"{}\",\"live\":{}}}",
             self.scope().as_str(),
+            self.backend.name(),
             self.len()
         )
     }
@@ -789,10 +679,26 @@ mod tests {
         assert_eq!(snap[0].0, BUILTIN_LOGGER);
         assert_eq!(snap[1].0, BUILTIN_SESSION);
         assert_eq!(snap[2].0, "req-x");
-        assert!(snap[0].1.contains("\"kind\":\"logger\""), "got: {}", snap[0].1);
-        assert!(snap[0].1.contains("\"scope\":\"runtime\""), "got: {}", snap[0].1);
-        assert!(snap[0].1.contains("\"total_lines\":0"), "got: {}", snap[0].1);
-        assert!(snap[1].1.contains("\"kind\":\"session\""), "got: {}", snap[1].1);
+        assert!(
+            snap[0].1.contains("\"kind\":\"logger\""),
+            "got: {}",
+            snap[0].1
+        );
+        assert!(
+            snap[0].1.contains("\"scope\":\"runtime\""),
+            "got: {}",
+            snap[0].1
+        );
+        assert!(
+            snap[0].1.contains("\"total_lines\":0"),
+            "got: {}",
+            snap[0].1
+        );
+        assert!(
+            snap[1].1.contains("\"kind\":\"session\""),
+            "got: {}",
+            snap[1].1
+        );
         assert_eq!(snap[2].1, "{\"kind\":\"x\"}");
     }
 
@@ -837,24 +743,46 @@ mod tests {
         assert_eq!(logger.total_lines(), 1100);
         // Only the newest `max_buffered` lines stay resident.
         assert_eq!(logger.recent_lines(10_000).len(), 1000);
-        assert_eq!(logger.recent_lines(3), vec!["[debug] line-1097", "[debug] line-1098", "[debug] line-1099"]);
+        assert_eq!(
+            logger.recent_lines(3),
+            vec![
+                "[debug] line-1097",
+                "[debug] line-1098",
+                "[debug] line-1099"
+            ]
+        );
     }
 
     #[test]
     fn flush_log_lines_routes_to_logger() {
         let reg = ServiceRegistry::with_defaults();
         let lines = vec![
-            LogLine { service: BUILTIN_LOGGER.to_string(), level: "info".to_string(), message: "a".to_string() },
-            LogLine { service: BUILTIN_LOGGER.to_string(), level: "warn".to_string(), message: "b".to_string() },
+            LogLine {
+                service: BUILTIN_LOGGER.to_string(),
+                level: "info".to_string(),
+                message: "a".to_string(),
+            },
+            LogLine {
+                service: BUILTIN_LOGGER.to_string(),
+                level: "warn".to_string(),
+                message: "b".to_string(),
+            },
             // Unknown service -> dropped, not forwarded.
-            LogLine { service: "ghost".to_string(), level: "info".to_string(), message: "c".to_string() },
+            LogLine {
+                service: "ghost".to_string(),
+                level: "info".to_string(),
+                message: "c".to_string(),
+            },
         ];
         let forwarded = reg.flush_log_lines(&lines);
         assert_eq!(forwarded, 2);
         let logger = reg.get(BUILTIN_LOGGER).unwrap();
         let logger = logger.as_any().downcast_ref::<LoggerService>().unwrap();
         assert_eq!(logger.total_lines(), 2);
-        assert_eq!(logger.recent_lines(10), vec!["[info] a".to_string(), "[warn] b".to_string()]);
+        assert_eq!(
+            logger.recent_lines(10),
+            vec!["[info] a".to_string(), "[warn] b".to_string()]
+        );
     }
 
     #[test]

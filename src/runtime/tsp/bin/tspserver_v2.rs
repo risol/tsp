@@ -32,7 +32,9 @@ use bun_runtime_tsp::host;
 use bun_runtime_tsp::jsc_bridge::{self, BunRuntime};
 use bun_runtime_tsp::module_graph::ModuleGraph;
 use bun_runtime_tsp::router::RouteTable;
+use bun_runtime_tsp::services::SESSION_STORE_CAP_DEFAULT;
 use bun_runtime_tsp::services::ServiceRegistry;
+use bun_runtime_tsp::session_backend::{MemoryBackend, RedisBackend, SessionBackend};
 use bun_runtime_tsp::watcher::{self, WatchConfig};
 
 fn main() -> ExitCode {
@@ -89,11 +91,44 @@ fn main() -> ExitCode {
     // so every connection thread shares the same instance; it
     // is never owned by a page generation, so reloads do not
     // tear services down (plan sect.61 Phase 8 acceptance).
+    //
+    // Slice 16l: the session backend is selected by
+    // `TSP_REDIS_URL`. When set, a hand-rolled RESP
+    // `RedisBackend` carries every session; otherwise
+    // the host falls back to the in-process `MemoryBackend`
+    // (16k default). A missing / unreachable Redis is
+    // NOT fatal -- the backend's `is_available()` flag
+    // stays false, every `lookup` returns `None` (so the
+    // host mints a fresh session), and the next command
+    // self-heals once Redis is reachable again.
+    let session_backend: Arc<dyn SessionBackend> = match std::env::var("TSP_REDIS_URL") {
+        Ok(url) if !url.is_empty() => match RedisBackend::with_default_ttl(&url) {
+            Ok(backend) => {
+                let available = backend.is_available();
+                let arc: Arc<dyn SessionBackend> = Arc::new(backend);
+                eprintln!("TSPv2PoC1: session backend = redis (url={url}, available={available})");
+                arc
+            }
+            Err(e) => {
+                eprintln!("TSPv2PoC1: TSP_REDIS_URL parse failed ({e}); falling back to memory");
+                Arc::new(MemoryBackend::new(SESSION_STORE_CAP_DEFAULT))
+            }
+        },
+        _ => {
+            eprintln!("TSPv2PoC1: session backend = memory (cap={SESSION_STORE_CAP_DEFAULT})");
+            Arc::new(MemoryBackend::new(SESSION_STORE_CAP_DEFAULT))
+        }
+    };
     let services: &'static ServiceRegistry =
-        Box::leak(Box::new(ServiceRegistry::with_defaults()));
+        Box::leak(Box::new(ServiceRegistry::with_backends(session_backend)));
     eprintln!(
         "TSPv2PoC1: services registered: {}",
-        services.snapshot(&[]).iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
+        services
+            .snapshot(&[])
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
     );
 
     // Slice 11b: build the module graph (frozen at boot; slice 12
