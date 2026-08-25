@@ -1386,11 +1386,102 @@ is green.
   - File upload multipart (16g deferred -- Bun 1.4
     parser hang).
   - `ctx.session` (Phase 8).
-- **Next:** slice 16k = `ctx.session` memory session store
-  (host-owned, cookie-keyed, survives reload by the same
-  host-residency the registry guarantees; spec sect.16).
-  After that: Redis session, then the persistent JS
-  adapter realm for call-capable services.
+- **Next:** slice 16l = Redis-backed session store
+  (host-owned; the in-memory store from 16k stays as the
+  default; opt-in Redis via config). Then the persistent
+  JS adapter realm for call-capable services (spec
+  sect.17), and a follow-up on the wrap-side abort
+  listener (16i left the host side done but the
+  `ctx.signal` page-side abort deferred to a later
+  slice).
+
+### Slice 16k -- in-memory session store (`ctx.session`) (done, bun commit `008f0973`)
+
+- **Why:** spec sect.16 defines `ctx.session` with
+  `id` / `get` / `has` / `set` / `delete` / `clear` /
+  `regenerate` / `destroy`, JSON-only values
+  (sect.16.1), state that survives page reloads
+  (sect.16.2), and `regenerate` keeping the data while
+  swapping the id (16.3). Plan sect.61 Phase 8 lists
+  `memory session` as the second slice after the
+  ServiceRegistry. The store lives in the same
+  host-owned registry as the logger (16j) so reload /
+  generation release never tears it down.
+- **What landed (in `bun/src/runtime/tsp/`):**
+  - `services.rs` -- `BUILTIN_SESSION = "session"`;
+    `SessionValue` (Null/Bool/Number/String/Array/
+    Object, hand-rolled JSON tree, spec 16.1 portable
+    values only); `SessionData { id, data }`;
+    `SessionView { id, data }` with a hand-rolled
+    `to_json()` the host embeds into the wire Context;
+    `SessionWrite` enum
+    (Set/Delete/Clear/Regenerate/Destroy);
+    `SessionService` (runtime-scoped, host-owned;
+    `Mutex<HashMap<String, SessionData>>` + FIFO
+    eviction order + `SESSION_STORE_CAP_DEFAULT =
+    10_000`). Methods: `lookup`, `create`,
+    `apply_writes`, `len`, mint_sid (16-hex-char
+    counter-derived id; production swaps for a CSPRNG);
+    registered automatically via `with_defaults()`.
+    `is_request_varying() = true` so the generation
+    cache bypasses every render (per spec 16.2 the
+    page may read live session state).
+  - `host.rs` -- `Context.session: Option<SessionView>`;
+    `to_json` emits `"session": {"id":..,"data":..}`
+    (or `null` when the SessionService is not wired);
+    `EnvelopeOutcome.session_writes: Vec<SessionWrite>`;
+    new `parse_session_writes` (drops entries missing
+    required fields; rejects non-portable values per
+    16.1); the handle_connection flow resolves the
+    request's `tsp_sid` cookie against the SessionService
+    (unknown / missing / destroyed -> mint a fresh row,
+    spec 16.4), snapshots the view into Context, and
+    after the envelope returns calls
+    `apply_writes(view.id, session_writes)` to get the
+    new id. If the new id differs from the cookie the
+    request carried, the host plants a
+    `Set-Cookie: tsp_sid=...; Path=/; HttpOnly;
+    SameSite=Lax` line (or `Max-Age=0` on destroy). The
+    SessionResolve struct records BOTH the original
+    cookie sid and the resolved view, so the
+    "did anything change?" check is correct on a first
+    request (no cookie -> mint -> need to plant).
+  - `jsx.rs` -- top-level `__tspSessionWrites` declared
+    unconditionally; the preamble hydrates
+    `ctx.session = {id, get, has, set, delete, clear,
+    async regenerate, async destroy}` where set/delete/
+    clear/regenerate/destroy buffer into
+    `__tspSessionWrites` (carried back in the envelope);
+    non-portable values (functions / Symbols / etc.)
+    are coerced to `String(v)` so a buggy page never
+    crashes the host; the envelope now carries
+    `session_writes: __tspSessionWrites`.
+  - `bin/tspserver_v2.rs` -- no change (the in-memory
+    SessionService ships in `ServiceRegistry::with_defaults`
+    since 16j's bin was already wired to that
+    constructor).
+- **Verify:** 128 lib tests pass (was 110; +11 services,
+  +7 host envelope/context, +2 jsx wrap, +2 misc). E2E
+  on `routes/session.tsp`:
+  ```
+  GET /session                   -> 200 counter=0   Set-Cookie: tsp_sid=<sid>; HttpOnly
+  GET /session (cookie carried)  -> 200 counter=1   no Set-Cookie (id unchanged)
+  GET /session                   -> 200 counter=2
+  POST /session {regenerate}     -> 200 regenerated Set-Cookie: tsp_sid=<new-sid>
+  GET /session (new cookie)      -> 200 counter=3   data preserved (spec 16.3)
+  POST /session {destroy}        -> 200 destroyed   Set-Cookie: tsp_sid=; Max-Age=0
+  GET /session (no cookie)       -> 200 counter=0   Set-Cookie: tsp_sid=<fresh>
+  ```
+  Server log: `services registered: logger, session`.
+- **Deferred (16l+):** Redis-backed session (opt-in via
+  config; the in-memory store stays as the dev default);
+  persistent JS adapter realm (call-capable services with
+  a real IPC channel, spec sect.17); wrap-side abort
+  listener (16i left the host side done; the
+  `ctx.signal` page-side abort will be wired in a
+  follow-up slice using a more reliable IPC than
+  bun-stdin data); spec sect.17.2 dev-tool diagnosis of
+  page-owned durable resources (Phase 11 territory).
 
 ### Slice 16j -- ServiceRegistry infrastructure (+ logger service) (done, bun commit `75eaf213`)
 
