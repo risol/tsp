@@ -1386,12 +1386,75 @@ is green.
   - File upload multipart (16g deferred -- Bun 1.4
     parser hang).
   - `ctx.session` (Phase 8).
-- **Next:** phase 7 is closed. Move to Phase 8
-  (ServiceRegistry / session / persistent services).
-  Read plan §61 + spec §17 and pick a slice: the
-  `ServiceRegistry` infrastructure (in-memory first,
-  Redis later) is the natural first slice because
-  every subsequent Phase 8 slice depends on it.
+- **Next:** slice 16k = `ctx.session` memory session store
+  (host-owned, cookie-keyed, survives reload by the same
+  host-residency the registry guarantees; spec sect.16).
+  After that: Redis session, then the persistent JS
+  adapter realm for call-capable services.
+
+### Slice 16j -- ServiceRegistry infrastructure (+ logger service) (done, bun commit `75eaf213`)
+
+- **Why:** spec sect.17 says runtime-scoped services MUST
+  survive page generation replacement and `.tsp` modules must
+  NOT own durable resources; plan sect.61 Phase 8 lists
+  `ServiceRegistry` first because every later Phase 8 slice
+  (session, Redis, logger, adapter realm) builds on it.
+  The registry is the host-side home for services:
+  created at boot, shared by every connection thread, never
+  owned by a page generation.
+- **What landed (in `bun/src/runtime/tsp/`):**
+  - `services.rs` (new) -- `ServiceRegistry` (BTreeMap of
+    `Arc<dyn Service>`, `with_defaults`, `register`,
+    `get`, `any_request_varying`, `snapshot`,
+    `flush_log_lines`), `Service` trait (name / scope /
+    `is_request_varying` / `describe_json` / `as_any`),
+    `ServiceScope` (runtime vs request), `LogLine`, and the
+    built-in `LoggerService` (in-memory 1000-line ring
+    buffer + `total_lines` counter -- file/rotation
+    backends are a later slice).
+  - `host.rs` -- `Context.services: Vec<(name, json)>`
+    serialised into the wire Context as `"services":{...}`
+    (spec sect.17 `ctx.services`). `serve` /
+    `handle_connection` take `&ServiceRegistry`; each
+    request snapshots `services.snapshot(&[])` into the
+    Context; after `parse_envelope` the host flushes
+    `outcome.service_logs` into the owning service BEFORE
+    writing the response (so the next request observes the
+    flush). `EnvelopeOutcome` gains `service_logs` +
+    `parse_service_logs` (malformed entries dropped).
+    The `per_request` flag (16d/16e cache bypass) now also
+    trips when `services.any_request_varying()` -- a page
+    may read live service state (`logger.total_lines`), so
+    the generation cache must not replay a stale snapshot.
+  - `jsx.rs` -- the preamble declares `__tspServiceLogs`
+    unconditionally (legacy zero-arg fixtures keep working)
+    and hydrates `ctx.services` from the descriptor
+    snapshot: `kind='logger'` becomes a log adapter whose
+    calls buffer into `__tspServiceLogs`; any other
+    descriptor surfaces read-only via `Object.freeze`
+    (spec sect.17.3 -- no wrapper identity across
+    requests). The envelope now carries
+    `service_logs: __tspServiceLogs`.
+  - `bin/tspserver_v2.rs` -- `ServiceRegistry::with_defaults()`
+    boxed-leaked like the PageRegistry and passed to `serve`.
+- **Verify:** 110 lib tests pass (was 94; +9 services, +3
+  host envelope/context, +2 jsx wrap, +2 misc). E2E on
+  `routes/svc.tsp`:
+  ```
+  GET /svc          -> svc lines=0   (page logs 1 line; flushed after)
+  GET /svc          -> svc lines=1   (state survived request 1)
+  edit svc.tsp      -> watcher cycle
+  GET /svc          -> svc lines=2   (service NOT rebuilt -- reload page
+                                     after service 不重建 acceptance)
+  GET /             -> 200 (16f index regression-free)
+  ```
+  Server log: `services registered: logger`.
+- **Deferred (16k+):** memory session store (`ctx.session`,
+  spec sect.16); Redis session; file/rotation logger
+  backends; persistent JS adapter realm (call-capable
+  services with a real IPC channel); spec sect.17.2
+  dev-tool diagnosis of page-owned durable resources
+  (needs static analysis, Phase 11 territory).
 
 ### Slice 16i -- ctx.signal abort triggers (host timeout + kill) (done, bun commit `9b7db6df`)
 
