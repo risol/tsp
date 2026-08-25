@@ -887,10 +887,25 @@ const MAX_HEADER_BYTES: usize = 64 * 1024;
 /// buffering). Override via `TSP_MAX_BODY_BYTES` (bytes).
 const DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
 
+/// Default request timeout (spec sect.13.7's "applicable
+/// timeout"). Override via `TSP_TIMEOUT_MS` (milliseconds).
+/// `0` disables the timeout watchdog (slice 16i).
+const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 30_000;
+
 fn resolve_max_body_bytes() -> usize {
     match std::env::var("TSP_MAX_BODY_BYTES") {
         Ok(s) => s.parse::<usize>().unwrap_or(DEFAULT_MAX_BODY_BYTES),
         Err(_) => DEFAULT_MAX_BODY_BYTES,
+    }
+}
+
+/// Resolve the per-request timeout (spec sect.13.7).
+/// `0` means "no timeout" (the abort signal is still
+/// created and wired but the watchdog never fires).
+fn resolve_request_timeout() -> u64 {
+    match std::env::var("TSP_TIMEOUT_MS") {
+        Ok(s) => s.parse::<u64>().unwrap_or(DEFAULT_REQUEST_TIMEOUT_MS),
+        Err(_) => DEFAULT_REQUEST_TIMEOUT_MS,
     }
 }
 
@@ -968,6 +983,11 @@ fn handle_connection(
     // default 1 MiB) is rejected with 413 before the page
     // sees it (spec sect.14.2).
     let max_body = resolve_max_body_bytes();
+    // Slice 16i: per-request timeout (spec sect.13.7).
+    // `0` means "no timeout" -- the abort signal is still
+    // created and wired in the wrap preamble, but the
+    // watchdog never fires.
+    let timeout_ms = resolve_request_timeout();
     let (head, body) = match read_request(&mut stream, max_body)? {
         ReadOutcome::Complete { head, body } => (head, body),
         ReadOutcome::BodyTooLarge { limit } => {
@@ -1060,9 +1080,9 @@ fn handle_connection(
                     || !ctx.query.is_empty()
                     || !ctx.params.is_empty();
                 let (_status_line, _ct, allow_header, body) = if per_request {
-                    render_per_request(&route, req_method, bun, &ctx)
+                    render_per_request(&route, req_method, bun, &ctx, timeout_ms)
                 } else {
-                    render_for_route(&route, req_method, &page_ref, registry, bun, &ctx)
+                    render_for_route(&route, req_method, &page_ref, registry, bun, &ctx, timeout_ms)
                 };
                 // Slice 16b: bun emits a `__TSP_OUT_V1__` envelope
                 // with the page's return value classified as
@@ -1109,7 +1129,7 @@ fn handle_connection(
                     method: HttpMethod::Get,
                 };
                 let (_status, _ct, _allow, _body) = render_for_route(
-                    &route, HttpMethod::Get, &page_ref, registry, bun, &ctx,
+                    &route, HttpMethod::Get, &page_ref, registry, bun, &ctx, timeout_ms,
                 );
                 (
                     "HTTP/1.1 200 OK",
@@ -1227,6 +1247,7 @@ fn render_per_request(
     requested: HttpMethod,
     bun: &BunRuntime,
     ctx: &Context,
+    timeout_ms: u64,
 ) -> (&'static str, &'static str, Option<String>, String) {
     // Mirror render_for_route's 405 conversion: the page must
     // export the requested method. We use the static detector
@@ -1234,7 +1255,7 @@ fn render_per_request(
     // deliberately outside the registry path.
     match crate::page::prepare(route) {
         Ok(page) if page.methods.contains(&requested) => {
-            match pipeline::build(route, requested, bun, &ctx.to_json()) {
+            match pipeline::build(route, requested, bun, &ctx.to_json(), timeout_ms) {
                 Ok(body) => ("HTTP/1.1 200 OK", "text/html; charset=utf-8", None, body),
                 Err(e) => {
                     let msg = format!("{e}");
@@ -1324,6 +1345,7 @@ fn render_for_route(
     registry: &PageRegistry,
     bun: &BunRuntime,
     ctx: &Context,
+    timeout_ms: u64,
 ) -> (&'static str, &'static str, Option<String>, String) {
     // The route exists (router matched) but the boot-time
     // method detector may not have registered this method
@@ -1364,7 +1386,7 @@ fn render_for_route(
                 Ok(guard) => {
                     // We own the build. Run pipeline,
                     // commit, pin the payload, serve.
-                    let build_result = pipeline::build(route, requested, bun, &ctx.to_json());
+                    let build_result = pipeline::build(route, requested, bun, &ctx.to_json(), timeout_ms);
                     match build_result {
                         Ok(body) => {
                             let deps: Vec<crate::module_graph::ModuleId> = Vec::new();

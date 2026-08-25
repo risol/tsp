@@ -68,14 +68,20 @@ impl BuildError {
 /// `TSP_CONTEXT_JSON` env var and embeds the same JSON as a
 /// literal in the wrapped JS preamble. The page handler
 /// receives the parsed object as its single argument.
+///
+/// `timeout_ms` is the per-request timeout (spec sect.13.7).
+/// `0` disables the watchdog; any positive value is the
+/// millisecond budget the page is allowed to run before the
+/// host fires `ctx.signal.abort()`.
 pub fn build(
     route: &Route,
     method: HttpMethod,
     bun: &BunRuntime,
     ctx_json: &str,
+    timeout_ms: u64,
 ) -> Result<String, BuildError> {
     let source = page::prepare(route).map_err(BuildError::Prepare)?;
-    jsc_bridge::execute(bun, &source.text, method, Some(ctx_json))
+    jsc_bridge::execute(bun, &source.text, method, Some(ctx_json), timeout_ms)
         .map_err(BuildError::Jsc)
 }
 
