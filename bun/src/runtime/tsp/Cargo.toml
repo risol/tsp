@@ -21,15 +21,16 @@ path = "bin/tspserver_v2.rs"
 [lints]
 workspace = true
 
-# Slice 7: in-process JSC bridge. We add `bun_runtime` so the host can
-# own the JavaScriptCore VM (plan sect.25.3) instead of shelling out
-# to the vendored `bun.exe`. The subprocess path in `jsc_bridge.rs`
-# stays as a fallback; the v2 binary currently uses subprocess by design.
-# An in-process adapter is not wired until Bun exposes an embedder-safe
-# startup/linking surface (see docs/v2/adr/0001-subprocess-as-production-jsc.md).
+# Slice 7: keep the future in-process JSC bridge behind an opt-in feature.
+# Production currently uses the subprocess path in `jsc_bridge.rs`; making
+# `bun_runtime` optional keeps this host independently buildable without
+# forcing Bun's full generated/codegen build into every TSP iteration.
 #
 # Cost: the first `cargo build` here takes 20-40 minutes on a clean
 # cache -- basically every Bun workspace crate needs to compile.
 # Subsequent `cargo build` calls are fast.
+[features]
+in-process-jsc = ["dep:bun_runtime"]
+
 [dependencies]
-bun_runtime = { workspace = true }
+bun_runtime = { workspace = true, optional = true }
