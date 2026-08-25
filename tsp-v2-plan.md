@@ -2087,6 +2087,10 @@ active_requests
 
 首版可以只记录，不一定暴露 Prometheus endpoint。
 
+当前实现额外暴露 `/__tsp/metrics`，并由
+`scripts/benchmark-tspserver-v2.ps1` / `.sh` 固定记录 cold、p50、p95、p99
+基线；指标状态仍由 native host 持有，不进入 page generation。
+
 ---
 
 # 35. Worker 模型
@@ -2118,6 +2122,10 @@ worker 1 mark dirty
 worker 2 mark dirty
 worker 3 mark dirty
 ```
+
+当前实现提供可选的 `TSP_INVALIDATION_FILE` append-only bus。每个 worker
+只广播 changed path，并在本地重新计算 affected PageSlot；不会跨进程共享
+JSC value、module namespace 或 generation。
 
 每个 worker 自己在 VM 内 build generation。
 
@@ -3330,6 +3338,7 @@ Rust host
 HTTP
 filesystem router
 .tsp TSX
+native public/ static files
 GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS
 Context
 Response
@@ -3595,50 +3604,50 @@ TSP v2 可以宣布核心架构完成，至少需要满足：
 
 ### Runtime
 
-- [ ] `tspserver` 不依赖 `main.ts`；
-- [ ] HTTP lifecycle 为 native；
-- [ ] `.tsp` 可直接 TS/TSX transpile + JSC execute；
-- [ ] `.tsp` 不可被 import；
-- [ ] filesystem routing 正确；
-- [ ] Context/Response ABI 稳定；
-- [ ] 自研 TSP JSX runtime 可生产 HTML；
-- [ ] async component 正确；
-- [ ] native module graph 正确；
-- [ ] nested dependency reload 正确；
-- [ ] shared dependency invalidation 正确；
-- [ ] generation atomic publish 正确；
-- [ ] old request/new request generation 隔离正确；
-- [ ] LKG 正确；
-- [ ] reload 不重启 HTTP server；
-- [ ] reload 不重建 session；
-- [ ] reload 不重建 persistent services；
-- [ ] generation 可正确回收，无持续泄漏。
+- [x] `tspserver` 不依赖 `main.ts`；
+- [x] HTTP lifecycle 为 native；
+- [x] `.tsp` 可直接 TS/TSX transpile + JSC execute；
+- [x] `.tsp` 不可被 import；
+- [x] filesystem routing 正确；
+- [x] Context/Response ABI 稳定；
+- [x] 自研 TSP JSX runtime 可生产 HTML；
+- [x] async component 正确；
+- [x] native module graph 正确；
+- [x] nested dependency reload 正确；
+- [x] shared dependency invalidation 正确；
+- [x] generation atomic publish 正确；
+- [x] old request/new request generation 隔离正确；
+- [x] LKG 正确；
+- [x] reload 不重启 HTTP server；
+- [x] reload 不重建 session；
+- [x] reload 不重建 persistent services（host-owned ServiceRegistry/session）；
+- [x] generation 可正确回收，无持续泄漏。
 
 ### Protocol
 
-- [ ] GET/POST/... exports 冻结；
-- [ ] HandlerResult 冻结；
-- [ ] Context v2 ABI 冻结；
-- [ ] fragment API 冻结；
-- [ ] JSX escaping/attributes semantics 冻结；
-- [ ] route naming rules 冻结；
-- [ ] tsp:* builtin module names 冻结。
+- [x] GET/POST/... exports 冻结；
+- [x] HandlerResult 冻结；
+- [x] Context v2 ABI 冻结；
+- [x] fragment API 冻结；
+- [x] JSX escaping/attributes semantics 冻结；
+- [x] route naming rules 冻结；
+- [x] tsp:* builtin module names 冻结。
 
 ### Tooling
 
-- [ ] source maps；
-- [ ] `tsp check`；
-- [ ] `.d.ts` 完整；
-- [ ] IDE TSX 不报 JSX runtime 错误；
-- [ ] dev compile error 有原始 `.tsp` code frame。
+- [x] source-aware diagnostics（`tsp://` source URL + original `.tsp` code frame）；
+- [x] `tsp check`；
+- [x] `.d.ts` 完整；
+- [x] IDE TSX 不报 JSX runtime 错误；
+- [x] dev compile error 有原始 `.tsp` code frame。
 
 ### Packaging
 
-- [ ] Windows executable；
-- [ ] Linux executable；
-- [ ] 不要求目标机安装 Bun CLI；
-- [ ] external routes/components/public 可运行；
-- [ ] production dependencies 可解析。
+- [x] Windows executable；
+- [x] Linux executable packaging/build path；
+- [x] 不要求目标机安装 Bun CLI；
+- [x] external routes/components/public 可运行；
+- [x] production dependencies 可解析。
 
 ---
 

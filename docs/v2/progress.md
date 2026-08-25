@@ -512,8 +512,10 @@ is green.
 ### Slice 13 -- ADR-0001: subprocess is the v2 production JSC path (done, bun commit a3faae0a)
 
 - **Why:** plan sect.25.3 recommends in-process JSC, but Bun v1.4.0
-  does not expose an embedder-facing API (`VirtualMachine::init` is
-  `pub(crate)`, hooks are crate-private statics). Slice 7 spiked
+  does not expose an embedder-safe high-level startup API. The low-level
+  `bun_jsc::VirtualMachine::init` and `runtime_hooks()` are public, while
+  `Run::boot` remains `pub(crate)` and the foreign-binary link boundary
+  still fails when `bun_runtime` symbols are referenced. Slice 7 spiked
   the gap; slice 13 closes it as a formal decision rather than a
   "TODO" item.
 - **What landed (ADR-anchored, NOT a code feature):**
@@ -2043,3 +2045,159 @@ b9a7b0a2  feat(tsp-v2): add bun_jsc + bun_transpiler dependencies (PoC 1 slice 4
 d5a88b79  feat(tsp-v2): close PoC 1 vertical slice (JSX + bun.exe JSC bridge)
 1e9a4b92  chore(tsp-v2): add bun_runtime dep + in_process_jsc spike (slice 7)
 ```
+
+## Session update (2026-08-25) -- abort, timeout, and routing fixes
+
+- **Slice 16n' -- wrap-side abort signalling: landed.** The generated
+  wrapper now wires a module-scope `AbortController` to the Bun stdin
+  `data` event, and the host writes `ABORT_MARKER` before entering a
+  1-second grace window. A real host run confirmed
+  `[ABORT-REACHED] fired=true err=aborted-by-signal` for `routes/abort.tsp`.
+- **Watchdog regression fixed.** The child could exit normally in about
+  100ms, while the sleeping watchdog later set `timed_out=true` and
+  converted that successful request into a 500. An atomic watchdog state
+  (`running -> child completed` or `running -> timed out`) now cancels the
+  timeout race-safely. The watchdog no longer owns the grace sleep; the
+  host loop does.
+- **CookieOptions completed.** The wrapper now serializes the remaining
+  `expires?: Date` option as an RFC-compatible `Expires=` attribute, in
+  addition to path/domain/secure/httpOnly/sameSite/maxAge.
+- **Client-disconnect cancellation landed.** The host polls a cloned
+  accepted socket while a page is executing; a peer FIN/error cancels the
+  request, sends the same abort marker through the subprocess watchdog,
+  applies the existing grace/hard-kill policy, and suppresses response
+  writes after disconnect. The bridge exposes `TSP3015` internally for
+  cancelled builds.
+- **Typed timeout response policy landed.** A deadline now produces the
+  bridge-owned `TSP3009` error and the host returns `504 Gateway Timeout`
+  with the typed `[TSP3009] request timed out` body. Client disconnects keep
+  their internal `TSP3015` code but remain response-less because the peer is
+  already gone. Existing `TSP3008` page-registration semantics are unchanged.
+- **Dynamic URL decoding landed.** Router matching now decodes each path
+  segment before binding params, including UTF-8 escapes; encoded `/` stays
+  within its original segment, and malformed escapes return typed `400`
+  `[TSP2005] malformed URL path` instead of falling through to 404.
+- **Verification:** 162 library tests pass; `cargo build -p
+  bun_runtime_tsp` passes; with `TSP_TIMEOUT_MS=2000`, `/`, `/time`, and
+  `/session` return 200, while the timeout fixture returns 504 with the
+  typed timeout body. Dynamic `/users/hello%20world` returns the decoded
+  `ctx.params.id`, while malformed escapes return 400. A raw socket client
+  closing during `/slow` cancels the Bun subprocess without attempting a
+  response.
+
+### Remaining next items
+
+- Persistent JS adapter realm / service RPC — explicitly deferred to a
+  future fork/integration slice. It requires (1) an embedder-safe Bun VM
+  startup/link surface, (2) a persistent-realm module ownership boundary,
+  and (3) a defined bidirectional service RPC protocol. The current v2
+  runtime has none of these prerequisites; native `ServiceRegistry` plus
+  snapshot/log back-channel remains the supported service implementation.
+
+## Session update (2026-08-25) -- minimal `tsp:server` bridge
+
+- **Subprocess compatibility seam landed.** The generated wrapper now
+  supplies a narrow `tsp:server` surface for named imports: `json`, `text`,
+  `html`, `redirect`, `notFound`, and `HttpError`. The source pre-pass rewrites
+  those imports into wrapper bindings, including semicolon-free and multiline
+  import forms.
+- **Handler syntax coverage widened.** `export async function METHOD(...)`
+  is accepted, and the compatibility pass removes only the `Context` and
+  `PageConfig` parameter annotations needed by the current bridge. Arbitrary
+  TypeScript syntax and the full virtual module loader remain future work.
+- **Response behavior is wired to the existing envelope.** JSON/text/HTML/
+  redirect/not-found helpers return Web `Response` objects. A thrown
+  `HttpError` is converted to the same response envelope with its status and
+  headers, so the host keeps one response path.
+- **Verification:** 168 library tests pass, including real Bun subprocess
+  execution tests for `tsp:server` JSON and `HttpError` responses; the
+  `bun_runtime_tsp` package builds successfully. Repository-wide formatting
+  still reports an unrelated pre-existing difference in
+  `src/jsc/JSGlobalObject.rs`; the changed TSP files were not bulk-formatted
+  to avoid touching unrelated work.
+
+### Historical bridge status
+
+The bridge above was intentionally a compatibility seam; the later runtime,
+loader, packaging, and hardening entries below record the subsequent closure
+work. The persistent JS realm remains an explicit ADR boundary.
+
+## Session update (2026-08-25) -- runtime ABI, fragments, loader, tooling
+
+- **Real TS/TSX execution landed.** The subprocess temp module now uses a
+  `.tsx` suffix and delegates TypeScript/TSX parsing to Bun 1.4. The wrapper
+  injects a small `React.createElement` compatibility factory and renders the
+  resulting tree natively in the subprocess, including nested elements,
+  attributes, boolean attributes, fragments, async components, escaping, and
+  explicit raw HTML values. Function-valued attributes fail with `TSP3105`.
+- **Fragments landed end to end.** Named `export const name = fragment(handler)`
+  exports are registered in the wrapper. `ctx.fragment(name)` emits an
+  internal URL; the native host resolves `/__tsp/fragment`, restores the
+  originating route Context, selects the named handler, and returns the normal
+  Response envelope. A real host run returned the expected fragment HTML.
+- **Local module execution landed.** Relative `.ts/.tsx/.js/.jsx/.json` imports
+  are resolved to absolute `file:` URLs before temp-module execution; route
+  `.tsp` imports are rejected. The graph now records re-exports and dynamic
+  imports and reports missing/unsupported local dependencies.
+- **Developer tooling landed.** `tspserver_v2 check`, `routes`, and `graph`
+  validate the route set, print exports, and inspect the resolved module graph.
+- **Bundled-runtime packaging landed.** Runtime discovery searches explicit
+  `TSP_BUN_BIN`, `TSP_RUNTIME_DIR`, binaries beside the server, and packaged
+  `.tsp-runtime`/`runtime` locations before the development bootstrap path.
+  Windows and Linux packaging scripts copy the server and Bun runtime together.
+- **Verification:** 182 library tests pass; `cargo build -p bun_runtime_tsp`
+  passes; `check`, `routes`, and `graph` all pass against the current routes;
+  the real host returns `200` for `/` and the fragment endpoint returns `200`
+  HTML.
+
+### Closure items tracked before the final hardening pass
+
+Persistent JS service RPC remained intentionally deferred because the Bun VM
+link/startup boundary is unsafe; the accepted subprocess ADR is the closure
+for that architectural branch. The hardening pass below records the shipped
+source-aware diagnostics, dependency resolution, metrics, security, and
+packaging decisions.
+
+## Session update (2026-08-25) -- closure hardening
+
+- **Dependency resolution is production-shaped.** The bridge now sets the
+  application `NODE_PATH` and working directory for generated temp modules,
+  so bare package dependencies resolve from the route/application tree. A
+  real package fixture passes through the subprocess bridge. Relative dynamic
+  imports are rewritten to absolute file URLs; `.tsp` imports remain rejected.
+- **Diagnostics are source-aware.** Generated modules carry a `tsp://` source
+  URL, and native JSX transform failures include a bounded original-source
+  code frame. This avoids exposing the generated temp filename as the primary
+  development diagnostic.
+- **Metrics are host-owned.** The native host exposes
+  `/__tsp/metrics` in Prometheus text format and tracks requests, response
+  classes, active requests, duration sum/count, timeouts, cancellations, and
+  reload cycles without placing state in page generations.
+- **Benchmark baselines are repeatable.** `scripts/benchmark-tspserver-v2.ps1`
+  and `.sh` measure cold request latency plus p50/p95/p99 warm latency for a
+  fixed route set and emit JSON suitable for CI or release notes.
+- **Worker invalidation has a portable transport.** Setting
+  `TSP_INVALIDATION_FILE` enables an append-only cross-process path bus. Each
+  worker still owns its own route table, page registry, and generations; only
+  changed paths cross the process boundary.
+- **Static files are native.** The configured `TSP_PUBLIC_DIR` (default
+  `public/`) is served before page routing for GET/HEAD, with MIME detection,
+  cache headers, URL decoding, traversal rejection, and symlink containment.
+- **Fragment capability is enforced.** Fragment URLs carry a per-process
+  capability token. Missing or forged tokens cannot dispatch the internal
+  fragment endpoint; a real host run still renders the named fragment.
+- **Packaging includes application assets.** Windows and Linux packaging
+  scripts now copy the server, bundled Bun, routes, and optional public assets
+  and emit a runtime manifest. The packaged Windows binary was verified with
+  `--help`, `check`, and a real HTTP request without `TSP_BUN_BIN`.
+- **Verification:** 183 `bun_runtime_tsp` library tests pass, the Rust binary
+  builds, and repository TypeScript type-checking passes. Linux compilation
+  remains an environment verification item because this host has only the
+  Windows Rust target installed; the portable Linux packaging path is present
+  but was not falsely claimed as locally executed.
+
+The remaining persistent-JS-adapter item is intentionally closed as an
+architecture boundary, not an unfinished implementation: the accepted ADR
+keeps production on the subprocess bridge until Bun exposes an
+embedder-safe VM startup/link surface. Native `ServiceRegistry`, sessions,
+metrics, and reload state are host-owned and survive page generation reloads.

@@ -18,14 +18,15 @@ subprocess path was always intended as a placeholder while the
 in-process bridge was scoped.
 
 Slice 7 added `bun_runtime` as a dep + a `in_process_jsc` spike that
-documented the gap. The spike's conclusion: `bun_runtime`'s public
-Rust API is designed for Bun's own use, not for embedding into a
-foreign binary. The only `VirtualMachine::init` call site lives
-inside `bun_runtime::cli::run_command::Run::boot` (pub(crate)),
-assumes a fully bootstrapped CLI / dispatch / loader hook
-environment, and the `__BUN_RUNTIME_HOOKS` / `__BUN_LOADER_HOOKS`
-hooks are crate-private statics — not `extern "Rust"` symbols an
-embedder can override.
+documented the gap. The current source does expose
+`bun_jsc::VirtualMachine::init` and `bun_jsc::runtime_hooks()`, but
+those are low-level pieces. The higher-level
+`bun_runtime::cli::run_command::Run::boot` and `Run::start` path is
+not an embedder API (`boot` is `pub(crate)`), and assumes a fully
+bootstrapped CLI / dispatch / loader-hook environment. In addition,
+referencing `bun_runtime` from this foreign TSP binary pulls in
+transitive crates whose C/ABI symbols are provided by the Bun
+executable, not by the `bun_runtime` rlib itself.
 
 ## Decision
 
@@ -37,8 +38,8 @@ requiring either:
 1. A public `bun_runtime::create_isolated_vm()` API in the Bun
    fork, **or**
 2. Significant Bun-fork work to extract the `Run::boot` flow into
-   an embedder-facing entry point and to expose the runtime / loader
-   hooks as `extern "Rust"` symbols.
+   an embedder-facing entry point and make the full Bun runtime link
+   surface available to the embedding binary.
 
 Neither is in v2 scope.
 
@@ -73,8 +74,9 @@ becomes true:
    API that creates an isolated VM with overridable loader / module
    hooks.
 2. The Bun fork we maintain (vendored at `bun/` submodule, branch
-   `bun-v1.4.0`) is willing to expose `Run::boot` as `pub` +
-   make `__BUN_RUNTIME_HOOKS` / `__BUN_LOADER_HOOKS` `extern "Rust"`.
+   `bun-v1.4.0`) is willing to expose an embedder-safe equivalent of
+   `Run::boot` and provide the runtime's required C/ABI symbols to the
+   embedding binary.
 3. A new use case requires in-process JSC for latency (e.g.
    streaming responses, server-sent events) that the subprocess
    path cannot meet.

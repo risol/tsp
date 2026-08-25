@@ -26,3 +26,4 @@ test_*.xlsx
 node_modules/
 .bun-bootstrap/
 .logs/
+.logs-16n-*.txt

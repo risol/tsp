@@ -8,7 +8,7 @@
     "noEmit": true,
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
-    "types": ["bun-types", "node", "./types.d.ts"]
+    "types": ["bun-types", "node", "./types.d.ts", "./types/tsp-v2.d.ts"]
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "types.d.ts"]
 }

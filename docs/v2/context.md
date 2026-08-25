@@ -45,6 +45,10 @@ Notes:
   fragment. The URL shape is host-defined and MUST NOT be
   hard-coded by application code.
 
+The generated URL includes an opaque per-process capability. The internal
+dispatch endpoint rejects missing or invalid capabilities; application code
+must only use the value returned by `ctx.fragment()`.
+
 `Context` is per-request. It is owned by the native runtime and
 becomes invalid after the handler returns. Any subsequent access
 raises `TSP RuntimeError: Request context is no longer active`
