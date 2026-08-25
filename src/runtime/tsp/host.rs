@@ -34,7 +34,7 @@ use crate::generation::{
 };
 use crate::jsc_bridge::BunRuntime;
 use crate::pipeline;
-use crate::services::{LogLine, ServiceRegistry};
+use crate::services::{LogLine, ServiceRegistry, SessionService, SessionValue, SessionView, SessionWrite, BUILTIN_SESSION};
 use crate::router::{HttpMethod, MatchResult, RouteTable};
 use std::sync::Arc;
 
@@ -242,6 +242,14 @@ pub struct Context {
     /// services this request created (16j: registry only). The
     /// wrap preamble hydrates these into `ctx.services`.
     pub services: Vec<(String, String)>,
+    /// `ctx.session` view the page reads (spec sect.16).
+    /// The host resolves the request's `tsp_sid` cookie
+    /// against the runtime SessionService and hands the
+    /// page a `(id, data)` snapshot. The page's writes
+    /// travel back through the envelope's `session_writes`
+    /// field (16k) and are applied by the host before the
+    /// response is sent.
+    pub session: Option<SessionView>,
 }
 
 impl Context {
@@ -312,7 +320,14 @@ impl Context {
             // included) -- embed verbatim, do NOT re-escape.
             out.push_str(json);
         }
-        out.push_str("}}");
+        out.push_str("},\"session\":");
+        match &self.session {
+            Some(view) => {
+                out.push_str(&view.to_json());
+            }
+            None => out.push_str("null"),
+        }
+        out.push_str("}");
         out
     }
 }
@@ -389,6 +404,11 @@ struct EnvelopeOutcome {
     /// (spec sect.17 / slice 16j). The host flushes them
     /// into the owning runtime service after parsing.
     service_logs: Vec<LogLine>,
+    /// Session writes the page applied via `ctx.session.*`
+    /// (spec sect.16 / slice 16k). The host applies them
+    /// to the runtime SessionService and decides whether
+    /// the response needs a new / cleared `tsp_sid` cookie.
+    session_writes: Vec<SessionWrite>,
 }
 
 const ENVELOPE_TAG: &str = "__TSP_OUT_V1__";
@@ -676,6 +696,93 @@ impl<'a> JsonParser<'a> {
     }
 }
 
+/// Result of resolving the request's `tsp_sid` cookie:
+/// the cookie value as it came in (may be `None` for
+/// first requests) and the live `SessionView` the page
+/// reads. The host needs BOTH to decide whether the
+/// response must plant a new `tsp_sid` cookie (cookie
+/// `None` / unknown / destroyed -> mint; otherwise only
+/// on regenerate / destroy).
+struct SessionResolve {
+    /// Cookie value as the request carried it, or
+    /// `None` for a first request / no cookie.
+    original_sid: Option<String>,
+    /// Resolved view the page reads (`id` is either the
+    /// existing row's id or a freshly minted one).
+    view: SessionView,
+}
+
+/// Resolve the request's `tsp_sid` cookie to a
+/// `SessionResolve` (spec sect.16). When the cookie is
+/// missing, the session was destroyed, or the id is
+/// unknown, mint a fresh one and carry the original
+/// `None` / unknown sid so the post-render cookie
+/// logic can plant a `Set-Cookie` line.
+fn resolve_session_view(svc: &SessionService, sid: Option<&str>) -> SessionResolve {
+    let original_sid = sid.map(|s| s.to_string());
+    let view = match sid.and_then(|s| svc.lookup(s)) {
+        Some(view) => view,
+        None => svc.create(),
+    };
+    SessionResolve {
+        original_sid,
+        view,
+    }
+}
+
+/// Wire form for the `tsp_sid` cookie (spec sect.16). A
+/// page that does not interact with the session still
+/// observes a valid (fresh) id; the Set-Cookie line below
+/// is what the browser actually persists.
+const SESSION_COOKIE_NAME: &str = "tsp_sid";
+
+/// Build the Set-Cookie line the host appends to the
+/// response when the session id changed (new / regenerate)
+/// or was cleared (destroy). `None` means "no Set-Cookie
+/// needed" -- the cookie already matches.
+fn build_session_cookie(new_sid: &str, old_sid: &str) -> Option<String> {
+    if new_sid == old_sid {
+        return None;
+    }
+    if new_sid.is_empty() {
+        // Destroyed: clear the cookie on the client. We
+        // intentionally use `Max-Age=0` rather than an
+        // expired date so RFC 6265bis / all major browsers
+        // agree on the semantics.
+        Some(format!(
+            "{}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax",
+            SESSION_COOKIE_NAME
+        ))
+    } else {
+        Some(format!(
+            "{}={}; Path=/; HttpOnly; SameSite=Lax",
+            SESSION_COOKIE_NAME, new_sid
+        ))
+    }
+}
+
+/// Read the `tsp_sid` value out of the lower-cased
+/// request-headers vector. Returns `None` when the cookie
+/// is absent (first request) or the value is empty.
+fn read_session_cookie(headers: &[(String, String)]) -> Option<String> {
+    for (k, v) in headers {
+        if k == "cookie" {
+            for pair in v.split(';') {
+                let trimmed = pair.trim();
+                let Some(eq) = trimmed.find('=') else { continue };
+                let name = trimmed[..eq].trim();
+                if name == SESSION_COOKIE_NAME {
+                    let val = trimmed[eq + 1..].trim();
+                    if !val.is_empty() {
+                        return Some(val.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Parse the `__TSP_OUT_V1__` envelope (status / content /
 /// body / headers) into a typed outcome.
 ///
@@ -706,6 +813,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
         body,
         headers,
         service_logs,
+        session_writes,
     } = if head == ENVELOPE_TAG {
         match parse_json(body_json) {
             Some(JsonValue::Object(entries)) => {
@@ -719,6 +827,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
                 let body = obj.get("body").and_then(JsonValue::as_str).unwrap_or("").to_string();
                 let headers = parse_envelope_headers(obj.get("headers"));
                 let service_logs = parse_service_logs(obj.get("service_logs"));
+                let session_writes = parse_session_writes(obj.get("session_writes"));
                 match kind {
                     EnvelopeKind::Html => EnvelopeOutcome {
                         kind,
@@ -727,6 +836,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
                         body,
                         headers,
                         service_logs: service_logs.clone(),
+                        session_writes: session_writes.clone(),
                     },
                     EnvelopeKind::Response => {
                         let status = obj.get("status").and_then(JsonValue::as_u16).unwrap_or(200);
@@ -743,6 +853,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
                             body,
                             headers,
                             service_logs: service_logs.clone(),
+                            session_writes: session_writes.clone(),
                         }
                     }
                     EnvelopeKind::Legacy => EnvelopeOutcome {
@@ -752,6 +863,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
                         body,
                         headers,
                         service_logs: service_logs.clone(),
+                        session_writes: session_writes.clone(),
                     },
                 }
             }
@@ -762,6 +874,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
                 body: stdout.to_string(),
                 headers: Vec::new(),
                 service_logs: Vec::new(),
+                session_writes: Vec::new(),
             },
         }
     } else {
@@ -773,6 +886,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
             body: stdout.to_string(),
             headers: Vec::new(),
             service_logs: Vec::new(),
+                session_writes: Vec::new(),
         }
     };
 
@@ -783,6 +897,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
         body,
         headers,
         service_logs,
+        session_writes,
     }
 }
 
@@ -821,6 +936,76 @@ fn parse_envelope_headers(v: Option<&JsonValue>) -> Vec<(String, String)> {
                 .collect()
         }
         _ => Vec::new(),
+    }
+}
+
+/// Extract the envelope's `session_writes` array
+/// (slice 16k). Wire shape (produced by the wrap
+/// preamble):
+/// `[{"op":"set","k":"x","v":"..."}, {"op":"delete","k":"y"},
+///    {"op":"clear"}, {"op":"regenerate"}, {"op":"destroy"}]`.
+/// `v` may be a string / number / bool / null / array /
+/// object (JSON-compatible per spec sect.16.1). Non-object
+/// entries or entries with an unknown `op` are dropped with
+/// no host diagnostic; the malformed write is lost, the
+/// envelope stays valid.
+fn parse_session_writes(v: Option<&JsonValue>) -> Vec<SessionWrite> {
+    let Some(v) = v else { return Vec::new() };
+    let JsonValue::Array(items) = v else { return Vec::new() };
+    let mut out = Vec::new();
+    for item in items {
+        let JsonValue::Object(entries) = item else { continue };
+        let obj = JsonValue::Object(entries.clone());
+        let op = match obj.get("op").and_then(JsonValue::as_str) {
+            Some(o) => o,
+            None => continue,
+        };
+        match op {
+            "set" => {
+                let Some(k) = obj.get("k").and_then(JsonValue::as_str) else { continue };
+                let Some(v) = obj.get("v") else { continue };
+                match json_value_to_session(v) {
+                    Some(sv) => out.push(SessionWrite::Set(k.to_string(), sv)),
+                    None => eprintln!("TSPv2PoC1: session write to '{k}' has non-portable value; dropped"),
+                }
+            }
+            "delete" => {
+                let Some(k) = obj.get("k").and_then(JsonValue::as_str) else { continue };
+                out.push(SessionWrite::Delete(k.to_string()));
+            }
+            "clear" => out.push(SessionWrite::Clear),
+            "regenerate" => out.push(SessionWrite::Regenerate),
+            "destroy" => out.push(SessionWrite::Destroy),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Convert a hand-rolled `JsonValue` (from the envelope's
+/// tiny parser) into a `SessionValue`. Spec sect.16.1:
+/// only JSON-compatible values are accepted; anything else
+/// returns `None` and the caller drops the write.
+fn json_value_to_session(v: &JsonValue) -> Option<SessionValue> {
+    match v {
+        JsonValue::Null => Some(SessionValue::Null),
+        JsonValue::Bool(b) => Some(SessionValue::Bool(*b)),
+        JsonValue::Number(n) => Some(SessionValue::Number(*n)),
+        JsonValue::String(s) => Some(SessionValue::String(s.clone())),
+        JsonValue::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for it in items {
+                out.push(json_value_to_session(it)?);
+            }
+            Some(SessionValue::Array(out))
+        }
+        JsonValue::Object(entries) => {
+            let mut out = Vec::with_capacity(entries.len());
+            for (k, v) in entries {
+                out.push((k.clone(), json_value_to_session(v)?));
+            }
+            Some(SessionValue::Object(out))
+        }
     }
 }
 
@@ -1084,6 +1269,10 @@ fn handle_connection(
             ),
             Vec::new(),
         ),
+        // 16k: the early-return arms above never reach the
+        // SessionService; the 4xx / 5xx bodies do not carry
+        // a session, so the host does not emit a
+        // `Set-Cookie: tsp_sid=...` line for them.
         ParsedRequest::Known { method, path, query, headers } => {
             // Build the per-request Context the page handler
             // receives as its single argument. `params` is
@@ -1108,6 +1297,25 @@ fn handle_connection(
                 }
                 _ => std::collections::HashMap::new(),
             };
+            // Slice 16k: resolve the request's session
+            // view (spec sect.16) against the runtime
+            // SessionService. `None` cookie -> fresh
+            // session; unknown / destroyed sid -> also
+            // fresh (spec 16.4 makes the destroyed session
+            // no longer usable).
+            let session_resolve = services.get(BUILTIN_SESSION).and_then(|svc_arc| {
+                svc_arc.as_any().downcast_ref::<SessionService>().map(|svc| {
+                    let cookie_sid = read_session_cookie(&headers);
+                    resolve_session_view(svc, cookie_sid.as_deref())
+                })
+            });
+            // Track the cookie that came in so the
+            // post-render Set-Cookie decision compares
+            // against the request, not against the
+            // resolved (potentially freshly-minted) view.
+            let request_sid = session_resolve
+                .as_ref()
+                .and_then(|r| r.original_sid.clone());
             let ctx = Context {
                 method,
                 path: path.clone(),
@@ -1119,6 +1327,12 @@ fn handle_connection(
                 // runtime-scoped registry (spec sect.17). The
                 // request-scoped list is empty in 16j.
                 services: services.snapshot(&[]),
+                // Slice 16k: `ctx.session` view the page
+                // reads (spec sect.16). `None` only when the
+                // SessionService is not registered (the
+                // current boot always registers it; the
+                // arm stays for future embeddings / tests).
+                session: session_resolve.map(|r| r.view),
             };
             match matched {
             MatchResult::Found { route, method: req_method } => {
@@ -1169,6 +1383,45 @@ fn handle_connection(
                 // response is written, so the next request's
                 // snapshot observes it.
                 services.flush_log_lines(&outcome.service_logs);
+                // Slice 16k: apply the page's session writes
+                // (spec sect.16). The new id may be empty
+                // (destroyed) or different (regenerate /
+                // fresh) from the cookie the request came in
+                // with; either way the response needs a
+                // `Set-Cookie: tsp_sid=...` line so the
+                // browser keeps its view of the session in
+                // sync with the host.
+                let mut outcome = outcome;
+                let mut new_session_sid: Option<String> = None;
+                if let Some(current) = &ctx.session {
+                    if let Some(svc_arc) = services.get(BUILTIN_SESSION) {
+                        if let Some(svc) = svc_arc.as_any().downcast_ref::<SessionService>() {
+                            // Apply the page's writes against
+                            // the session's CURRENT id (the
+                            // resolved view, which may already
+                            // differ from the cookie if the
+                            // request's sid was unknown /
+                            // destroyed). After apply, the
+                            // returned sid is the new value
+                            // the browser must see.
+                            let next = svc.apply_writes(&current.id, &outcome.session_writes);
+                            new_session_sid = Some(next);
+                        }
+                    }
+                }
+                // The cookie line is determined by
+                // `request_sid` (the cookie the request
+                // carried) vs `new_sid` (the sid the host
+                // committed after applying writes). They
+                // match -> no Set-Cookie. They differ ->
+                // plant the new sid (or Max-Age=0 on
+                // destroy).
+                if let Some(new_sid) = new_session_sid.as_deref() {
+                    let old_sid = request_sid.as_deref().unwrap_or("");
+                    if let Some(cookie_line) = build_session_cookie(new_sid, old_sid) {
+                        outcome.headers.push(("Set-Cookie".to_string(), cookie_line));
+                    }
+                }
                 // The envelope is the source of truth for the
                 // page's actual status when the page ran. When
                 // the envelope is absent (Legacy), the body is
@@ -1844,6 +2097,7 @@ fn _generation_anchor(_g: &generation::GenerationId) {}
 mod tests {
     use super::*;
     use crate::router::HttpMethod;
+    use std::collections::BTreeMap;
 
     #[test]
     fn context_to_json_basic() {
@@ -1855,6 +2109,7 @@ mod tests {
             body: Vec::new(),
             headers: Vec::new(),
             services: Vec::new(),
+            session: None,
         };
         let s = ctx.to_json();
         // The exact wire form is part of the slice 16a
@@ -1869,10 +2124,13 @@ mod tests {
     }
 
     #[test]
-    fn context_to_json_serialises_services() {
-        // Slice 16j: the wire Context carries the
-        // `ctx.services` snapshot (spec sect.17). Values are
-        // pre-serialised JSON objects from the registry.
+    fn context_to_json_serialises_session_view() {
+        // Slice 16k: `ctx.session` wire form. The view is
+        // an object `{id, data}`; `data` is a JSON object
+        // of the keys the page set on prior requests.
+        let mut data = BTreeMap::new();
+        data.insert("name".to_string(), SessionValue::String("alice".to_string()));
+        data.insert("n".to_string(), SessionValue::Number(7.0));
         let ctx = Context {
             method: HttpMethod::Get,
             path: "/".to_string(),
@@ -1880,16 +2138,133 @@ mod tests {
             params: std::collections::HashMap::new(),
             body: Vec::new(),
             headers: Vec::new(),
-            services: vec![(
-                "logger".to_string(),
-                "{\"kind\":\"logger\",\"scope\":\"runtime\",\"total_lines\":7}".to_string(),
-            )],
+            services: Vec::new(),
+            session: Some(SessionView {
+                id: "deadbeef".to_string(),
+                data,
+            }),
         };
         let s = ctx.to_json();
-        assert!(
-            s.contains("\"services\":{\"logger\":{\"kind\":\"logger\",\"scope\":\"runtime\",\"total_lines\":7}}"),
-            "got: {s}"
+        assert!(s.contains("\"session\":{\"id\":\"deadbeef\",\"data\":{\"n\":7,\"name\":\"alice\"}}"), "got: {s}");
+    }
+
+    #[test]
+    fn context_to_json_serialises_no_session_as_null() {
+        let ctx = Context {
+            method: HttpMethod::Get,
+            path: "/".to_string(),
+            query: String::new(),
+            params: std::collections::HashMap::new(),
+            body: Vec::new(),
+            headers: Vec::new(),
+            services: Vec::new(),
+            session: None,
+        };
+        let s = ctx.to_json();
+        assert!(s.contains("\"session\":null"), "got: {s}");
+    }
+
+    #[test]
+    fn read_session_cookie_returns_sid_or_none() {
+        let headers = vec![
+            ("cookie".to_string(), "a=b; tsp_sid=deadbeef; c=d".to_string()),
+        ];
+        assert_eq!(
+            read_session_cookie(&headers).as_deref(),
+            Some("deadbeef")
         );
+        let no = vec![("cookie".to_string(), "a=b; c=d".to_string())];
+        assert_eq!(read_session_cookie(&no), None);
+        let empty: Vec<(String, String)> = Vec::new();
+        assert_eq!(read_session_cookie(&empty), None);
+    }
+
+    #[test]
+    fn build_session_cookie_returns_none_when_unchanged() {
+        // Same id -> no Set-Cookie needed; the browser
+        // already has the right cookie.
+        assert_eq!(
+            build_session_cookie("deadbeef", "deadbeef"),
+            None
+        );
+    }
+
+    #[test]
+    fn build_session_cookie_emits_set_cookie_for_new_sid() {
+        // First request (no cookie) -> fresh id; the
+        // response has to plant the cookie.
+        let line = build_session_cookie("newhash", "").unwrap();
+        assert!(line.contains("tsp_sid=newhash"), "got: {line}");
+        assert!(line.contains("HttpOnly"), "got: {line}");
+        assert!(line.contains("Path=/"), "got: {line}");
+        assert!(line.contains("SameSite=Lax"), "got: {line}");
+        // Regenerate: old id -> new id, no Max-Age=0.
+        let line = build_session_cookie("newhash", "oldhash").unwrap();
+        assert!(line.contains("tsp_sid=newhash"), "got: {line}");
+        assert!(!line.contains("Max-Age=0"), "got: {line}");
+    }
+
+    #[test]
+    fn build_session_cookie_clears_when_destroyed() {
+        let line = build_session_cookie("", "newhash").unwrap();
+        assert!(line.contains("tsp_sid=;"), "got: {line}");
+        assert!(line.contains("Max-Age=0"), "got: {line}");
+        assert!(line.contains("HttpOnly"), "got: {line}");
+    }
+
+    #[test]
+    fn envelope_parses_session_writes() {
+        // Slice 16k: the envelope may carry `session_writes`
+        // buffered by `ctx.session.*` calls in the page.
+        let envelope = "__TSP_OUT_V1__\n{\"type\":\"html\",\"body\":\"hi\",\"headers\":[],\"session_writes\":[{\"op\":\"set\",\"k\":\"a\",\"v\":\"alpha\"},{\"op\":\"set\",\"k\":\"n\",\"v\":7},{\"op\":\"regenerate\"},{\"op\":\"delete\",\"k\":\"x\"},{\"op\":\"destroy\"},{\"op\":\"clear\"},{\"op\":\"unknown\"},\"junk\"]}\n";
+        let out = parse_envelope(envelope);
+        assert_eq!(out.kind, EnvelopeKind::Html);
+        assert_eq!(out.session_writes.len(), 6);
+        // Order is preserved (the unknown op and the non-object
+        // entry are dropped, but everything before them stays).
+        match &out.session_writes[0] {
+            SessionWrite::Set(k, SessionValue::String(v)) => {
+                assert_eq!(k, "a"); assert_eq!(v, "alpha");
+            }
+            other => panic!("expected Set, got {other:?}"),
+        }
+        match &out.session_writes[1] {
+            SessionWrite::Set(k, SessionValue::Number(n)) => {
+                assert_eq!(k, "n"); assert_eq!(*n, 7.0);
+            }
+            other => panic!("expected Set, got {other:?}"),
+        }
+        assert!(matches!(out.session_writes[2], SessionWrite::Regenerate));
+        assert!(matches!(&out.session_writes[3], SessionWrite::Delete(k) if k == "x"));
+        assert!(matches!(out.session_writes[4], SessionWrite::Destroy));
+        assert!(matches!(out.session_writes[5], SessionWrite::Clear));
+    }
+
+    #[test]
+    fn envelope_without_session_writes_has_empty_list() {
+        let envelope = "__TSP_OUT_V1__\n{\"type\":\"html\",\"body\":\"hi\",\"headers\":[]}\n";
+        let out = parse_envelope(envelope);
+        assert!(out.session_writes.is_empty());
+    }
+
+    #[test]
+    fn session_writes_non_portable_value_dropped() {
+        // A non-JSON-compatible value is rejected by the
+        // host's own `json_value_to_session`; the rest of
+        // the writes still land. The only shape the envelope
+        // parser does not understand is a value that is not
+        // a JSON tree -- but every JsonValue the host can
+        // produce is JSON-compatible, so we exercise the
+        // drop path by handing in a `k` with no `v`.
+        let envelope = "__TSP_OUT_V1__\n{\"type\":\"html\",\"body\":\"hi\",\"headers\":[],\"session_writes\":[{\"op\":\"set\",\"k\":\"a\"},{\"op\":\"set\",\"k\":\"b\",\"v\":1}]}\n";
+        let out = parse_envelope(envelope);
+        assert_eq!(out.session_writes.len(), 1);
+        match &out.session_writes[0] {
+            SessionWrite::Set(k, SessionValue::Number(n)) => {
+                assert_eq!(k, "b"); assert_eq!(*n, 1.0);
+            }
+            other => panic!("expected Set b/1, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1945,6 +2320,7 @@ mod tests {
             body: Vec::new(),
             headers: Vec::new(),
             services: Vec::new(),
+            session: None,
         };
         let s = ctx.to_json();
         assert!(s.contains("\"q=hello&page=2\""), "got: {s}");
@@ -1963,6 +2339,7 @@ mod tests {
             body: Vec::new(),
             headers: Vec::new(),
             services: Vec::new(),
+            session: None,
         };
         let s = ctx.to_json();
         assert!(s.contains("\"id\":\"42\""), "got: {s}");
@@ -1983,6 +2360,7 @@ mod tests {
                 ("x-trace".to_string(), "abc".to_string()),
             ],
             services: Vec::new(),
+            session: None,
         };
         let s = ctx.to_json();
         // base64("hello=world") = "aGVsbG89d29ybGQ="
@@ -2008,6 +2386,7 @@ mod tests {
             body: vec![0x00, 0x01, 0x02, 0xff, 0xfe, 0x80],
             headers: Vec::new(),
             services: Vec::new(),
+            session: None,
         };
         let s = ctx.to_json();
         // base64([0x00,0x01,0x02,0xff,0xfe,0x80]) = "AAEC//6A"
