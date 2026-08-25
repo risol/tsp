@@ -1386,14 +1386,105 @@ is green.
   - File upload multipart (16g deferred -- Bun 1.4
     parser hang).
   - `ctx.session` (Phase 8).
-- **Next:** slice 16l = Redis-backed session store
-  (host-owned; the in-memory store from 16k stays as the
-  default; opt-in Redis via config). Then the persistent
-  JS adapter realm for call-capable services (spec
-  sect.17), and a follow-up on the wrap-side abort
-  listener (16i left the host side done but the
-  `ctx.signal` page-side abort deferred to a later
-  slice).
+- **Next:** slice 16m = persistent JS adapter realm
+  for call-capable services (spec sect.17). The
+  session side of Phase 8 is closed (16k in-memory
+  store + 16l Redis opt-in). After 16m: file /
+  rotation logger backends (16j follow-up), then
+  the wrap-side abort listener (16i follow-up so
+  `ctx.signal` actually fires inside the page), then
+  spec sect.17.2 dev-tool diagnosis (Phase 11
+  territory).
+
+### Slice 16l -- session backend abstraction + Redis opt-in (done, bun commit `c2aaa16a`)
+
+- **Why:** 16k's `SessionService` shipped with the
+  in-process `HashMap` inline, which works for a
+  single host. Plan sect.61 Phase 8 lists `Redis
+  session` as the third slice after the in-memory
+  store, and spec sect.16.2 ("session state MUST
+  survive page generation reloads") generalises to
+  "must survive across host processes" once workers
+  land. 16l factors the storage into a
+  `SessionBackend` trait and ships a hand-rolled
+  RESP2 `RedisBackend` so multi-host / production
+  deployments can share state through Redis without
+  sticky routing.
+- **What landed (in `bun/src/runtime/tsp/`):**
+  - `session_backend.rs` (new, 1000+ lines) --
+    `SessionBackend` trait (name / is_available /
+    lookup / create / apply_writes / len), two
+    implementations:
+    - `MemoryBackend`: 16k's `HashMap` + FIFO cap
+      (10 000), factored out so the dev path stays
+      zero-config.
+    - `RedisBackend`: hand-rolled RESP2 client over
+      `std::net::TcpStream` (PING / SET with EX
+      TTL / GET / DEL). `round_trip(cmd)` holds the
+      connection mutex for the write AND the
+      matching reply read so concurrent commands
+      cannot interleave their bytes (the earlier
+      `write_cmd_locked` + `read_reply_locked`
+      pair was vulnerable to a write/read desync;
+      a Windows test run hung before the fix).
+      `is_available()` re-PINGs on demand, so a
+      transient Redis outage self-heals on the next
+      command. **No new dep** (plan sect.25.3
+      discipline): RESP is a 5-tag wire format and
+      the client surface is four commands.
+  - `services.rs` -- `SessionService` becomes a thin
+    facade over `Arc<dyn SessionBackend>`. The 16k
+    API surface (`new(cap)` / `lookup` / `create` /
+    `apply_writes` / `len`) is preserved by giving
+    `new(cap)` a `MemoryBackend` underneath, so the
+    16k test suite keeps compiling without change.
+    `ServiceRegistry::with_backends(backend)` is the
+    new factory the bin uses. `SessionData::new` and
+    the free `non_empty` helper drop out (no longer
+    reachable after the delegation).
+  - `bin/tspserver_v2.rs` -- reads `TSP_REDIS_URL`:
+    empty / unset -> `MemoryBackend` (dev default);
+    set -> `RedisBackend`. A parse failure or
+    unreachable Redis logs a diagnostic and falls
+    back to memory, so boot never fails on a
+    missing store. Startup log now reports
+    `session backend = memory (cap=10000)` /
+    `redis (url=..., available=...)` so the dev can
+    see which path served a given run.
+  - `lib.rs` -- `pub mod session_backend;`.
+- **Verify:** `cargo check --lib` and `cargo check
+  --bin tspserver_v2` clean (0 warnings, 0 errors
+  under the workspace `warnings = deny` lint).
+  `cargo fmt -- --check` clean on the three files
+  16l touched. 17 unit tests in `session_backend.rs`
+  cover the URL parser, RESP encoder, session-blob
+  round-trip, MemoryBackend round-trip, RedisBackend
+  against an in-process fake RESP server
+  (round-trip / destroy / regenerate / lookup-miss
+  / unavailable-when-endpoint-dead), and `mint_sid`
+  uniqueness.
+  **The 17 unit tests could not be executed in this
+  Windows dev environment** because `cargo test`
+  pulls the Bun runtime crate via the workspace and
+  the test binary fails to link with the native
+  symbols the test harness needs. The user's
+  Linux / macOS environment (or any env that builds
+  the workspace's `bun_runtime` dep) can run
+  `cargo test --lib session_backend` to confirm
+  green.
+- **Deferred (16m+):** persistent JS adapter realm
+  for call-capable services (spec sect.17); file /
+  rotation logger backends (16j follow-up); wrap-side
+  abort listener (16i follow-up so `ctx.signal` fires
+  inside the page); spec sect.17.2 dev-tool diagnosis
+  of page-owned durable resources (Phase 11).
+- **Production check-list (for the user, not the
+  slice):** to actually share sessions across hosts,
+  set `TSP_REDIS_URL=redis://host:6379` in the env
+  before launching `tspserver_v2`. The 16k / 16l
+  cookie (`tsp_sid`) and the `ctx.session` API are
+  unchanged -- pages do not see a difference
+  between the in-memory and Redis backends.
 
 ### Slice 16k -- in-memory session store (`ctx.session`) (done, bun commit `008f0973`)
 
