@@ -5,6 +5,11 @@ All notable changes to TSP will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Persistent v2.4 Master + IPC embedded Bun Workers with cross-platform
+  Worker Manager integration tests for reuse, heartbeat, crash replacement,
+  timeout replacement, and pool backpressure.
+- v2.4 build, package, benchmark, and hot-reload smoke-test workflows.
+- Free GitHub Actions CI/CD coverage for `master` and `main`.
 - Fragment routing: a single `.tsp` file can expose named sub-renders via
   `<page>/__fragment/<name>`. Each fragment is a `Fragment()`-wrapped
   function and returns bare HTML (no `<!DOCTYPE>` wrapper) suitable for

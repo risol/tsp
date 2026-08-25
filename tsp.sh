@@ -82,6 +82,30 @@ build_server() {
   echo "Built $output_dir/tspserver with external www/ source tree"
 }
 
+build_v2_server() {
+  local mode="${1:-debug}"
+  local output_dir="$ROOT_DIR/dist/tsp-v2"
+  local cargo_args=(--manifest-path "$ROOT_DIR/bun/Cargo.toml" -p bun_runtime_tsp --bin tspserver_v2)
+  if [[ "$mode" == "release" ]]; then
+    cargo_args+=(--release)
+  fi
+
+  mkdir -p "$output_dir"
+  echo "Building TSP v2 host ($mode)..."
+  cargo build "${cargo_args[@]}"
+
+  local binary="$ROOT_DIR/bun/target/$mode/tspserver_v2"
+  if [[ -f "$binary.exe" ]]; then
+    binary="$binary.exe"
+  fi
+  if [[ ! -f "$binary" ]]; then
+    echo "Error: v2 host binary was not produced: $binary" >&2
+    exit 1
+  fi
+  cp "$binary" "$output_dir/$(basename "$binary")"
+  echo "Built $output_dir/$(basename "$binary")"
+}
+
 run_tests() {
   require_bun_and_report
   local command_name="$1"
@@ -129,6 +153,14 @@ case "${1:-help}" in
     shift
     build_server release "$@"
     ;;
+  build:tspserver:v2|compile:v2)
+    shift
+    build_v2_server debug "$@"
+    ;;
+  build:tspserver:v2:rel|compile:v2:rel)
+    shift
+    build_v2_server release "$@"
+    ;;
   test|test:unit|test:e2e)
     run_tests "$@"
     ;;
@@ -152,6 +184,8 @@ Usage: ./tsp.sh <command>
   start                       Run Bun server
   build:tspserver             Compile tspserver with Bun
   build:tspserver:dev         Compile debug tspserver with Bun
+  build:tspserver:v2          Compile the native TSP v2 host
+  build:tspserver:v2:rel      Compile the native TSP v2 host in release mode
   test / test:unit / test:e2e Run Bun tests
   check                       Run TypeScript validation
   fmt                         Format source files with Prettier

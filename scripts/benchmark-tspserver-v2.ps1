@@ -5,7 +5,8 @@ param(
   [string]$RoutesDirectory = "routes",
   [int]$Port = 9140,
   [int]$Requests = 50,
-  [string]$OutputJson = ""
+  [string]$OutputJson = "",
+  [switch]$EmbeddedWorker
 )
 
 $server = [System.IO.Path]::GetFullPath($ServerBinary)
@@ -24,6 +25,10 @@ $info.CreateNoWindow = $true
 $info.Environment["TSP_PORT"] = "$Port"
 $info.Environment["TSP_ROUTES_DIR"] = $routes
 $info.Environment["TSP_BUN_BIN"] = $bun
+if ($EmbeddedWorker) {
+  $info.Environment["TSP_EMBEDDED_WORKER"] = "1"
+  $info.Environment["TSP_WORKER_BIN"] = $bun
+}
 $process = [System.Diagnostics.Process]::new()
 $process.StartInfo = $info
 $null = $process.Start()

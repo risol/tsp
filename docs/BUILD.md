@@ -54,6 +54,26 @@ This command will:
 bun install
 ```
 
+### v2.4 Embedded Worker Build
+
+The v2.4 runtime has a native Rust host and a separate Bun executable that
+contains the embedded Worker entry point:
+
+```bash
+./tsp.sh build:tspserver:v2:rel
+cd bun
+bun install --frozen-lockfile
+bun run build:release
+cd ..
+./scripts/smoke-tspserver-v2.sh \
+  bun/target/release/tspserver_v2 \
+  bun/build/release/bun
+```
+
+Use `scripts/package-tspserver-v2.sh` or the PowerShell equivalent to create a
+self-contained package with the host, worker, routes, public assets, and a
+runtime manifest.
+
 ## Build Output
 
 After building, the `dist/` directory structure is as follows:

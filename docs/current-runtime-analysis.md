@@ -199,20 +199,18 @@ should follow only after the single-worker lifecycle and protocol are proven.
 6. Cross-platform process supervision is a separate requirement from the
    Linux-only cgroup/namespace work.
 
-## Recommended next task
+## Next hardening work
 
-Replace the original plan's broad extraction task with a v2-specific vertical
-slice:
+The v2.4 vertical slice is implemented. The remaining work is operational
+hardening rather than another architecture migration:
 
-1. Define the worker wire envelope and lifecycle states.
-2. Start one persistent Bun child during v2 host startup.
-3. Execute one request through the worker and return the existing response
-   envelope.
-4. Add timeout/cancellation and child-crash replacement tests.
-5. Keep the current subprocess bridge behind a feature flag as a fallback.
-
-This preserves the existing v2 architecture while changing only execution
-ownership, which is the stated goal of the persistent-worker migration.
+1. Run the real embedded Bun build and v2.4 smoke test on every tagged release.
+2. Keep the Worker Manager integration tests running on Linux, Windows, and
+   macOS so transport regressions are caught before release.
+3. Use the worker recycle and cgroup settings only after collecting the
+   application's latency and memory baseline.
+4. Keep the legacy subprocess bridge available as the explicit fallback until
+   the embedded worker has been validated in production-like deployments.
 
 ## Implemented first vertical slice
 
@@ -239,7 +237,8 @@ The current v2.4 slice now includes:
   response globals on every request;
 - request-level `ExecuteRequest` IPC carrying method, path, headers, body,
   generated script, and serialized Context;
-- a reproducible `bun-debug.exe` build containing the worker entry point.
+- a reproducible release build path for a Bun executable containing the worker
+  entry point; the tagged-release workflow builds and smoke-tests it.
 
 The transport keeps the same binary protocol on every platform: Unix Domain
 Sockets on Linux/macOS and loopback TCP on Windows. The Windows transport is
@@ -277,7 +276,7 @@ The legacy external slice below remains for comparison:
 - a worker that does not stop within the grace period is killed and replaced;
 - the original one-shot bridge remains the default fallback.
 
-The slice is intentionally not yet a worker pool, multi-application manager,
-or OS resource sandbox. Those features should be added only after this
-single-worker lifecycle is promoted from the feature flag and its protocol is
-made explicit.
+That legacy compatibility slice intentionally remains a single worker. The
+v2.4 path above is the promoted protocol-facing implementation and adds the
+WorkerPool, Application/WorkerGroup ownership, recycling policy, and optional
+Linux cgroup limits around the embedded Worker processes.

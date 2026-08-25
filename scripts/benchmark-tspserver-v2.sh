@@ -15,7 +15,11 @@ port=${TSP_BENCHMARK_PORT:-9140}
 [[ -x "$bun" ]] || { echo "Bun runtime is not executable: $bun" >&2; exit 1; }
 [[ -d "$routes" ]] || { echo "routes directory not found: $routes" >&2; exit 1; }
 
-TSP_PORT="$port" TSP_ROUTES_DIR="$routes" TSP_BUN_BIN="$bun" "$server" >/tmp/tsp-v2-bench.out 2>/tmp/tsp-v2-bench.err &
+if [[ "${TSP_BENCHMARK_EMBEDDED:-0}" == "1" ]]; then
+  TSP_PORT="$port" TSP_ROUTES_DIR="$routes" TSP_EMBEDDED_WORKER=1 TSP_WORKER_BIN="$bun" "$server" >/tmp/tsp-v2-bench.out 2>/tmp/tsp-v2-bench.err &
+else
+  TSP_PORT="$port" TSP_ROUTES_DIR="$routes" TSP_BUN_BIN="$bun" "$server" >/tmp/tsp-v2-bench.out 2>/tmp/tsp-v2-bench.err &
+fi
 pid=$!
 samples=$(mktemp)
 cleanup() { rm -f "$samples"; kill "$pid" 2>/dev/null || true; }

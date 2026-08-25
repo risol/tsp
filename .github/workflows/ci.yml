@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches:
+      - master
       - main
   workflow_dispatch:
 
@@ -59,6 +60,9 @@ jobs:
       - name: Run native runtime tests
         run: cargo test -p bun_runtime_tsp --lib --no-fail-fast
 
+      - name: Run Worker IPC integration tests
+        run: cargo test -p bun_runtime_tsp --test worker_integration --no-fail-fast
+
       - name: Check Linux v2 host
         run: cargo check -p bun_runtime_tsp --bin tspserver_v2 --target x86_64-unknown-linux-gnu
 
@@ -81,6 +85,9 @@ jobs:
       - name: Check Windows embedded worker
         run: cargo check -p bun_bin --target x86_64-pc-windows-msvc
 
+      - name: Run Windows Worker IPC integration tests
+        run: cargo test -p bun_runtime_tsp --test worker_integration --no-fail-fast
+
   native-macos:
     name: Native runtime (macOS)
     runs-on: macos-latest
@@ -99,3 +106,6 @@ jobs:
 
       - name: Check macOS v2 host
         run: cargo check -p bun_runtime_tsp --bin tspserver_v2
+
+      - name: Run macOS Worker IPC integration tests
+        run: cargo test -p bun_runtime_tsp --test worker_integration --no-fail-fast

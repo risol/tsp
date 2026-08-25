@@ -69,12 +69,24 @@ pub struct ExecuteResponse {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
     Hello,
-    Ready { worker_id: u64 },
-    Execute { id: u64, request: ExecuteRequest },
-    Response { id: u64, response: ExecuteResponse },
-    Cancel { id: u64 },
+    Ready {
+        worker_id: u64,
+    },
+    Execute {
+        id: u64,
+        request: ExecuteRequest,
+    },
+    Response {
+        id: u64,
+        response: ExecuteResponse,
+    },
+    Cancel {
+        id: u64,
+    },
     Shutdown,
-    Heartbeat { id: u64 },
+    Heartbeat {
+        id: u64,
+    },
     Error {
         id: u64,
         code: String,
@@ -227,7 +239,8 @@ impl Message {
                 ProtocolError::Io(error)
             }
         })?;
-        let payload_len = u32::from_be_bytes([header[8], header[9], header[10], header[11]]) as usize;
+        let payload_len =
+            u32::from_be_bytes([header[8], header[9], header[10], header[11]]) as usize;
         let frame_len = HEADER_LEN
             .checked_add(payload_len)
             .ok_or(ProtocolError::FrameTooLarge(usize::MAX))?;
@@ -237,20 +250,24 @@ impl Message {
         let mut frame = Vec::with_capacity(frame_len);
         frame.extend_from_slice(&header);
         frame.resize(frame_len, 0);
-        reader.read_exact(&mut frame[HEADER_LEN..]).map_err(|error| {
-            if error.kind() == io::ErrorKind::UnexpectedEof {
-                ProtocolError::Truncated
-            } else {
-                ProtocolError::Io(error)
-            }
-        })?;
+        reader
+            .read_exact(&mut frame[HEADER_LEN..])
+            .map_err(|error| {
+                if error.kind() == io::ErrorKind::UnexpectedEof {
+                    ProtocolError::Truncated
+                } else {
+                    ProtocolError::Io(error)
+                }
+            })?;
         Self::decode_frame(&frame)
     }
 }
 
 fn decode_message(kind: MessageType, id: u64, payload: &[u8]) -> Result<Message, ProtocolError> {
-    if matches!(kind, MessageType::Hello | MessageType::Ready | MessageType::Shutdown)
-        && id != 0
+    if matches!(
+        kind,
+        MessageType::Hello | MessageType::Ready | MessageType::Shutdown
+    ) && id != 0
     {
         return Err(ProtocolError::InvalidField("control message id"));
     }
@@ -460,7 +477,10 @@ mod tests {
             },
         };
         let frame = message.encode().expect("message encodes");
-        assert_eq!(Message::decode_frame(&frame).expect("message decodes"), message);
+        assert_eq!(
+            Message::decode_frame(&frame).expect("message decodes"),
+            message
+        );
     }
 
     #[test]
@@ -469,7 +489,10 @@ mod tests {
             id: 7,
             response: ExecuteResponse {
                 status: 201,
-                headers: vec![("set-cookie".into(), "a=b".into()), ("set-cookie".into(), "c=d".into())],
+                headers: vec![
+                    ("set-cookie".into(), "a=b".into()),
+                    ("set-cookie".into(), "c=d".into()),
+                ],
                 body: b"created".to_vec(),
             },
         };
@@ -490,7 +513,9 @@ mod tests {
 
     #[test]
     fn truncated_payload_is_rejected() {
-        let mut frame = Message::Ready { worker_id: 9 }.encode().expect("message encodes");
+        let mut frame = Message::Ready { worker_id: 9 }
+            .encode()
+            .expect("message encodes");
         frame.pop();
         assert!(matches!(
             Message::decode_frame(&frame),

@@ -207,10 +207,17 @@ sh ./tsp.sh build:tspserver:dev
 
 # Build release binary (alias)
 sh ./tsp.sh build:tspserver:rel
+
+# Build the native v2 host
+sh ./tsp.sh build:tspserver:v2:rel
 ```
 
 Build output is in `dist/bun/`. The compiled executable loads `www/` from the
 real filesystem; do not use `bun --hot` for TSP page reloads.
+
+The v2.4 embedded-worker build produces a native `tspserver_v2` host and a
+separate Bun worker. See [the v2.4 Worker guide](./docs/v2.4-worker.md) for
+building, packaging, smoke testing, and runtime settings.
 
 ## Docker Test Services
 

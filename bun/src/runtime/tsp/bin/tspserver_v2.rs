@@ -296,11 +296,17 @@ fn resolve_worker_bin() -> Result<PathBuf, String> {
     let executable_dir = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(PathBuf::from));
-    let filename = if cfg!(windows) { "bun-debug.exe" } else { "bun-debug" };
     if let Some(dir) = executable_dir {
-        let candidate = dir.join(filename);
-        if candidate.is_file() {
-            return Ok(candidate);
+        let filenames = if cfg!(windows) {
+            ["bun.exe", "bun-debug.exe"]
+        } else {
+            ["bun", "bun-debug"]
+        };
+        for filename in filenames {
+            let candidate = dir.join(filename);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
         }
     }
     Err("embedded worker executable not found; set TSP_WORKER_BIN".into())

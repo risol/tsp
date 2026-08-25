@@ -25,6 +25,8 @@ cat > "$output_dir/tsp-v2-runtime.json" <<'JSON'
   "runtime": "tsp-v2",
   "server": "tspserver_v2",
   "bun": "bun",
+  "worker": "bun",
+  "embedded_worker": true,
   "routes": "routes",
   "public": "public",
   "resolver": "bundled-runtime"

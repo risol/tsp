@@ -18,6 +18,10 @@ path = "lib.rs"
 name = "tspserver_v2"
 path = "bin/tspserver_v2.rs"
 
+[[bin]]
+name = "tsp_worker_test_stub"
+path = "worker_test_stub.rs"
+
 [lints]
 workspace = true
 

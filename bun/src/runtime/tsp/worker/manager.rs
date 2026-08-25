@@ -147,7 +147,10 @@ impl WorkerManager {
         let deadline = Instant::now() + STARTUP_TIMEOUT;
         let stream = loop {
             match listener.accept() {
-                Ok((stream, _)) => break stream,
+                Ok((stream, _)) => {
+                    stream.set_nonblocking(false)?;
+                    break stream;
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     if Instant::now() >= deadline {
                         let _ = child.kill();
@@ -232,7 +235,10 @@ impl WorkerManager {
             let deadline = Instant::now() + STARTUP_TIMEOUT;
             let stream = loop {
                 match listener.accept() {
-                    Ok((stream, _)) => break stream,
+                    Ok((stream, _)) => {
+                        stream.set_nonblocking(false)?;
+                        break stream;
+                    }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         if Instant::now() >= deadline {
                             let _ = child.kill();
