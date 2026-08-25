@@ -201,7 +201,65 @@ pub enum MatchResult {
     /// writer drops the body.
     FoundHeadOverGet { route: Route },
     MethodNotAllowed { route: Route, requested: HttpMethod },
+    /// The request path contained an invalid percent escape or invalid
+    /// UTF-8 after decoding. The host returns a typed 400 response.
+    MalformedPath { error: PathDecodeError },
     NotFound,
+}
+
+/// A request-path percent-decoding failure. The offset is relative to the
+/// offending path segment, which is sufficient for a useful 400 diagnostic
+/// without echoing the whole request target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathDecodeError {
+    pub offset: usize,
+    pub reason: &'static str,
+}
+
+impl std::fmt::Display for PathDecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid percent-encoded path at byte {}: {}", self.offset, self.reason)
+    }
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Decode one URL path segment without turning an encoded slash into a
+/// routing separator. Splitting happens before this function is called, so
+/// `/files/a%2Fb` binds `path` to `a/b` rather than becoming two segments.
+fn decode_path_segment(segment: &str) -> Result<String, PathDecodeError> {
+    let bytes = segment.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'%' {
+            decoded.push(bytes[i]);
+            i += 1;
+            continue;
+        }
+        if i + 2 >= bytes.len() {
+            return Err(PathDecodeError { offset: i, reason: "truncated escape" });
+        }
+        let Some(hi) = hex_value(bytes[i + 1]) else {
+            return Err(PathDecodeError { offset: i, reason: "non-hex escape" });
+        };
+        let Some(lo) = hex_value(bytes[i + 2]) else {
+            return Err(PathDecodeError { offset: i + 1, reason: "non-hex escape" });
+        };
+        decoded.push((hi << 4) | lo);
+        i += 3;
+    }
+    String::from_utf8(decoded).map_err(|_| PathDecodeError {
+        offset: 0,
+        reason: "escape sequence is not valid UTF-8",
+    })
 }
 
 #[derive(Debug)]
@@ -371,6 +429,19 @@ impl RouteTable {
         Ok(())
     }
 
+    /// Replace the route with the given URL path. The replacement is
+    /// performed under the same lock as lookup, so callers never expose a
+    /// partially updated route descriptor.
+    pub fn replace_by_path(&self, route: Route) -> bool {
+        let mut guard = self.routes.lock().expect("route table lock poisoned");
+        let Some(existing) = guard.iter_mut().find(|r| r.path == route.path) else {
+            return false;
+        };
+        *existing = route;
+        guard.sort_by(|a, b| a.path.cmp(&b.path));
+        true
+    }
+
     /// Remove a route by URL path. No-op if the path is not
     /// in the table. The watcher's slice-15a path uses this
     /// when a `.tsp` file disappears. In-flight requests that
@@ -412,11 +483,13 @@ impl RouteTable {
     }
 
     /// Look up `(path, method)`. The path is the request URL
-    /// path (e.g. `/users/42`); the matcher iterates the table
-    /// and picks the highest-priority route that matches the
-    /// segments (spec sect.11.6 precedence: static > dynamic >
-    /// catch-all). The returned `Route` carries a populated
-    /// `params` map for the matched request.
+    /// path (e.g. `/users/42`); each segment is percent-decoded
+    /// before matching, while encoded `/` remains inside that
+    /// segment. Invalid escapes return `MalformedPath`. The
+    /// matcher iterates the table and picks the highest-priority
+    /// route that matches (spec sect.11.6 precedence: static >
+    /// dynamic > catch-all). The returned `Route` carries a
+    /// populated `params` map for the matched request.
     ///
     /// Trailing-slash equivalence (spec sect.11.9): `/foo` and
     /// `/foo/` both match the same route, except for the root
@@ -427,10 +500,19 @@ impl RouteTable {
         } else {
             path.trim_end_matches('/').to_string()
         };
-        let req_segs: Vec<&str> = normalized
+        let raw_segs: Vec<&str> = normalized
             .split('/')
             .filter(|s| !s.is_empty())
             .collect();
+        let decoded_segs: Vec<String> = match raw_segs
+            .iter()
+            .map(|segment| decode_path_segment(segment))
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(segments) => segments,
+            Err(error) => return MatchResult::MalformedPath { error },
+        };
+        let req_segs: Vec<&str> = decoded_segs.iter().map(String::as_str).collect();
         let guard = self.routes.lock().expect("route table lock poisoned");
         // Find ALL candidates, then pick the best by priority
         // (lowest total score; ties broken by source order
@@ -912,6 +994,49 @@ mod tests {
             }
             other => panic!("expected Found, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn lookup_decodes_dynamic_segment_utf8_and_spaces() {
+        let table = table_with(vec![rt(
+            "/users/:id",
+            vec![Segment::Static("users".to_string()), Segment::Param("id".to_string())],
+            HttpMethod::REAL.to_vec(),
+        )]);
+        match table.lookup("/users/hello%20%E4%B8%96%E7%95%8C", HttpMethod::Get) {
+            MatchResult::Found { route, .. } => {
+                assert_eq!(route.params.get("id").map(String::as_str), Some("hello 世界"));
+            }
+            other => panic!("expected Found, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lookup_keeps_encoded_slash_inside_one_dynamic_segment() {
+        let table = table_with(vec![rt(
+            "/users/:id",
+            vec![Segment::Static("users".to_string()), Segment::Param("id".to_string())],
+            HttpMethod::REAL.to_vec(),
+        )]);
+        match table.lookup("/users/a%2Fb", HttpMethod::Get) {
+            MatchResult::Found { route, .. } => {
+                assert_eq!(route.params.get("id").map(String::as_str), Some("a/b"));
+            }
+            other => panic!("expected Found, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lookup_rejects_malformed_percent_escape() {
+        let table = table_with(vec![rt(
+            "/users/:id",
+            vec![Segment::Static("users".to_string()), Segment::Param("id".to_string())],
+            HttpMethod::REAL.to_vec(),
+        )]);
+        assert!(matches!(
+            table.lookup("/users/%E4%ZZ", HttpMethod::Get),
+            MatchResult::MalformedPath { .. }
+        ));
     }
 
     #[test]

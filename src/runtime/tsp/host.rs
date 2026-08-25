@@ -32,7 +32,8 @@ use std::thread;
 use crate::generation::{
     self, BeginBuildError, BuildOutcome, InFlightState, PageRef, PageRegistry, PageState,
 };
-use crate::jsc_bridge::BunRuntime;
+use crate::jsc_bridge::{BunRuntime, CancellationToken};
+use crate::metrics;
 use crate::pipeline;
 use crate::services::{LogLine, ServiceRegistry, SessionService, SessionValue, SessionView, SessionWrite, BUILTIN_SESSION};
 use crate::router::{HttpMethod, MatchResult, RouteTable};
@@ -96,6 +97,9 @@ pub enum TspError {
     BodyTooLarge,
     /// No route matched the request path.
     NoRouteMatches,
+    /// The request path contained an invalid percent escape or UTF-8
+    /// sequence (spec sect.11.8 -> 400).
+    MalformedUrl,
     /// The matched route did not export the requested
     /// HTTP method (spec sect.6.4 -> 405 + Allow).
     MethodNotAllowed,
@@ -138,6 +142,7 @@ impl TspError {
             Self::BodyTooLarge => "TSP2002",
             Self::NoRouteMatches => "TSP2003",
             Self::MethodNotAllowed => "TSP2004",
+            Self::MalformedUrl => "TSP2005",
             Self::PagePrepareError => "TSP3001",
             Self::CleanSlotMissingPayload => "TSP3006",
             Self::PageNeverBuilt => "TSP3007",
@@ -157,6 +162,7 @@ impl TspError {
             Self::BodyTooLarge => "request body exceeds limit",
             Self::NoRouteMatches => "no route matches",
             Self::MethodNotAllowed => "method not exported by route",
+            Self::MalformedUrl => "malformed URL path",
             Self::PagePrepareError => "page prepare error",
             Self::CleanSlotMissingPayload => "clean slot has no payload",
             Self::PageNeverBuilt => "page never built successfully",
@@ -170,8 +176,9 @@ impl TspError {
 /// diagnostics). The `code` and `description` come
 /// from the typed `TspError` enum; for build-time
 /// codes that the host enum does not have a variant
-/// for (e.g. `TSP3002` JSX transform, `TSP3012`
-/// subprocess failure) use `format_error_body_raw`
+/// for (e.g. `TSP3002` JSX transform, `TSP3009`
+/// timeout, or `TSP3012` subprocess failure) use
+/// `format_error_body_raw`
 /// below. Detail lines follow so the pre-16h grep
 /// patterns (`TSP v2 PoC 1 slice 12: ...`) keep
 /// working -- existing dev tooling scans for those
@@ -330,6 +337,39 @@ impl Context {
         out.push_str("}");
         out
     }
+
+    /// Add the private fragment selector used only by the native internal
+    /// fragment endpoint. It is deliberately separate from the public
+    /// Context struct so application code cannot accidentally persist the
+    /// selector across requests.
+    pub fn to_json_with_fragment(&self, name: Option<&str>) -> String {
+        let mut out = self.to_json();
+        if out.ends_with('}') {
+            out.pop();
+            out.push_str(",\"__tsp_fragment_token\":");
+            json_string(&mut out, fragment_token());
+            if let Some(name) = name {
+                out.push_str(",\"__tsp_fragment\":");
+                json_string(&mut out, name);
+            }
+            out.push('}');
+        }
+        out
+    }
+}
+
+/// Per-process capability carried by generated fragment URLs. It prevents a
+/// caller from dispatching an arbitrary route/name pair to the internal
+/// fragment endpoint while keeping the URL opaque to application code.
+fn fragment_token() -> &'static str {
+    static TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TOKEN.get_or_init(|| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        format!("{:x}-{:x}", nanos, std::process::id())
+    })
 }
 
 /// Standard Base64 encoder (RFC 4648 section 4, with
@@ -1174,6 +1214,51 @@ impl std::error::Error for HostError {}
 
 static STOP: AtomicBool = AtomicBool::new(false);
 
+/// Poll a cloned socket while a page subprocess is running. A TCP FIN is
+/// observable as `peek() == 0`; transient `WouldBlock` means the peer is
+/// still connected. The cloned socket is restored to blocking mode before
+/// the monitor exits so response writes retain the listener's normal mode.
+fn start_disconnect_monitor(
+    stream: &TcpStream,
+    cancellation: &CancellationToken,
+) -> Option<(Arc<AtomicBool>, thread::JoinHandle<()>)> {
+    let probe = stream.try_clone().ok()?;
+    probe.set_nonblocking(true).ok()?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_in_thread = Arc::clone(&stop);
+    let cancellation = cancellation.clone();
+    let handle = thread::spawn(move || {
+        let probe = probe;
+        let mut byte = [0_u8; 1];
+        while !stop_in_thread.load(Ordering::Acquire) && !cancellation.is_cancelled() {
+            match probe.peek(&mut byte) {
+                Ok(0) => {
+                    cancellation.cancel();
+                    break;
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(_) => {
+                    cancellation.cancel();
+                    break;
+                }
+            }
+            thread::sleep(std::time::Duration::from_millis(25));
+        }
+        let _ = probe.set_nonblocking(false);
+    });
+    Some((stop, handle))
+}
+
+fn stop_disconnect_monitor(
+    monitor: Option<(Arc<AtomicBool>, thread::JoinHandle<()>)>,
+) {
+    if let Some((stop, handle)) = monitor {
+        stop.store(true, Ordering::Release);
+        let _ = handle.join();
+    }
+}
+
 /// Bind, accept, dispatch. `routes` and `registry` are
 /// `&'static` because the slice-6 binary Box::leaks them; the
 /// in-process bridge (slice 13) will swap the leak for
@@ -1185,6 +1270,20 @@ pub fn serve(
     registry: &'static PageRegistry,
     bun: &'static BunRuntime,
     services: &'static ServiceRegistry,
+) -> Result<(), HostError> {
+    serve_with_public_root(host, port, routes, registry, bun, services, resolve_public_root())
+}
+
+/// Bind and serve with an explicit public asset root. `None` disables native
+/// static files while leaving page routing unchanged.
+pub fn serve_with_public_root(
+    host: &str,
+    port: u16,
+    routes: Arc<RouteTable>,
+    registry: &'static PageRegistry,
+    bun: &'static BunRuntime,
+    services: &'static ServiceRegistry,
+    public_root: Option<std::path::PathBuf>,
 ) -> Result<(), HostError> {
     let addr = format!("{host}:{port}");
     let listener = TcpListener::bind(&addr).map_err(HostError::Bind)?;
@@ -1207,13 +1306,28 @@ pub fn serve(
         };
         eprintln!("TSPv2PoC1: accepted {peer}");
         let routes_for_thread = Arc::clone(&routes);
+        let public_root_for_thread = public_root.clone();
         thread::spawn(move || {
-            if let Err(e) = handle_connection(stream, &routes_for_thread, registry, bun, services) {
+            if let Err(e) = handle_connection(
+                stream,
+                &routes_for_thread,
+                registry,
+                bun,
+                services,
+                public_root_for_thread.as_deref(),
+            ) {
                 eprintln!("TSPv2PoC1: {e}");
             }
         });
     }
     Ok(())
+}
+
+fn resolve_public_root() -> Option<std::path::PathBuf> {
+    let configured = std::env::var_os("TSP_PUBLIC_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("public"));
+    configured.is_dir().then_some(configured)
 }
 
 fn handle_connection(
@@ -1222,6 +1336,7 @@ fn handle_connection(
     registry: &PageRegistry,
     bun: &BunRuntime,
     services: &ServiceRegistry,
+    public_root: Option<&std::path::Path>,
 ) -> Result<(), HostError> {
     // Slice 16d: read the full request (header block up to
     // CRLFCRLF + exactly Content-Length body bytes). Body
@@ -1256,7 +1371,46 @@ fn handle_connection(
             return Ok(());
         }
     };
+    let request_started = std::time::Instant::now();
     let parsed = parse_request(&head);
+    metrics::global().record_request();
+    if let ParsedRequest::Known { method, path, .. } = &parsed {
+        if *method == HttpMethod::Get && path == "/__tsp/metrics" {
+            let body = metrics::global().prometheus();
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(head.as_bytes()).map_err(HostError::Connection)?;
+            stream.write_all(body.as_bytes()).map_err(HostError::Connection)?;
+            metrics::global().record_response("HTTP/1.1 200 OK");
+            metrics::global().record_duration(request_started.elapsed().as_millis() as u64);
+            let _ = stream.shutdown(Shutdown::Both);
+            return Ok(());
+        }
+        if matches!(*method, HttpMethod::Get | HttpMethod::Head) {
+            if let Some(root) = public_root {
+                if let Some(asset) = crate::static_files::load(root, path)
+                    .map_err(HostError::Connection)?
+                {
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: public, max-age=3600\r\nConnection: close\r\n\r\n",
+                        asset.content_type,
+                        asset.body.len()
+                    );
+                    stream.write_all(head.as_bytes()).map_err(HostError::Connection)?;
+                    if *method == HttpMethod::Get {
+                        stream.write_all(&asset.body).map_err(HostError::Connection)?;
+                    }
+                    metrics::global().record_response("HTTP/1.1 200 OK");
+                    metrics::global().record_duration(request_started.elapsed().as_millis() as u64);
+                    eprintln!("TSPv2PoC1: static {}", asset.path.display());
+                    let _ = stream.shutdown(Shutdown::Both);
+                    return Ok(());
+                }
+            }
+        }
+    }
 
     let (status_line, content_type, allow_header, body, extra_headers) = match parsed {
         ParsedRequest::Unknown => (
@@ -1290,7 +1444,9 @@ fn handle_connection(
             // once; the resulting MatchResult is used both to
             // seed `ctx.params` and to drive the dispatch
             // below.
-            let matched = routes.lookup(&path, method);
+            let (dispatch_path, fragment_name, dispatch_query) =
+                fragment_target(&path, &query).unwrap_or_else(|| (path.clone(), None, query.clone()));
+            let matched = routes.lookup(&dispatch_path, method);
             let params: std::collections::HashMap<String, String> = match &matched {
                 MatchResult::Found { route, .. } | MatchResult::FoundHeadOverGet { route } => {
                     route.params.clone()
@@ -1318,8 +1474,8 @@ fn handle_connection(
                 .and_then(|r| r.original_sid.clone());
             let ctx = Context {
                 method,
-                path: path.clone(),
-                query,
+                path: dispatch_path.clone(),
+                query: dispatch_query,
                 params,
                 body,
                 headers,
@@ -1334,7 +1490,10 @@ fn handle_connection(
                 // arm stays for future embeddings / tests).
                 session: session_resolve.map(|r| r.view),
             };
-            match matched {
+            let cancellation = CancellationToken::new();
+            let disconnect_monitor = start_disconnect_monitor(&stream, &cancellation);
+            let ctx_json = ctx.to_json_with_fragment(fragment_name.as_deref());
+            let rendered = match matched {
             MatchResult::Found { route, method: req_method } => {
                 let page_ref = PageRef {
                     route: route.path.clone(),
@@ -1365,9 +1524,27 @@ fn handle_connection(
                     // stale service-state snapshot.
                     || services.any_request_varying();
                 let (_status_line, _ct, allow_header, body) = if per_request {
-                    render_per_request(&route, req_method, bun, &ctx, timeout_ms)
+                    render_per_request(
+                        &route,
+                        req_method,
+                        bun,
+                        &ctx,
+                        &ctx_json,
+                        timeout_ms,
+                        &cancellation,
+                    )
                 } else {
-                    render_for_route(&route, req_method, &page_ref, registry, bun, &ctx, timeout_ms)
+                    render_for_route(
+                        &route,
+                        req_method,
+                        &page_ref,
+                        registry,
+                        bun,
+                        &ctx,
+                        &ctx_json,
+                        timeout_ms,
+                        &cancellation,
+                    )
                 };
                 // Slice 16b: bun emits a `__TSP_OUT_V1__` envelope
                 // with the page's return value classified as
@@ -1461,7 +1638,15 @@ fn handle_connection(
                     method: HttpMethod::Get,
                 };
                 let (_status, _ct, _allow, _body) = render_for_route(
-                    &route, HttpMethod::Get, &page_ref, registry, bun, &ctx, timeout_ms,
+                    &route,
+                    HttpMethod::Get,
+                    &page_ref,
+                    registry,
+                    bun,
+                    &ctx,
+                    &ctx_json,
+                    timeout_ms,
+                    &cancellation,
                 );
                 (
                     "HTTP/1.1 200 OK",
@@ -1502,6 +1687,18 @@ fn handle_connection(
                 )
                 }
             }
+            MatchResult::MalformedPath { error } => (
+                "HTTP/1.1 400 Bad Request",
+                "text/plain; charset=utf-8".to_string(),
+                None,
+                format_error_body(
+                    TspError::MalformedUrl,
+                    &format!(
+                        "TSP v2 PoC 1 slice 16e: malformed URL path: {error}\n"
+                    ),
+                ),
+                Vec::new(),
+            ),
             MatchResult::NotFound => (
                 "HTTP/1.1 404 Not Found",
                 "text/plain; charset=utf-8".to_string(),
@@ -1515,7 +1712,13 @@ fn handle_connection(
                 ),
                 Vec::new(),
             ),
+            };
+            stop_disconnect_monitor(disconnect_monitor);
+            if cancellation.is_cancelled() {
+                let _ = stream.shutdown(Shutdown::Both);
+                return Ok(());
             }
+            rendered
         }
     };
 
@@ -1550,6 +1753,9 @@ fn handle_connection(
     }
     head.push_str("\r\n");
 
+    metrics::global().record_response(status_line);
+    metrics::global().record_duration(request_started.elapsed().as_millis() as u64);
+
     stream
         .write_all(head.as_bytes())
         .map_err(HostError::Connection)?;
@@ -1572,14 +1778,74 @@ fn handle_connection(
 /// every later request on the same route+method. So these
 /// requests go straight to the pipeline: prepare + bun
 /// subprocess, no `begin_build` / `commit`, no LKG fallback.
-/// 405 (method not exported) and 500 (build failure) still
-/// shape correctly.
+/// 405 (method not exported), 500 (build failure), and 504
+/// (request timeout) retain distinct response semantics.
+fn build_failure_response(
+    error: &pipeline::BuildError,
+    detail: String,
+) -> (&'static str, String) {
+    let (code, description) = match error {
+        pipeline::BuildError::Prepare(_) => {
+            (TspError::PagePrepareError.code(), TspError::PagePrepareError.describe())
+        }
+        pipeline::BuildError::Jsc(jsc) => (jsc.code(), jsc.describe()),
+    };
+    let status = match error {
+        pipeline::BuildError::Jsc(crate::jsc_bridge::JscError::TimedOut { .. }) => {
+            metrics::global().record_timeout();
+            status_line_for(504)
+        }
+        pipeline::BuildError::Jsc(crate::jsc_bridge::JscError::Cancelled) => {
+            metrics::global().record_cancellation();
+            status_line_for(499)
+        }
+        _ => status_line_for(500),
+    };
+    (status, format_error_body_raw(code, description, &detail))
+}
+
+/// Add a small original-source code frame when the native JSX pre-pass carries
+/// an explicit source line. Bun diagnostics retain the original `tsp://`
+/// source URL in stderr, but their wrapper line numbers are not source-map
+/// offsets and therefore are not used to build a misleading frame.
+fn diagnostic_detail(path: &std::path::Path, error: &dyn std::fmt::Display, mut detail: String) -> String {
+    let text = error.to_string();
+    let line = find_diagnostic_line(&text);
+    let Some(line) = line else { return detail };
+    let Ok(source) = std::fs::read_to_string(path) else { return detail };
+    let lines: Vec<&str> = source.lines().collect();
+    if line == 0 || line > lines.len() { return detail; }
+    let start = line.saturating_sub(2);
+    let end = (line + 1).min(lines.len());
+    detail.push_str(&format!("\n--- {}:{} ---\n", path.display(), line));
+    for index in start..end {
+        let marker = if index + 1 == line { ">" } else { " " };
+        detail.push_str(&format!("{marker} {:>4} | {}\n", index + 1, lines[index]));
+    }
+    detail
+}
+
+fn find_diagnostic_line(text: &str) -> Option<usize> {
+    if let Some(index) = text.find("line ") {
+        let digits: String = text[index + 5..]
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect();
+        if let Ok(line) = digits.parse::<usize>() {
+            if line > 0 { return Some(line); }
+        }
+    }
+    None
+}
+
 fn render_per_request(
     route: &crate::router::Route,
     requested: HttpMethod,
     bun: &BunRuntime,
-    ctx: &Context,
+    _ctx: &Context,
+    ctx_json: &str,
     timeout_ms: u64,
+    cancellation: &CancellationToken,
 ) -> (&'static str, &'static str, Option<String>, String) {
     // Mirror render_for_route's 405 conversion: the page must
     // export the requested method. We use the static detector
@@ -1587,7 +1853,14 @@ fn render_per_request(
     // deliberately outside the registry path.
     match crate::page::prepare(route) {
         Ok(page) if page.methods.contains(&requested) => {
-            match pipeline::build(route, requested, bun, &ctx.to_json(), timeout_ms) {
+            match pipeline::build(
+                route,
+                requested,
+                bun,
+                ctx_json,
+                timeout_ms,
+                cancellation,
+            ) {
                 Ok(body) => ("HTTP/1.1 200 OK", "text/html; charset=utf-8", None, body),
                 Err(e) => {
                     let msg = format!("{e}");
@@ -1595,32 +1868,18 @@ fn render_per_request(
                         "TSPv2PoC1: build error on {}: {e}",
                         route.source.display()
                     );
-                    // Build-time errors carry their own
-                    // `BuildError::code()` (TSP3001 for
-                    // prepare, TSP3002 / TSP3010-3014 for
-                    // the bridge). The bridge code path
-                    // supplies a more specific description
-                    // (JscError::describe); the prepare
-                    // path falls back to the host enum.
-                    let (code, desc) = match &e {
-                        pipeline::BuildError::Prepare(_) => {
-                            (TspError::PagePrepareError.code(),
-                             TspError::PagePrepareError.describe())
-                        }
-                        pipeline::BuildError::Jsc(j) => (j.code(), j.describe()),
-                    };
+                    let (status, body) = build_failure_response(
+                        &e,
+                        diagnostic_detail(&route.source, &e, format!(
+                            "TSP v2 PoC 1 slice 16d: build error on {}\n  {msg}\n",
+                            route.source.display()
+                        )),
+                    );
                     (
-                        "HTTP/1.1 500 Internal Server Error",
+                        status,
                         "text/plain; charset=utf-8",
                         None,
-                        format_error_body_raw(
-                            code,
-                            desc,
-                            &format!(
-                                "TSP v2 PoC 1 slice 16d: build error on {}\n  {msg}\n",
-                                route.source.display()
-                            ),
-                        ),
+                        body,
                     )
                 }
             }
@@ -1676,8 +1935,10 @@ fn render_for_route(
     page_ref: &PageRef,
     registry: &PageRegistry,
     bun: &BunRuntime,
-    ctx: &Context,
+    _ctx: &Context,
+    ctx_json: &str,
     timeout_ms: u64,
+    cancellation: &CancellationToken,
 ) -> (&'static str, &'static str, Option<String>, String) {
     // The route exists (router matched) but the boot-time
     // method detector may not have registered this method
@@ -1718,7 +1979,14 @@ fn render_for_route(
                 Ok(guard) => {
                     // We own the build. Run pipeline,
                     // commit, pin the payload, serve.
-                    let build_result = pipeline::build(route, requested, bun, &ctx.to_json(), timeout_ms);
+                    let build_result = pipeline::build(
+                        route,
+                        requested,
+                        bun,
+                        ctx_json,
+                        timeout_ms,
+                        cancellation,
+                    );
                     match build_result {
                         Ok(body) => {
                             let deps: Vec<crate::module_graph::ModuleId> = Vec::new();
@@ -1737,22 +2005,19 @@ fn render_for_route(
                         }
                         Err(e) => {
                             let msg = format!("{e}");
-                            guard.fail(msg);
+                            guard.fail(msg.clone());
                             eprintln!(
                                 "TSPv2PoC1: build error on {}: {e}",
                                 route.source.display()
                             );
-                            (
-                                "HTTP/1.1 500 Internal Server Error",
-                                "text/plain; charset=utf-8",
-                                None,
-                                format!(
-                                    "TSP v2 PoC 1 slice 12: build error on {}
-  {e}
-",
+                            let (status, body) = build_failure_response(
+                                &e,
+                                diagnostic_detail(&route.source, &e, format!(
+                                    "TSP v2 PoC 1 slice 12: build error on {}\n  {msg}\n",
                                     route.source.display()
-                                ),
-                            )
+                                )),
+                            );
+                            (status, "text/plain; charset=utf-8", None, body)
                         }
                     }
                 }
@@ -1932,6 +2197,67 @@ enum ParsedRequest {
         headers: Vec<(String, String)>,
     },
     Unknown,
+}
+
+/// Decode a query component for the private fragment endpoint. This follows
+/// the URL form convention (`+` means a space) and rejects malformed UTF-8
+/// rather than handing a different route identity to the matcher.
+fn decode_query_component(raw: &str) -> Option<String> {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < bytes.len() => {
+                let hi = fragment_hex_value(bytes[i + 1])?;
+                let lo = fragment_hex_value(bytes[i + 2])?;
+                out.push((hi << 4) | lo);
+                i += 2;
+            }
+            b'%' => return None,
+            byte => out.push(byte),
+        }
+        i += 1;
+    }
+    String::from_utf8(out).ok()
+}
+
+fn fragment_hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Resolve `/__tsp/fragment?route=...&name=...` into the originating route
+/// and the private handler selector. The remaining query fields are passed
+/// to the fragment as its normal `ctx.query`.
+fn fragment_target(path: &str, query: &str) -> Option<(String, Option<String>, String)> {
+    if path != "/__tsp/fragment" {
+        return Some((path.to_string(), None, query.to_string()));
+    }
+    let mut route = None;
+    let mut name = None;
+    let mut token = None;
+    let mut rest = Vec::new();
+    for pair in query.split('&').filter(|p| !p.is_empty()) {
+        let (raw_key, raw_value) = pair.split_once('=').unwrap_or((pair, ""));
+        let key = decode_query_component(raw_key)?;
+        let value = decode_query_component(raw_value)?;
+        match key.as_str() {
+            "route" => route = Some(value),
+            "name" => name = Some(value),
+            "token" => token = Some(value),
+            _ => rest.push(format!("{raw_key}={raw_value}")),
+        }
+    }
+    if token.as_deref() != Some(fragment_token()) {
+        return None;
+    }
+    Some((route?, Some(name?), rest.join("&")))
 }
 
 /// Parse the request line + header block. `head` is the
@@ -2121,6 +2447,51 @@ mod tests {
         // Empty body base64-encodes to the empty string.
         assert!(s.contains("\"body_b64\":\"\""), "got: {s}");
         assert!(s.contains("\"headers\":{}"), "got: {s}");
+    }
+
+    #[test]
+    fn context_to_json_can_select_internal_fragment() {
+        let ctx = Context {
+            method: HttpMethod::Get,
+            path: "/users".to_string(),
+            query: String::new(),
+            params: std::collections::HashMap::new(),
+            body: Vec::new(),
+            headers: Vec::new(),
+            services: Vec::new(),
+            session: None,
+        };
+        let json = ctx.to_json_with_fragment(Some("list"));
+        assert!(json.contains("\"__tsp_fragment\":\"list\""), "json={json}");
+    }
+
+    #[test]
+    fn fragment_target_decodes_route_and_preserves_extra_query() {
+        let target = fragment_target(
+            "/__tsp/fragment",
+            &format!(
+                "route=%2Fusers%2Fhello%20world&name=list&token={}&sort=desc",
+                fragment_token()
+            ),
+        )
+        .expect("valid fragment target");
+        assert_eq!(target.0, "/users/hello world");
+        assert_eq!(target.1.as_deref(), Some("list"));
+        assert_eq!(target.2, "sort=desc");
+    }
+
+    #[test]
+    fn fragment_target_rejects_missing_or_wrong_capability() {
+        assert!(fragment_target(
+            "/__tsp/fragment",
+            "route=%2Fusers&name=list"
+        )
+        .is_none());
+        assert!(fragment_target(
+            "/__tsp/fragment",
+            "route=%2Fusers&name=list&token=wrong"
+        )
+        .is_none());
     }
 
     #[test]
@@ -2433,6 +2804,24 @@ mod tests {
     }
 
     #[test]
+    fn disconnect_monitor_cancels_when_peer_closes() {
+        let (client, server) = socket_pair();
+        let cancellation = CancellationToken::new();
+        let monitor = start_disconnect_monitor(&server, &cancellation);
+        assert!(monitor.is_some());
+        drop(client);
+
+        for _ in 0..40 {
+            if cancellation.is_cancelled() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        stop_disconnect_monitor(monitor);
+        assert!(cancellation.is_cancelled());
+    }
+
+    #[test]
     fn read_request_splits_head_and_body() {
         let (mut client, mut server) = socket_pair();
         let wire = "POST / HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello";
@@ -2547,6 +2936,7 @@ mod tests {
             (TspError::BodyTooLarge, "TSP2002"),
             (TspError::NoRouteMatches, "TSP2003"),
             (TspError::MethodNotAllowed, "TSP2004"),
+            (TspError::MalformedUrl, "TSP2005"),
             (TspError::PagePrepareError, "TSP3001"),
             (TspError::CleanSlotMissingPayload, "TSP3006"),
             (TspError::PageNeverBuilt, "TSP3007"),
@@ -2575,7 +2965,8 @@ mod tests {
     fn format_error_body_raw_passes_arbitrary_code() {
         // The raw variant is used by the build pipeline
         // when the failure came from the JSC bridge --
-        // it owns the code (`TSP3002` / `TSP3012` etc.)
+        // it owns the code (`TSP3002` / `TSP3009` /
+        // `TSP3012` etc.)
         // and a description, neither of which the host's
         // own enum has a variant for.
         let body = format_error_body_raw(
@@ -2586,6 +2977,17 @@ mod tests {
         assert!(body.starts_with("[TSP3012] bun subprocess exited non-zero\n"),
                 "got: {body:?}");
         assert!(body.contains("bun exited 1: error page\n"), "got: {body:?}");
+    }
+
+    #[test]
+    fn timed_out_build_uses_gateway_timeout_and_typed_body() {
+        let error = pipeline::BuildError::Jsc(crate::jsc_bridge::JscError::TimedOut {
+            stderr_tail: "page still running".to_string(),
+        });
+        let (status, body) = build_failure_response(&error, "timeout detail\n".to_string());
+        assert_eq!(status, "HTTP/1.1 504 Gateway Timeout");
+        assert!(body.starts_with("[TSP3009] request timed out\n"), "got: {body:?}");
+        assert!(body.contains("timeout detail\n"), "got: {body:?}");
     }
 
     #[test]

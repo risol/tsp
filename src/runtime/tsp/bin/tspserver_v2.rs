@@ -38,6 +38,19 @@ use bun_runtime_tsp::session_backend::{MemoryBackend, RedisBackend, SessionBacke
 use bun_runtime_tsp::watcher::{self, WatchConfig};
 
 fn main() -> ExitCode {
+    match std::env::args().nth(1).as_deref() {
+        Some("check") => run_check(),
+        Some("routes") => run_routes(),
+        Some("graph") => run_graph(),
+        Some("--help") | Some("-h") => {
+            print_help();
+            ExitCode::SUCCESS
+        }
+        _ => serve_main(),
+    }
+}
+
+fn serve_main() -> ExitCode {
     let port = match host::resolve_port() {
         Ok(p) => p,
         Err(e) => {
@@ -174,6 +187,91 @@ fn resolve_routes_dir() -> PathBuf {
     }
 }
 
+fn print_help() {
+    println!(
+        "TSP v2 commands:\n  tspserver_v2              run the native HTTP server\n  tspserver_v2 check       validate routes and local imports\n  tspserver_v2 routes      list filesystem routes and exports\n  tspserver_v2 graph       print the resolved module graph\n\nEnvironment:\n  TSP_ROUTES_DIR       route root (default: routes)\n  TSP_PUBLIC_DIR       public asset root (default: public)\n  TSP_PORT             HTTP port (default: 3000)\n  TSP_BUN_BIN          explicit bundled Bun runtime path\n  TSP_INVALIDATION_FILE shared cross-worker invalidation log"
+    );
+}
+
+fn run_routes() -> ExitCode {
+    let root = resolve_routes_dir();
+    let table = match RouteTable::scan(&root) {
+        Ok(table) => table,
+        Err(error) => {
+            eprintln!("tsp routes: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    for route in table.iter() {
+        match bun_runtime_tsp::page::prepare(&route) {
+            Ok(page) => println!(
+                "{}\t{}\t{}",
+                route.path,
+                route.source.display(),
+                page.methods.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(",")
+            ),
+            Err(error) => println!("{}\t{}\tERROR: {error}", route.path, route.source.display()),
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+fn run_check() -> ExitCode {
+    let root = resolve_routes_dir();
+    let table = match RouteTable::scan(&root) {
+        Ok(table) => table,
+        Err(error) => {
+            eprintln!("tsp check: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut failed = false;
+    for route in table.iter() {
+        match bun_runtime_tsp::page::prepare(&route) {
+            Ok(page) => println!(
+                "OK {} [{}]",
+                route.path,
+                page.methods.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(",")
+            ),
+            Err(error) => {
+                failed = true;
+                eprintln!("ERROR {}: {error}", route.source.display());
+            }
+        }
+    }
+    match ModuleGraph::from_routes_dir(&root) {
+        Ok(graph) => println!("OK module graph: {} module(s)", graph.len()),
+        Err(error) => {
+            failed = true;
+            eprintln!("ERROR module graph: {error}");
+        }
+    }
+    if failed { ExitCode::from(1) } else { ExitCode::SUCCESS }
+}
+
+fn run_graph() -> ExitCode {
+    let root = resolve_routes_dir();
+    let graph = match ModuleGraph::from_routes_dir(&root) {
+        Ok(graph) => graph,
+        Err(error) => {
+            eprintln!("tsp graph: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut nodes = graph.nodes();
+    nodes.sort_by(|a, b| a.path.cmp(&b.path));
+    for node in nodes {
+        let imports = node
+            .imports
+            .iter()
+            .map(|id| id.as_path().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(",");
+        println!("{}\timports=[{}]", node.path.display(), imports);
+    }
+    ExitCode::SUCCESS
+}
+
 /// Walk the RouteTable and create one PageRef per HTTP method
 /// the source file actually exports. We read the source once
 /// at boot (instead of per request) so the registry's
@@ -185,6 +283,14 @@ fn build_registry(routes: &RouteTable) -> Result<PageRegistry, String> {
             Ok(s) => s,
             Err(e) => return Err(format!("prepare {}: {e}", route.source.display())),
         };
+        // RouteTable::scan cannot depend on page parsing without creating a
+        // module cycle, so it initially carries the broad REAL method set.
+        // Align the live route metadata with the actual exports before the
+        // server starts; the watcher applies the same normalization for
+        // newly added or changed route files.
+        let mut normalized_route = route.clone();
+        normalized_route.methods = source.methods.clone();
+        routes.replace_by_path(normalized_route);
         for method in &source.methods {
             let page_ref = PageRef {
                 route: route.path.clone(),

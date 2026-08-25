@@ -131,6 +131,8 @@ impl SourceHash {
 pub enum GraphError {
     Io { path: PathBuf, source: std::io::Error },
     Utf8 { path: PathBuf, source: std::string::FromUtf8Error },
+    MissingImport { importer: PathBuf, specifier: String },
+    UnsupportedImport { importer: PathBuf, specifier: String, reason: &'static str },
 }
 
 impl std::fmt::Display for GraphError {
@@ -142,6 +144,16 @@ impl std::fmt::Display for GraphError {
             Self::Utf8 { path, source } => {
                 write!(f, "{} is not valid UTF-8: {source}", path.display())
             }
+            Self::MissingImport { importer, specifier } => write!(
+                f,
+                "cannot resolve import {specifier:?} from {}",
+                importer.display()
+            ),
+            Self::UnsupportedImport { importer, specifier, reason } => write!(
+                f,
+                "unsupported import {specifier:?} from {}: {reason}",
+                importer.display()
+            ),
         }
     }
 }
@@ -169,6 +181,13 @@ impl ModuleGraph {
 
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
+    }
+
+    /// Snapshot graph nodes for diagnostics and tooling. The returned nodes
+    /// are clones so an inspector never holds the graph lock or aliases a
+    /// watcher-owned map.
+    pub fn nodes(&self) -> Vec<ModuleNode> {
+        self.nodes.values().cloned().collect()
     }
 
     /// Look up a node by id. Returns `None` if the id is not
@@ -297,9 +316,9 @@ fn read_module(
         }
     };
     let source_hash = SourceHash::compute(&text);
-    let imports = extract_imports(&text);
+    let imports = resolve_imports(root, path, &text)?;
     let page_roots = if name.ends_with(".tsp") {
-        detect_page_roots(&text)
+        detect_page_roots(&text, route_path(root, path))
     } else {
         Vec::new()
     };
@@ -318,6 +337,57 @@ fn read_module(
     }))
 }
 
+fn resolve_imports(root: &Path, importer: &Path, text: &str) -> Result<Vec<ModuleId>, GraphError> {
+    let mut imports = Vec::new();
+    for specifier in extract_imports(text) {
+        let specifier_text = specifier.as_path().to_string_lossy();
+        if !specifier_text.starts_with('.') && !specifier_text.starts_with('/') {
+            imports.push(specifier);
+            continue;
+        }
+        if specifier_text.ends_with(".tsp") {
+            return Err(GraphError::UnsupportedImport {
+                importer: importer.to_path_buf(),
+                specifier: specifier_text.into_owned(),
+                reason: "route .tsp modules are entry points and cannot be imported",
+            });
+        }
+        let Some(resolved) = resolve_local_module(importer.parent().unwrap_or(root), &specifier_text) else {
+            return Err(GraphError::MissingImport {
+                importer: importer.to_path_buf(),
+                specifier: specifier_text.into_owned(),
+            });
+        };
+        let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let canonical_resolved = resolved
+            .canonicalize()
+            .unwrap_or_else(|_| resolved.clone());
+        if !canonical_resolved.starts_with(&canonical_root) {
+            return Err(GraphError::UnsupportedImport {
+                importer: importer.to_path_buf(),
+                specifier: specifier_text.into_owned(),
+                reason: "local import escapes the configured routes root",
+            });
+        }
+        imports.push(ModuleId::from_path(&canonical_resolved));
+    }
+    Ok(imports)
+}
+
+fn resolve_local_module(base_dir: &Path, specifier: &str) -> Option<PathBuf> {
+    let base = base_dir.join(specifier);
+    let mut candidates = vec![base.clone()];
+    if base.extension().is_none() {
+        for extension in ["ts", "tsx", "js", "jsx", "json"] {
+            candidates.push(base.with_extension(extension));
+        }
+        for extension in ["ts", "tsx", "js", "jsx", "json"] {
+            candidates.push(base.join(format!("index.{extension}")));
+        }
+    }
+    candidates.into_iter().find(|candidate| candidate.is_file())
+}
+
 /// Conservative regex-based import extraction. Matches the
 /// conventional `import ... from "...";` and
 /// `import "...";` forms. The slice-7+ AST pass widens to
@@ -333,9 +403,6 @@ pub fn extract_imports(text: &str) -> Vec<ModuleId> {
     let mut out = Vec::new();
     for line in text.lines() {
         let trimmed = line.trim_start();
-        if !trimmed.starts_with("import") {
-            continue;
-        }
         // Side-effect: `import "foo";`
         if let Some(rest) = trimmed.strip_prefix("import ") {
             if let Some(spec) = take_quoted_specifier(rest) {
@@ -343,10 +410,20 @@ pub fn extract_imports(text: &str) -> Vec<ModuleId> {
                 continue;
             }
         }
-        // Normal: `import X from "foo";` or `import { a, b } from "foo";`
-        if let Some(idx) = trimmed.find(" from ") {
+        // Normal imports and re-exports: `import X from "foo"` or
+        // `export { a } from "foo"`.
+        if (trimmed.starts_with("import") || trimmed.starts_with("export"))
+            && let Some(idx) = trimmed.find(" from ")
+        {
             let after_from = &trimmed[idx + " from ".len()..];
             if let Some(spec) = take_quoted_specifier(after_from) {
+                out.push(ModuleId(PathBuf::from(spec)));
+            }
+        }
+        // Dynamic imports are part of the dependency graph even though
+        // they are evaluated later by the JS runtime.
+        if let Some(idx) = trimmed.find("import(") {
+            if let Some(spec) = take_quoted_specifier(&trimmed[idx + "import(".len()..]) {
                 out.push(ModuleId(PathBuf::from(spec)));
             }
         }
@@ -373,7 +450,7 @@ fn take_quoted_specifier(s: &str) -> Option<&str> {
 /// thing in a slightly different shape; slice 9 keeps the logic
 /// local to the graph build so the data structure is
 /// self-contained.
-fn detect_page_roots(text: &str) -> Vec<PageId> {
+fn detect_page_roots(text: &str, route: String) -> Vec<PageId> {
     // Page root identity for slice 9 is just the path the file
     // lives at under the routes/ root, minus the extension. The
     // route file is a single page root; the multiple methods
@@ -398,10 +475,38 @@ fn detect_page_roots(text: &str) -> Vec<PageId> {
     methods
         .into_iter()
         .map(|m| PageId {
-            route: String::new(),
+            route: route.clone(),
             method: m,
         })
         .collect()
+}
+
+fn route_path(root: &Path, path: &Path) -> String {
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    let mut segments = Vec::new();
+    let components: Vec<String> = relative
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .map(str::to_string)
+        .collect();
+    for (index, component) in components.iter().enumerate() {
+        let is_file = index + 1 == components.len();
+        if is_file && component == "index.tsp" { continue; }
+        let segment = if is_file {
+            component.strip_suffix(".tsp").unwrap_or(component)
+        } else {
+            component.as_str()
+        };
+        let segment = if let Some(name) = segment.strip_prefix("[...").and_then(|s| s.strip_suffix(']')) {
+            format!("*{name}")
+        } else if let Some(name) = segment.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            format!(":{name}")
+        } else {
+            segment.to_string()
+        };
+        segments.push(segment);
+    }
+    if segments.is_empty() { "/".to_string() } else { format!("/{}", segments.join("/")) }
 }
 
 #[cfg(test)]
@@ -459,6 +564,15 @@ mod tests {
     }
 
     #[test]
+    fn extract_imports_includes_reexports_and_dynamic_imports() {
+        let src = "export { value } from './shared';\nconst later = import('./lazy');\n";
+        let ids = extract_imports(src);
+        assert_eq!(ids.len(), 2);
+        assert_eq!(ids[0].as_path(), Path::new("./shared"));
+        assert_eq!(ids[1].as_path(), Path::new("./lazy"));
+    }
+
+    #[test]
     fn graph_insert_records_reverse_edges() {
         let mut g = ModuleGraph::new();
         let a_id = ModuleId(PathBuf::from("a.ts"));
@@ -472,5 +586,29 @@ mod tests {
         });
         assert_eq!(g.importers_of(&b_id), &[a_id.clone()]);
         assert!(g.importers_of(&a_id).is_empty());
+    }
+
+    #[test]
+    fn graph_rejects_local_imports_outside_routes_root() {
+        let root = std::env::temp_dir().join(format!(
+            "tsp-v2-graph-root-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let routes = root.join("routes");
+        let outside = root.join("outside.ts");
+        std::fs::create_dir_all(&routes).unwrap();
+        std::fs::write(&outside, "export const value = 1;\n").unwrap();
+        std::fs::write(
+            routes.join("index.tsp"),
+            "import { value } from '../outside.ts';\nexport function GET() { return value; }\n",
+        )
+        .unwrap();
+        let error = ModuleGraph::from_routes_dir(&routes).unwrap_err();
+        assert!(error.to_string().contains("escapes the configured routes root"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

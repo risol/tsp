@@ -158,6 +158,12 @@ pub struct PageSlot {
     /// (plan sect.22.4 in-flight dedup). `None` outside of a
     /// build.
     pub in_flight: Option<Arc<InFlightBuild>>,
+    /// Revision of the newest invalidation observed by this slot.
+    /// This prevents a change that arrives during a build from being
+    /// lost when that build commits.
+    pub invalidation_revision: u64,
+    /// Revision captured by the currently running build.
+    pub building_revision: Option<u64>,
 }
 
 impl std::fmt::Debug for PageSlot {
@@ -169,6 +175,8 @@ impl std::fmt::Debug for PageSlot {
             .field("last_known_good_id", &self.last_known_good.as_ref().map(|g| g.id))
             .field("state", &self.state)
             .field("in_flight", &self.in_flight.as_ref().map(|_| "Arc<InFlightBuild>"))
+            .field("invalidation_revision", &self.invalidation_revision)
+            .field("building_revision", &self.building_revision)
             .finish()
     }
 }
@@ -184,6 +192,8 @@ impl PageSlot {
             last_known_good: None,
             state: PageState::Unloaded,
             in_flight: None,
+            invalidation_revision: 0,
+            building_revision: None,
         }
     }
 
@@ -267,6 +277,18 @@ impl PageRegistry {
         }
     }
 
+    /// Update the source identity for an existing page slot. This is
+    /// needed when a route keeps the same URL path but its backing file
+    /// changes.
+    pub fn update_source(&self, page: &PageRef, source: ModuleId) -> bool {
+        let mut inner = self.inner.lock().expect("registry lock poisoned");
+        let Some(slot) = inner.slots.get_mut(page) else {
+            return false;
+        };
+        slot.source = source;
+        true
+    }
+
     /// Unregister every slot whose `route` field matches the
     /// given URL path. Used by the watcher (slice 15a) when a
     /// `.tsp` file disappears. The route has multiple slots
@@ -343,14 +365,25 @@ impl PageRegistry {
             return MarkDirtyResult::UnknownPage;
         };
         match slot.state {
-            PageState::Unloaded => MarkDirtyResult::AlreadyFirstLoad,
+            PageState::Unloaded => {
+                slot.invalidation_revision = slot.invalidation_revision.wrapping_add(1);
+                MarkDirtyResult::AlreadyFirstLoad
+            }
             PageState::Clean => {
+                slot.invalidation_revision = slot.invalidation_revision.wrapping_add(1);
                 slot.state = PageState::Dirty;
                 MarkDirtyResult::Marked
             }
-            PageState::Dirty => MarkDirtyResult::AlreadyDirty,
-            PageState::Building => MarkDirtyResult::BuildInFlight,
+            PageState::Dirty => {
+                slot.invalidation_revision = slot.invalidation_revision.wrapping_add(1);
+                MarkDirtyResult::AlreadyDirty
+            }
+            PageState::Building => {
+                slot.invalidation_revision = slot.invalidation_revision.wrapping_add(1);
+                MarkDirtyResult::BuildInFlight
+            }
             PageState::Failed => {
+                slot.invalidation_revision = slot.invalidation_revision.wrapping_add(1);
                 slot.state = PageState::Dirty;
                 MarkDirtyResult::Marked
             }
@@ -401,6 +434,8 @@ impl PageRegistry {
                 });
                 slot.state = PageState::Building;
                 slot.in_flight = Some(shared.clone());
+                let building_revision = slot.invalidation_revision;
+                slot.building_revision = Some(building_revision);
                 let slot_page = slot.page.clone();
                 inner.generation_log.push(candidate.id);
                 Ok(PublishGuard {
@@ -408,6 +443,7 @@ impl PageRegistry {
                     slot_page,
                     candidate: Some(candidate),
                     shared: Some(shared),
+                    build_revision: building_revision,
                 })
             }
             PageState::Clean => Err(BeginBuildError::NotBuildable(PageState::Clean)),
@@ -495,6 +531,7 @@ pub struct PublishGuard {
     slot_page: PageRef,
     candidate: Option<Generation>,
     shared: Option<Arc<InFlightBuild>>,
+    build_revision: u64,
 }
 
 impl std::fmt::Debug for PublishGuard {
@@ -503,6 +540,7 @@ impl std::fmt::Debug for PublishGuard {
             .field("slot_page", &self.slot_page)
             .field("has_candidate", &self.candidate.is_some())
             .field("has_shared", &self.shared.is_some())
+            .field("build_revision", &self.build_revision)
             .finish()
     }
 }
@@ -564,8 +602,16 @@ impl PublishGuard {
                 slot.last_known_good = Some(candidate.clone());
             }
             slot.current = Some(candidate);
-            slot.state = PageState::Clean;
+            slot.state = if slot.invalidation_revision == self.build_revision {
+                PageState::Clean
+            } else {
+                // A newer file change arrived while this build was
+                // running. Keep the published body available to the
+                // request that built it, but force a later rebuild.
+                PageState::Dirty
+            };
             slot.in_flight = None;
+            slot.building_revision = None;
         }
     }
 
@@ -587,8 +633,13 @@ impl PublishGuard {
             // build) stays as `current` so requests still
             // serve from it. Per plan sect.24.2 a never-loaded
             // page that fails its first build returns 500.
-            slot.state = PageState::Failed;
+            slot.state = if slot.invalidation_revision == self.build_revision {
+                PageState::Failed
+            } else {
+                PageState::Dirty
+            };
             slot.in_flight = None;
+            slot.building_revision = None;
         }
     }
 }
@@ -613,12 +664,15 @@ impl std::ops::Drop for PublishGuard {
                 // roll back to Dirty (or Unloaded for the
                 // first-load case) so the next request can
                 // try again.
-                slot.state = if slot.current.is_none() {
+                slot.state = if slot.invalidation_revision != self.build_revision {
+                    PageState::Dirty
+                } else if slot.current.is_none() {
                     PageState::Unloaded
                 } else {
                     PageState::Dirty
                 };
                 slot.in_flight = None;
+                slot.building_revision = None;
             }
         }
     }
@@ -754,6 +808,28 @@ mod tests {
         assert_ne!(snap.current_id.unwrap(), first);
         // LKG should be the first build
         assert_eq!(snap.last_known_good_id, Some(first));
+    }
+
+    #[test]
+    fn invalidation_during_build_keeps_slot_dirty() {
+        let r = PageRegistry::new();
+        let p = page("/", HttpMethod::Get);
+        r.register(p.clone(), modid("routes/index.tsp"));
+
+        let first = r.begin_build(&p).unwrap();
+        first.commit(vec![], "body1".to_string());
+        r.mark_dirty(&p);
+
+        let in_flight = r.begin_build(&p).unwrap();
+        // This is the watcher observing a newer edit while the old build
+        // is still running. The old commit must not erase this invalidation.
+        assert_eq!(r.mark_dirty(&p), MarkDirtyResult::BuildInFlight);
+        in_flight.commit(vec![], "stale-body".to_string());
+        assert_eq!(r.snapshot(&p).unwrap().state, PageState::Dirty);
+
+        let fresh = r.begin_build(&p).unwrap();
+        fresh.commit(vec![], "body2".to_string());
+        assert_eq!(r.snapshot(&p).unwrap().state, PageState::Clean);
     }
 
     #[test]

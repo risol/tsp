@@ -23,7 +23,7 @@
 //! - Request pinning (a request on generation N finishes on N
 //!   even if the file changes mid-flight).
 
-use crate::jsc_bridge::{self, BunRuntime};
+use crate::jsc_bridge::{self, BunRuntime, CancellationToken};
 use crate::page::{self, PrepareError};
 use crate::router::{HttpMethod, Route};
 
@@ -79,10 +79,19 @@ pub fn build(
     bun: &BunRuntime,
     ctx_json: &str,
     timeout_ms: u64,
+    cancellation: &CancellationToken,
 ) -> Result<String, BuildError> {
     let source = page::prepare(route).map_err(BuildError::Prepare)?;
-    jsc_bridge::execute(bun, &source.text, method, Some(ctx_json), timeout_ms)
-        .map_err(BuildError::Jsc)
+    jsc_bridge::execute_from_path(
+        bun,
+        &source.text,
+        method,
+        Some(ctx_json),
+        timeout_ms,
+        cancellation,
+        &route.source,
+    )
+    .map_err(BuildError::Jsc)
 }
 
 #[cfg(test)]

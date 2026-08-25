@@ -7,22 +7,12 @@
 //! a runnable JS string" path that is honest about its scope. The
 //! transform below:
 //!
-//! - replaces single-line `<tag>text</tag>` JSX with a string literal
-//!   `"<tag>text</tag>"` so the slice-1 fixture
-//!   `<h1>Hello from TSP v2</h1>` becomes the runnable
-//!   `return "<h1>Hello from TSP v2</h1>";`;
-//! - strips the `export ` keyword from `export function` declarations
-//!   so the page module evaluates under `bun -e` (no module wrapper);
-//! - leaves everything else alone and surfaces "unsupported shape"
-//!   on anything it cannot pattern-match (nested JSX, components,
-//!   attributes, fragments, multi-line JSX). The real TSX parser is
-//!   slice 7.
-//!
-//! Two transforms we explicitly do *not* do here:
-//! - TypeScript type annotation stripping (`: Context`, `<T>`, `as X`).
-//!   The fixture has none and PoC 1 does not need them; the slice-7
-//!   `bun_js_parser` pass handles them properly.
-//! - JSX attribute handling (`class`, `onClick`, etc.). Same reason.
+//! - rewrites the narrow named `tsp:server` compatibility imports into
+//!   bindings supplied by the generated wrapper;
+//! - leaves TypeScript/TSX parsing to Bun's subprocess transpiler. The
+//!   generated file uses a `.tsx` suffix, and the wrapper provides the
+//!   small React-compatible element factory needed by Bun's classic JSX
+//!   lowering. The wrapper then renders the element tree to HTML.
 //!
 //! These are documented in `tsp-v2-plan.md` sect.10.4 ("prohibit shape
 //! magic") -- the host's job is to refuse, not to silently mis-render.
@@ -48,146 +38,252 @@ impl std::fmt::Display for JsxError {
 
 impl std::error::Error for JsxError {}
 
-/// Transform a `.tsp` source string into a runnable `.js` string for
-/// `bun -e` / `bun run tempfile`. See module docs for scope.
+/// Transform a `.tsp` source string into a runnable TSX module body for
+/// `bun run tempfile`. Bun performs the actual TypeScript/TSX lowering.
 pub fn tsx_to_js(source: &str) -> Result<String, JsxError> {
-    // 1. JSX single-line `<tag>text</tag>` -> string literal
-    //    `"<tag>text</tag>"`. Anything richer (nested / attributes /
-    //    multi-line) is `UnsupportedShape` so the operator gets a
-    //    useful diagnostic instead of a half-correct transform.
+    let source = rewrite_tsp_server_imports(source)?;
+    Ok(rewrite_fragment_exports(&source))
+}
+
+/// Rewrite relative local imports to absolute `file:` URLs before the
+/// generated wrapper is written into the system temp directory. This keeps
+/// the subprocess module resolver anchored to the application source tree.
+/// `.tsp` is intentionally rejected as an import target; route modules are
+/// entry points, not reusable library modules.
+pub fn rewrite_local_imports(source: &str, importer_dir: &std::path::Path) -> Result<String, JsxError> {
     let mut out = String::with_capacity(source.len());
-    for (idx, line) in source.lines().enumerate() {
-        if let Some(stripped) = try_strip_inline_jsx(line) {
-            out.push_str(&stripped);
-        } else if has_jsx(line) {
-            return Err(JsxError::UnsupportedShape {
-                line: idx + 1,
-                reason: "slice-6 only handles single-line <tag>text</tag> JSX; see plan sect.11 for the full JSX ABI",
-            });
-        } else {
-            out.push_str(line);
+    for (line_no, line) in source.lines().enumerate() {
+        let mut rewritten = line.to_string();
+        for quote in ['"', '\''] {
+            let marker = format!("from {quote}");
+            rewritten = rewrite_import_marker(&rewritten, &marker, quote, importer_dir, line_no + 1)?;
+            let marker = format!("import{quote}");
+            rewritten = rewrite_import_marker(&rewritten, &marker, quote, importer_dir, line_no + 1)?;
+            rewritten = rewrite_dynamic_import(&rewritten, quote, importer_dir, line_no + 1)?;
         }
+        out.push_str(&rewritten);
         out.push('\n');
     }
-
-    // 2. Strip `export ` from `export function NAME(` lines so the
-    //    resulting JS evaluates under `bun -e` (no module wrapper).
-    let mut out2 = String::with_capacity(out.len());
-    for line in out.lines() {
-        let trimmed = line.trim_start();
-        if let Some(rest) = trimmed.strip_prefix("export function ") {
-            let indent_len = line.len() - trimmed.len();
-            for _ in 0..indent_len {
-                out2.push(' ');
-            }
-            out2.push_str("function ");
-            out2.push_str(rest);
-        } else {
-            out2.push_str(line);
-        }
-        out2.push('\n');
-    }
-
-    Ok(out2)
+    Ok(out)
 }
 
-/// If `line` contains a single-line `<tag>text</tag>` JSX expression,
-/// return a copy of the line with the JSX replaced by a string literal.
-/// Returns `None` if the line has no JSX or has a shape we don't handle
-/// (nested tags, attributes, fragments, multi-line JSX).
-fn try_strip_inline_jsx(line: &str) -> Option<String> {
-    // The slice-6 shape is exactly: one opening tag `<NAME>` (NAME is
-    // `[A-Za-z][A-Za-z0-9]*`, no attributes), text content that does
-    // NOT itself contain `<`, and a matching `</NAME>`, all on one
-    // line. Anything else returns `None` so the caller can produce a
-    // clean `UnsupportedShape` error rather than silently mis-render.
-    let open = find_opening_tag(line)?;
-    let name = &line[open.tag_start + 1..open.name_end];
-    let content_start = open.name_end + 1;
-    let close_tag = format!("</{name}>");
-    let close_rel = line[content_start..].find(&close_tag)?;
-    let content_end = content_start + close_rel;
-    let content = &line[content_start..content_end];
-    // Nested JSX guard: a content that starts with `<` means there is
-    // another JSX element inside, which is not slice-6 shape.
-    if content.trim_start().starts_with('<') {
-        return None;
-    }
-    let after_close = content_end + close_tag.len();
-
-    let mut out = String::with_capacity(line.len() + 4);
-    out.push_str(&line[..open.tag_start]);
-    out.push('"');
-    let _ = write!(out, "<{name}>");
-    out.push_str(content);
-    let _ = write!(out, "</{name}>");
-    out.push('"');
-    out.push_str(&line[after_close..]);
-    Some(out)
-}
-
-/// Position of the first `<NAME>` opening tag in `line`.
-struct OpeningTag {
-    tag_start: usize,
-    /// Index of the byte AFTER the tag name (i.e. the `>` of `<NAME>`).
-    name_end: usize,
-}
-
-fn find_opening_tag(line: &str) -> Option<OpeningTag> {
-    let bytes = line.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] != b'<' {
-            i += 1;
-            continue;
-        }
-        // Must be followed by an alphabetic character to count as a
-        // tag (excludes `</`, `<!--`, `<=`, `<<`, etc.).
-        let next = *bytes.get(i + 1)?;
-        if !next.is_ascii_alphabetic() {
-            i += 1;
-            continue;
-        }
-        let name_len = parse_tag_name(&bytes[i + 1..])?;
-        let name_end = i + 1 + name_len;
-        if bytes.get(name_end) != Some(&b'>') {
-            i += 1;
-            continue;
-        }
-        return Some(OpeningTag {
-            tag_start: i,
-            name_end,
+fn rewrite_dynamic_import(
+    line: &str,
+    quote: char,
+    importer_dir: &std::path::Path,
+    line_no: usize,
+) -> Result<String, JsxError> {
+    let marker = format!("import({quote}");
+    let Some(start) = line.find(&marker) else { return Ok(line.to_string()); };
+    let spec_start = start + marker.len();
+    let Some(end_rel) = line[spec_start..].find(quote) else { return Ok(line.to_string()); };
+    let end = spec_start + end_rel;
+    let specifier = &line[spec_start..end];
+    if !specifier.starts_with('.') { return Ok(line.to_string()); }
+    if specifier.ends_with(".tsp") {
+        return Err(JsxError::UnsupportedShape {
+            line: line_no,
+            reason: "route .tsp modules cannot be imported; move shared code to .ts/.tsx",
         });
     }
-    None
+    let Some(path) = resolve_local_module(importer_dir, specifier) else {
+        return Err(JsxError::UnsupportedShape {
+            line: line_no,
+            reason: "local dynamic import could not be resolved",
+        });
+    };
+    let url = file_url(&path);
+    let mut result = String::with_capacity(line.len() + url.len());
+    result.push_str(&line[..spec_start]);
+    result.push_str(&url);
+    result.push_str(&line[end..]);
+    Ok(result)
 }
 
-/// True if `line` contains a JSX-shaped `<` followed by an alphabetic
-/// character. Used by `tsx_to_js` to distinguish "no JSX" (pass
-/// through) from "JSX we cannot handle" (return `UnsupportedShape`).
-fn has_jsx(line: &str) -> bool {
-    let bytes = line.as_bytes();
-    for i in 0..bytes.len().saturating_sub(1) {
-        if bytes[i] == b'<' && bytes[i + 1].is_ascii_alphabetic() {
-            return true;
-        }
+fn rewrite_import_marker(
+    line: &str,
+    marker: &str,
+    quote: char,
+    importer_dir: &std::path::Path,
+    line_no: usize,
+) -> Result<String, JsxError> {
+    let Some(start) = line.find(marker) else {
+        return Ok(line.to_string());
+    };
+    let spec_start = start + marker.len();
+    let Some(end_rel) = line[spec_start..].find(quote) else {
+        return Ok(line.to_string());
+    };
+    let end = spec_start + end_rel;
+    let specifier = &line[spec_start..end];
+    if !specifier.starts_with('.') {
+        return Ok(line.to_string());
     }
-    false
+    if specifier.ends_with(".tsp") {
+        return Err(JsxError::UnsupportedShape {
+            line: line_no,
+            reason: "route .tsp modules cannot be imported; move shared code to .ts/.tsx",
+        });
+    }
+    let Some(path) = resolve_local_module(importer_dir, specifier) else {
+        return Err(JsxError::UnsupportedShape {
+            line: line_no,
+            reason: "local import could not be resolved",
+        });
+    };
+    let url = file_url(&path);
+    let mut result = String::with_capacity(line.len() + url.len());
+    result.push_str(&line[..spec_start]);
+    result.push_str(&url);
+    result.push_str(&line[end..]);
+    Ok(result)
 }
 
-/// Parse `[A-Za-z][A-Za-z0-9]*` at the start of `bytes`. Returns the
-/// length of the matched name, or `None` if the first char is not
-/// alphabetic.
-fn parse_tag_name(bytes: &[u8]) -> Option<usize> {
-    let first = *bytes.first()?;
-    if !first.is_ascii_alphabetic() {
+fn resolve_local_module(importer_dir: &std::path::Path, specifier: &str) -> Option<std::path::PathBuf> {
+    let base = importer_dir.join(specifier);
+    if base.extension().and_then(|e| e.to_str()) == Some("tsp") {
         return None;
     }
-    let mut len = 1;
-    while len < bytes.len() && bytes[len].is_ascii_alphanumeric() {
-        len += 1;
+    let mut candidates = vec![base.clone()];
+    if base.extension().is_none() {
+        for extension in ["ts", "tsx", "js", "jsx", "json"] {
+            candidates.push(base.with_extension(extension));
+        }
+        for extension in ["ts", "tsx", "js", "jsx", "json"] {
+            candidates.push(base.join(format!("index.{extension}")));
+        }
     }
-    Some(len)
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+fn file_url(path: &std::path::Path) -> String {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut value = canonical.to_string_lossy().replace('\\', "/");
+    value = value.replace('%', "%25").replace(' ', "%20").replace('#', "%23");
+    if value.starts_with('/') {
+        format!("file://{value}")
+    } else {
+        format!("file:///{value}")
+    }
+}
+
+/// Give fragment handlers a runtime-visible name while keeping normal page
+/// exports as ESM exports. The wrapper uses the registry when a request asks
+/// for an internal fragment render.
+fn rewrite_fragment_exports(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("export const ") {
+            if let Some(name_end) = rest.find(" = fragment(") {
+                let name = &rest[..name_end];
+                let indent = &line[..line.len() - trimmed.len()];
+                out.push_str(indent);
+                out.push_str("const ");
+                out.push_str(name);
+                out.push_str(" = fragment(\"");
+                out.push_str(name);
+                out.push_str("\", ");
+                out.push_str(&rest[name_end + " = fragment(".len()..]);
+                out.push('\n');
+                continue;
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// Rewrite the stable named `tsp:server` import surface into bindings supplied
+/// by the generated wrapper. The subprocess bridge does not run a module
+/// loader for virtual `tsp:*` specifiers, so this is the narrow compatibility
+/// seam until the full Bun module-loader bridge lands.
+fn rewrite_tsp_server_imports(source: &str) -> Result<String, JsxError> {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut out = String::with_capacity(source.len());
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        if trimmed.starts_with("import") {
+            let mut statement = lines[i].to_string();
+            let mut end = i;
+            let has_tsp_source = |text: &str| {
+                text.contains("from \"tsp:server\"")
+                    || text.contains("from 'tsp:server'")
+                    || text.contains("from \"tsp:html\"")
+                    || text.contains("from 'tsp:html'")
+            };
+            while !statement.contains(';')
+                && !has_tsp_source(&statement)
+                && !statement.contains(" from ")
+                && !statement.contains("from ")
+                && end + 1 < lines.len()
+            {
+                end += 1;
+                statement.push_str(lines[end].trim());
+            }
+            if !has_tsp_source(&statement) {
+                out.push_str(lines[i]);
+                out.push('\n');
+                i += 1;
+                continue;
+            }
+            let is_html_source = statement.contains("tsp:html");
+            let Some(open) = statement.find('{') else {
+                return Err(JsxError::UnsupportedShape {
+                    line: end + 1,
+                    reason: "tsp:server currently supports named imports only",
+                });
+            };
+            let Some(close) = statement.rfind('}') else {
+                return Err(JsxError::UnsupportedShape {
+                    line: end + 1,
+                    reason: "malformed tsp:server import",
+                });
+            };
+            let mut bindings = Vec::new();
+            for raw in statement[open + 1..close].split(',') {
+                let item = raw.trim();
+                if item.is_empty() || item.starts_with("type ") {
+                    continue;
+                }
+                let mut parts = item.splitn(2, " as ");
+                let imported = parts.next().unwrap_or_default().trim();
+                let local = parts.next().unwrap_or(imported).trim();
+                let allowed = if is_html_source {
+                    imported == "raw"
+                } else {
+                    matches!(
+                        imported,
+                        "json" | "redirect" | "text" | "html" | "notFound" | "HttpError" | "fragment"
+                    )
+                };
+                if !allowed || imported.is_empty() || local.is_empty() {
+                    return Err(JsxError::UnsupportedShape {
+                        line: end + 1,
+                        reason: "unsupported tsp:server named import",
+                    });
+                }
+                if imported == local {
+                    bindings.push(imported.to_string());
+                } else {
+                    bindings.push(format!("{imported}: {local}"));
+                }
+            }
+            if !bindings.is_empty() {
+                out.push_str("const { ");
+                out.push_str(&bindings.join(", "));
+                out.push_str(" } = __tspServer;\n");
+            }
+            i = end;
+        } else {
+            out.push_str(lines[i]);
+            out.push('\n');
+        }
+        i += 1;
+    }
+    Ok(out)
 }
 
 /// Wrap a transformed module body in a small "evaluate GET and print
@@ -232,7 +328,82 @@ pub fn wrap_for_bun_cli(
     out.push_str("// Generated by TSP v2 PoC 1 slice 16b (jsx.rs)\n");
     out.push_str("// Transformed .tsp -> runnable .js for `bun run tempfile`.\n");
     out.push_str("// Do not edit by hand; the host regenerates this on every request.\n");
-    out.push_str("const __tspConsoleLog = globalThis.console ? globalThis.console.log : (...a) => print(...a);\nconst __tspServiceLogs = [];\nconst __tspSessionWrites = [];\n");
+    out.push_str("const __tspConsoleLog = globalThis.console ? globalThis.console.log : (...a) => print(...a);\nconst __tspServiceLogs = [];\nconst __tspSessionWrites = [];\nconst __tspCookieWrites = [];\n");
+    out.push_str(
+        "const React = {\n\
+         \x20 Fragment: Symbol.for('react.fragment'),\n\
+         \x20 createElement(__type__, __props__, ...__children__) {\n\
+         \x20\x20 const __p__ = Object.assign({}, __props__ || {});\n\
+         \x20\x20 __p__.children = __children__.length === 1 ? __children__[0] : __children__;\n\
+         \x20\x20 return {type: __type__, key: __p__.key || null, ref: __p__.ref || null, props: __p__};\n\
+         \x20 },\n\
+         };\n\
+         globalThis.React = React;\n\
+         const __tspFragments = new Map();\n\
+         function __tspFragment__(__name__, __handler__) {\n\
+         \x20 if (typeof __handler__ !== 'function') throw new Error('fragment handler must be a function');\n\
+         \x20 __tspFragments.set(__name__, __handler__);\n\
+         \x20 return __handler__;\n\
+         }\n\
+         function __tspRaw__(__value__) { return {__tspRaw: String(__value__)}; }\n\
+         function __tspInit__(__init__) { return Object.assign({}, __init__ || {}); }\n\
+         function __tspJson__(__value__, __init__) {\n\
+         \x20 const __headers__ = new Headers((__init__ || {}).headers || {});\n\
+         \x20 if (!__headers__.has('content-type')) __headers__.set('content-type', 'application/json; charset=utf-8');\n\
+         \x20 return new Response(JSON.stringify(__value__), Object.assign(__tspInit__(__init__), {headers: __headers__}));\n\
+         }\n\
+         function __tspText__(__value__, __init__) {\n\
+         \x20 const __headers__ = new Headers((__init__ || {}).headers || {});\n\
+         \x20 if (!__headers__.has('content-type')) __headers__.set('content-type', 'text/plain; charset=utf-8');\n\
+         \x20 return new Response(String(__value__), Object.assign(__tspInit__(__init__), {headers: __headers__}));\n\
+         }\n\
+         function __tspHtml__(__value__, __init__) {\n\
+         \x20 const __headers__ = new Headers((__init__ || {}).headers || {});\n\
+         \x20 if (!__headers__.has('content-type')) __headers__.set('content-type', 'text/html; charset=utf-8');\n\
+         \x20 return new Response(String(__value__), Object.assign(__tspInit__(__init__), {headers: __headers__}));\n\
+         }\n\
+         function __tspRedirect__(__location__, __status__) {\n\
+         \x20 const __headers__ = new Headers({'location': String(__location__)});\n\
+         \x20 return new Response(null, {status: __status__ === undefined ? 302 : __status__, headers: __headers__});\n\
+         }\n\
+         function __tspNotFound__() { return __tspText__('Not Found', {status: 404}); }\n\
+         class __tspHttpError__ extends Error {\n\
+         \x20 constructor(__status__, __message__, __init__) { super(__message__); this.name = 'HttpError'; this.status = __status__; this.headers = new Headers((__init__ || {}).headers || {}); }\n\
+         }\n\
+         const __tspServer = Object.freeze({json: __tspJson__, redirect: __tspRedirect__, text: __tspText__, html: __tspHtml__, notFound: __tspNotFound__, HttpError: __tspHttpError__, fragment: __tspFragment__, raw: __tspRaw__});\n"
+    );
+    out.push_str(
+        "function __tspEscape__(__value__) {\n\
+         \x20 return String(__value__).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\\\"/g, '&quot;').replace(/'/g, '&#39;');\n\
+         }\n\
+         async function __tspRenderNode__(__node__, __child__) {\n\
+         \x20 __node__ = await __node__;\n\
+         \x20 if (__node__ == null || typeof __node__ === 'boolean') return '';\n\
+         \x20 if (typeof __node__ === 'string') return __child__ ? __tspEscape__(__node__) : __node__;\n\
+         \x20 if (typeof __node__ === 'number' || typeof __node__ === 'bigint') return String(__node__);\n\
+         \x20 if (Array.isArray(__node__)) return (await Promise.all(__node__.map(__n__ => __tspRenderNode__(__n__, true)))).join('');\n\
+         \x20 if (__node__.__tspRaw !== undefined) return __node__.__tspRaw;\n\
+         \x20 if (typeof __node__ !== 'object' || !__node__.props) throw new Error('TSP3102: object cannot be rendered as an HTML child');\n\
+         \x20 const __type__ = __node__.type;\n\
+         \x20 const __props__ = __node__.props || {};\n\
+         \x20 if (__type__ === React.Fragment) return __tspRenderNode__(__props__.children, true);\n\
+         \x20 if (typeof __type__ === 'function') return __tspRenderNode__(__type__(__props__), true);\n\
+         \x20 if (typeof __type__ !== 'string') throw new Error('TSP3103: unsupported JSX element type');\n\
+         \x20 let __attrs__ = '';\n\
+         \x20 for (const [__rawName__, __value__] of Object.entries(__props__)) {\n\
+         \x20\x20 if (__rawName__ === 'children' || __rawName__ === 'key' || __rawName__ === 'ref') continue;\n\
+         \x20\x20 const __name__ = __rawName__ === 'className' ? 'class' : (__rawName__ === 'htmlFor' ? 'for' : __rawName__);\n\
+         \x20\x20 if (typeof __value__ === 'function') throw new Error('TSP3105: function-valued HTML attributes are not serializable');\n\
+         \x20\x20 if (__value__ == null || __value__ === false) continue;\n\
+         \x20\x20 if (__value__ === true) { __attrs__ += ' ' + __name__; continue; }\n\
+         \x20\x20 if (typeof __value__ === 'object') throw new Error('TSP3104: object-valued HTML attributes are not serializable');\n\
+         \x20\x20 __attrs__ += ' ' + __name__ + '=\"' + __tspEscape__(__value__) + '\"';\n\
+         \x20 }\n\
+         \x20 const __void__ = /^(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)$/i.test(__type__);\n\
+         \x20 if (__void__) return '<' + __type__ + __attrs__ + '>';\n\
+         \x20 return '<' + __type__ + __attrs__ + '>' + await __tspRenderNode__(__props__.children, true) + '</' + __type__ + '>';\n\
+         }\n"
+    );
     if let Some(json) = ctx_json {
         // Embed the Context JSON as a literal so the
         // page does not have to read process.env (and
@@ -295,7 +466,20 @@ pub fn wrap_for_bun_cli(
              \x20 __tspReqInit.duplex = 'half';\n\
              }\n\
              __tspContext.request = new Request(__tspReqUrl, __tspReqInit);\n\
-             __tspContext.signal = new AbortController().signal;\n\
+             // Slice 16n' (Phase 8): make ctx.signal a real,\n\
+             // abortable AbortSignal. The host writes `ABORT_MARKER`\n\
+             // (the single marker byte jsc_bridge.rs writes to bun\n\
+             // stdin) when the per-request timeout fires. A controller\n\
+             // is created once at module scope, the stdin listener\n\
+             // (also module-scope) aborts it in time for the page's\n\
+             // cooperative-cancel code (spec 13.7).\n\
+             const __tspAbortCtrl__ = new AbortController();\n\
+             process.stdin.on('data', () => { try { __tspAbortCtrl__.abort(); } catch (__e__) {} });\n\
+             __tspContext.signal = __tspAbortCtrl__.signal;\n\
+             __tspContext.fragment = (__name__, __params__) => {\n\
+             \x20 const __q__ = new URLSearchParams({route: __tspContext.path, name: String(__name__), token: __tspContext.__tsp_fragment_token, ...(__params__ || {})});\n\
+             \x20 return '/__tsp/fragment?' + __q__.toString();\n\
+             };\n\
              // Slice 16f: ctx.cookies (spec sect.15). Parse the\n\
              // request's Cookie header (form: `a=b; c=d`) into a\n\
              // tiny read-only map, then expose read methods. The\n\
@@ -314,7 +498,6 @@ pub fn wrap_for_bun_cli(
              \x20 const __ckValue__ = __trimmed__.slice(__eq__ + 1).trim();\n\
              \x20 if (__ckName__) __tspCookieMap__.set(__ckName__, __ckValue__);\n\
              }\n\
-             const __tspCookieWrites = [];\n\
              function __tspFormatCookie__(__name__, __value__, __options__) {\n\
              \x20 let __line__ = __name__ + '=' + __value__;\n\
              \x20 const __opts__ = __options__ || {};\n\
@@ -324,6 +507,7 @@ pub fn wrap_for_bun_cli(
              \x20 if (__opts__.httpOnly) __line__ += '; HttpOnly';\n\
              \x20 if (__opts__.secure) __line__ += '; Secure';\n\
              \x20 if (__opts__.sameSite) __line__ += '; SameSite=' + __opts__.sameSite;\n\
+             \x20 if (__opts__.expires instanceof Date && !Number.isNaN(__opts__.expires.getTime())) __line__ += '; Expires=' + __opts__.expires.toUTCString();\n\
              \x20 return __line__;\n\
              }\n\
              __tspContext.cookies = {\n\
@@ -334,23 +518,20 @@ pub fn wrap_for_bun_cli(
              };\n             // Slice 16j (Phase 8): hydrate ctx.services (spec\n             // sect.17). The host embeds a descriptor snapshot;\n             // kind='logger' becomes a log adapter whose calls\n             // buffer into __tspServiceLogs (carried back in the\n             // envelope -> host flushes into the runtime service);\n             // other descriptors surface read-only -- app code MUST\n             // NOT rely on wrapper identity across requests (17.3).\n             const __tspServicesRaw__ = __tspContext.services || {};\n             __tspContext.services = {};\n             for (const [__sName__, __sDesc__] of Object.entries(__tspServicesRaw__)) {\n             \x20 if (__sDesc__ && __sDesc__.kind === 'logger') {\n             \x20\x20 __tspContext.services[__sName__] = Object.assign({}, __sDesc__, {\n             \x20\x20\x20 info: (...__a__) => __tspServiceLogs.push({svc: __sName__, level: 'info', message: __a__.join(' ')}),\n             \x20\x20\x20 warn: (...__a__) => __tspServiceLogs.push({svc: __sName__, level: 'warn', message: __a__.join(' ')}),\n             \x20\x20\x20 error: (...__a__) => __tspServiceLogs.push({svc: __sName__, level: 'error', message: __a__.join(' ')}),\n             \x20\x20\x20 debug: (...__a__) => __tspServiceLogs.push({svc: __sName__, level: 'debug', message: __a__.join(' ')}),\n             \x20\x20 });\n             \x20 } else {\n             \x20\x20 __tspContext.services[__sName__] = Object.freeze(__sDesc__);\n             \x20 }\n             }\n             // Slice 16k (Phase 8): hydrate ctx.session\n             // (spec sect.16). The host embeds the current\n             // request's session view as {id, data};\n             // calls into the session buffer into\n             // __tspSessionWrites which the wrap carries\n             // back in the envelope -> host applies.\n             const __tspSessionRaw__ = __tspContext.session;\n             const __tspSessionData__ = (__tspSessionRaw__ && __tspSessionRaw__.data) ? __tspSessionRaw__.data : {};\n             const __tspSessionId__ = (__tspSessionRaw__ && __tspSessionRaw__.id) ? __tspSessionRaw__.id : '';\n             function __tspFormatSessionValue__(__v__) {\n             \x20 if (__v__ === null) return null;\n             \x20 if (typeof __v__ === 'boolean' || typeof __v__ === 'number' || typeof __v__ === 'string') return __v__;\n             \x20 if (Array.isArray(__v__)) return __v__.map(__tspFormatSessionValue__);\n             \x20 if (typeof __v__ === 'object') {\n             \x20\x20 const __out__ = {};\n             \x20\x20 for (const __k__ in __v__) if (Object.prototype.hasOwnProperty.call(__v__, __k__)) __out__[__k__] = __tspFormatSessionValue__(__v__[__k__]);\n             \x20\x20 return __out__;\n             \x20 }\n             \x20 return String(__v__);\n             }\n             __tspContext.session = {\n             \x20 id: __tspSessionId__,\n             \x20 get(__k__) { return Object.prototype.hasOwnProperty.call(__tspSessionData__, __k__) ? __tspSessionData__[__k__] : undefined; },\n             \x20 has(__k__) { return Object.prototype.hasOwnProperty.call(__tspSessionData__, __k__); },\n             \x20 set(__k__, __v__) { __tspSessionWrites.push({op: 'set', k: __k__, v: __tspFormatSessionValue__(__v__)}); },\n             \x20 delete(__k__) { __tspSessionWrites.push({op: 'delete', k: __k__}); },\n             \x20 clear() { __tspSessionWrites.push({op: 'clear'}); },\n             \x20 async regenerate() { __tspSessionWrites.push({op: 'regenerate'}); },\n             \x20 async destroy() { __tspSessionWrites.push({op: 'destroy'}); },\n             };\n             "
         );
     }
-    // Existence check + invocation + envelope emission.
-    // The user's transformed source (with `function METHOD(...)`
-    // declarations) is appended LAST so the call below sees
-    // the declarations in scope. Function declarations are
-    // hoisted in JS so the order is for code-clarity only,
-    // but we still keep the call-after pattern because the
-    // async envelope needs the function reference to exist.
-    let _ = write!(
-        out,
-        "if (typeof {method} !== 'function') {{\n  throw new Error('page does not export function {method}()');\n}}\n"
-    );
-    let call = if ctx_json.is_some() {
-        format!("const __tspResultPromise__ = {method}(__tspContext);\n")
-    } else {
-        format!("const __tspResultPromise__ = {method}();\n")
-    };
-    out.push_str(&call);
+    // Evaluate the page module before selecting the handler. Fragment
+    // exports are `const` bindings and therefore cannot be invoked before
+    // the source module has initialized them.
+    out.push_str(transformed);
+    out.push_str("\nconst __tspFragmentName__ = typeof __tspContext === 'undefined' ? undefined : __tspContext.__tsp_fragment;\n");
+    out.push_str("let __tspHandler__;\nif (__tspFragmentName__) __tspHandler__ = __tspFragments.get(__tspFragmentName__);\nelse __tspHandler__ = ");
+    out.push_str(method);
+    out.push_str(";\nif (typeof __tspHandler__ !== 'function') throw new Error(__tspFragmentName__ ? 'fragment not found: ' + __tspFragmentName__ : 'page does not export function ");
+    out.push_str(method);
+    out.push_str("()');\n");
+    if ctx_json.is_none() {
+        out.push_str("const __tspContext = undefined;\n");
+    }
+    out.push_str("const __tspResultPromise__ = Promise.resolve().then(() => __tspContext === undefined ? __tspHandler__() : __tspHandler__(__tspContext)).then(async (__result__) => typeof __result__ === 'object' && __result__ !== null && !(__result__ instanceof Response) ? await __tspRenderNode__(__result__, false) : __result__).catch((e) => { if (e && Number.isInteger(e.status)) return new Response(String(e.message || ''), {status: e.status, headers: e.headers || {}}); throw e; });\n");
     // Slice 16f: the wrap preamble now (a) builds
     // `ctx.cookies` with read methods and a write-buffer
     // (`__tspCookieWrites`), and (b) emits the response
@@ -366,7 +547,6 @@ pub fn wrap_for_bun_cli(
     out.push_str(
         "(async () => {\n         \x20let __tspBody__, __tspStatus__, __tspHeaders__, __tspType__;\n         \x20const __tspResult__ = await __tspResultPromise__;\n         \x20__tspHeaders__ = [];\n         \x20if (__tspResult__ instanceof Response) {\n         \x20\x20__tspType__ = 'response';\n         \x20\x20__tspStatus__ = __tspResult__.status;\n         \x20\x20for (const [__k__, __v__] of __tspResult__.headers) __tspHeaders__.push([__k__, __v__]);\n         \x20\x20__tspBody__ = await __tspResult__.text();\n         \x20} else if (typeof __tspResult__ === 'string') {\n         \x20\x20__tspType__ = 'html';\n         \x20\x20__tspStatus__ = 200;\n         \x20\x20__tspBody__ = __tspResult__;\n         \x20} else {\n         \x20\x20throw new Error('page returned invalid value (expected string or Response, got ' + (typeof __tspResult__) + ')');\n         \x20}\n         \x20// Merge runtime cookie writes into the outgoing headers\n         \x20// (spec sect.15: cookie writes MUST be reflected even when\n         \x20// the handler returns an HtmlNode). Each write becomes a\n         \x20// separate Set-Cookie line so multiple cookies on one\n         \x20// request don't collapse via the response's flatten loop.\n         \x20if (Array.isArray(__tspCookieWrites)) {\n         \x20\x20for (const __cookieLine__ of __tspCookieWrites) {\n         \x20\x20\x20__tspHeaders__.push(['Set-Cookie', __cookieLine__]);\n         \x20\x20}\n         \x20}\n         \x20const __tspEnvelope__ = JSON.stringify({type: __tspType__, status: __tspStatus__, headers: __tspHeaders__, body: __tspBody__, service_logs: __tspServiceLogs, session_writes: __tspSessionWrites});\n         \x20__tspConsoleLog('__TSP_OUT_V1__' + '\\n' + __tspEnvelope__);\n         process.exit(0);\n         })().catch((e) => { console.error(String(e && e.stack || e)); process.exit(1); });\n"
     );
-    out.push_str(transformed);
     out
 }
 
@@ -375,39 +555,88 @@ mod tests {
     use super::*;
 
     #[test]
-    fn strips_export_keyword() {
+    fn preserves_module_exports_for_bun_tsx_transpiler() {
         let src = "export function GET() { return 'x'; }\n";
         let out = tsx_to_js(src).unwrap();
         assert!(out.contains("function GET"));
-        assert!(!out.contains("export function GET"));
+        assert!(out.contains("export function GET"));
     }
 
     #[test]
-    fn inline_jsx_to_string_literal() {
+    fn rewrites_tsp_server_named_imports_and_async_exports() {
+        let src = "import { type Context, json, redirect as go } from \"tsp:server\";\nexport async function GET(ctx: Context) { return json({ok: true}); }\n";
+        let out = tsx_to_js(src).unwrap();
+        assert!(out.contains("const { json, redirect: go } = __tspServer;"), "got: {out}");
+        assert!(!out.contains("tsp:server"), "got: {out}");
+        assert!(out.contains("async function GET"), "got: {out}");
+        assert!(out.contains("export async function"), "got: {out}");
+    }
+
+    #[test]
+    fn rewrites_semicolon_free_and_multiline_tsp_server_imports() {
+        let src = "import {\n  json,\n  type Context\n} from 'tsp:server'\nexport async function GET(ctx: Context) { return json('ok') }\n";
+        let out = tsx_to_js(src).unwrap();
+        assert!(out.contains("const { json } = __tspServer;"), "got: {out}");
+        assert!(out.contains("async function GET(ctx: Context)"), "got: {out}");
+        assert!(!out.contains("tsp:server"), "got: {out}");
+    }
+
+    #[test]
+    fn rewrites_relative_imports_to_file_urls_and_rejects_tsp_imports() {
+        let dir = std::env::temp_dir().join(format!("tsp-v2-jsx-import-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("shared.ts"), "export const value = 'ok';\n").unwrap();
+        let out = rewrite_local_imports(
+            "import { value } from './shared';\n",
+            &dir,
+        )
+        .unwrap();
+        assert!(out.contains("file:///"), "got: {out}");
+        assert!(out.contains("shared.ts"), "got: {out}");
+        let err = rewrite_local_imports("import page from './page.tsp';\n", &dir).unwrap_err();
+        assert!(matches!(err, JsxError::UnsupportedShape { .. }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rewrites_relative_dynamic_imports_to_file_urls() {
+        let dir = std::env::temp_dir().join(format!("tsp-v2-dynamic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("lazy.ts"), "export const value = 1;\n").unwrap();
+        let out = rewrite_local_imports("const lazy = import('./lazy');\n", &dir).unwrap();
+        assert!(out.contains("file://"), "got: {out}");
+        assert!(!out.contains("./lazy"), "got: {out}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn preserves_typescript_for_bun_transpiler() {
+        let src = "export function GET() { return ': Context'; }\n";
+        let out = tsx_to_js(src).unwrap();
+        assert!(out.contains("return ': Context';"), "got: {out}");
+    }
+
+    #[test]
+    fn preserves_jsx_for_bun_transpiler() {
         let src = "export function GET() { return <h1>Hello</h1>; }\n";
         let out = tsx_to_js(src).unwrap();
-        assert!(out.contains("\"<h1>Hello</h1>\""), "got: {out}");
+        assert!(out.contains("return <h1>Hello</h1>;"), "got: {out}");
     }
 
     #[test]
     fn slice_6_fixture_full_transform() {
         let src = "// comment\nexport function GET() {\n  return <h1>Hello from TSP v2</h1>;\n}\n";
         let out = tsx_to_js(src).unwrap();
-        assert!(!out.contains("export function"));
+        assert!(out.contains("export function"));
         assert!(out.contains("function GET"));
-        assert!(
-            out.contains("\"<h1>Hello from TSP v2</h1>\""),
-            "got: {out}"
-        );
+        assert!(out.contains("<h1>Hello from TSP v2</h1>"), "got: {out}");
     }
 
     #[test]
-    fn nested_jsx_is_unsupported() {
-        // Slice 6 only handles flat single-line `<tag>text</tag>`.
-        // A nested form must error rather than silently mis-render.
+    fn nested_jsx_is_preserved_for_runtime_renderer() {
         let src = "export function GET() { return <div><h1>Hi</h1></div>; }\n";
-        let err = tsx_to_js(src).unwrap_err();
-        assert!(matches!(err, JsxError::UnsupportedShape { .. }));
+        let out = tsx_to_js(src).unwrap();
+        assert!(out.contains("<div><h1>Hi</h1></div>"), "got: {out}");
     }
 
     #[test]
@@ -422,10 +651,9 @@ mod tests {
         // No Context -> call the method with no argument.
         let body = "function GET() { return 'ok'; }\n";
         let wrapped = wrap_for_bun_cli(body, "GET", None);
-        assert!(wrapped.contains("const __tspResultPromise__ = GET();"));
+        assert!(wrapped.contains("__tspHandler__()"));
         assert!(wrapped.contains("__TSP_OUT_V1__"));
-        // And the ctx-json is NOT in the output.
-        assert!(!wrapped.contains("__tspContext"));
+        assert!(wrapped.contains("const __tspContext = undefined;"));
     }
 
     #[test]
@@ -436,8 +664,21 @@ mod tests {
         let json = r#"{"method":"GET"}"#;
         let wrapped = wrap_for_bun_cli(body, "GET", Some(json));
         assert!(wrapped.contains("const __tspContext = JSON.parse("));
-        assert!(wrapped.contains("const __tspResultPromise__ = GET(__tspContext);"));
+        assert!(wrapped.contains("__tspHandler__(__tspContext)"));
         assert!(wrapped.contains("__TSP_OUT_V1__"));
+    }
+
+    #[test]
+    fn wrap_emits_tsp_server_response_helpers() {
+        let wrapped = wrap_for_bun_cli(
+            "function GET() { return json({ok: true}); }\n",
+            "GET",
+            None,
+        );
+        assert!(wrapped.contains("const __tspServer = Object.freeze"), "got: {wrapped}");
+        assert!(wrapped.contains("application/json; charset=utf-8"), "got: {wrapped}");
+        assert!(wrapped.contains("__tspHttpError__"), "got: {wrapped}");
+        assert!(wrapped.contains("Promise.resolve().then"), "got: {wrapped}");
     }
 
     #[test]
@@ -453,7 +694,13 @@ mod tests {
         assert!(wrapped.contains("new URL("), "got: {wrapped}");
         assert!(wrapped.contains("searchParams"), "got: {wrapped}");
         assert!(wrapped.contains("new Request("), "got: {wrapped}");
-        assert!(wrapped.contains("new AbortController().signal"), "got: {wrapped}");
+        // Slice 16n': the signal is backed by a module-scope
+        // AbortController that the stdin 'data' listener aborts
+        // on the host's ABORT_MARKER (spec 13.7 timeout).
+        assert!(wrapped.contains("const __tspAbortCtrl__ = new AbortController()"), "got: {wrapped}");
+        assert!(wrapped.contains("process.stdin.on('data'"), "got: {wrapped}");
+        assert!(wrapped.contains("__tspAbortCtrl__.abort()"), "got: {wrapped}");
+        assert!(wrapped.contains("__tspContext.signal = __tspAbortCtrl__.signal"), "got: {wrapped}");
         // The request body is passed to Bun's native Request
         // for body-bearing methods (POST). Slice 16g
         // changed the wire form: base64 over the JSON
@@ -493,6 +740,9 @@ mod tests {
         assert!(wrapped.contains("has(__n__)"), "got: {wrapped}");
         // Write API: set/delete push formatted lines.
         assert!(wrapped.contains("__tspFormatCookie__"), "got: {wrapped}");
+        // Full CookieOptions support includes Date-based Expires.
+        assert!(wrapped.contains("__opts__.expires instanceof Date"), "got: {wrapped}");
+        assert!(wrapped.contains("__opts__.expires.toUTCString()"), "got: {wrapped}");
         // Async IIFE merges writes into the response header
         // array (Set-Cookie entries).
         assert!(wrapped.contains("['Set-Cookie', __cookieLine__]"), "got: {wrapped}");

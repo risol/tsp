@@ -19,8 +19,8 @@
 //! Earlier drafts of this module attempted to import `bun_runtime`
 //! types to "prove" the dep was reachable. That broke the build:
 //! bringing `bun_runtime` into this crate's rlib -- even via a
-//! `type X = bun_runtime::error::Error` alias -- forces the test
-//! binary to link against `bun_runtime`'s transitive deps
+//! `type X = bun_runtime::Error` alias -- forces the test binary
+//! to link against `bun_runtime`'s transitive deps
 //! (`bun_simdutf_sys`, `bun_alloc`, `bun_s3_signing`, ...), each of
 //! which references C extern symbols that live in the `bun` binary
 //! and are not exported by the `bun_runtime` rlib. The result is
@@ -50,9 +50,11 @@
 //! 1. Bun ships a public `bun_runtime::embed`-style API that creates
 //!    an isolated VM with overridable loader / module hooks.
 //! 2. The Bun fork (vendored at `bun/`, branch `bun-v1.4.0`) is
-//!    willing to expose `Run::boot` as `pub` and turn
-//!    `__BUN_RUNTIME_HOOKS` / `__BUN_LOADER_HOOKS` into
-//!    `extern "Rust"` symbols.
+//!    willing to expose an embedder-safe equivalent of
+//!    `Run::boot` / `Run::start`, or provide a supported isolated
+//!    VM entry point. `bun_jsc::VirtualMachine::init` and
+//!    `runtime_hooks()` are already public; they are not sufficient
+//!    to recreate Bun's higher-level startup contract by themselves.
 //! 3. A new use case requires in-process JSC for latency
 //!    (streaming, server-sent events) that subprocess cannot meet.
 //!
@@ -64,11 +66,12 @@
 //! When one of the re-evaluation triggers fires, the work is:
 //!
 //! 1. Replicate Bun's startup sequence up to the point of VM
-//!    creation: `bun_runtime::init()` followed by
+//!    creation: `bun_jsc::initialize(...)` followed by
 //!    `bun_jsc::VirtualMachine::init(InitOptions::default())`, with
 //!    the surrounding `bun_runtime` environment (timer pool,
 //!    resolver, env loader, loader hooks, dispatch table) installed
-//!    first.
+//!    first. The existing `Run::boot` helper is `pub(crate)`, so it
+//!    cannot currently be reused from this crate.
 //! 2. Provide a host function or builtin that gives JS code the
 //!    `tsp:server` / `tsp:jsx-runtime` modules the spec promises
 //!    (plan sect.7). Today the only way to ship those is via the
@@ -78,8 +81,9 @@
 //! 3. Verify the test-binary link story. The `bun_runtime` rlib
 //!    is not linkable into a foreign binary without dragging in
 //!    `bun_simdutf_sys` + `bun_alloc` + ... -- the foreign linker
-//!    does not see the C externs the `bun` binary provides. This
-//!    may require (a) Bun-side rlib hardening, or (b) a
+//!    does not see the C/ABI externs the `bun` binary provides.
+//!    The current probe produces thousands of unresolved symbols.
+//!    This may require (a) Bun-side rlib hardening, or (b) a
 //!    feature-gated stub that only enables the in-process test
 //!    path when the `bun` runtime symbols are available, or (c)
 //!    dropping the in-process test from `cargo test` and keeping

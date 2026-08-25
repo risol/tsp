@@ -24,8 +24,9 @@ workspace = true
 # Slice 7: in-process JSC bridge. We add `bun_runtime` so the host can
 # own the JavaScriptCore VM (plan sect.25.3) instead of shelling out
 # to the vendored `bun.exe`. The subprocess path in `jsc_bridge.rs`
-# stays as a fallback; the binary picks one via `TSP_JSC` (`subprocess`
-# is default, `in-process` switches to bun_runtime).
+# stays as a fallback; the v2 binary currently uses subprocess by design.
+# An in-process adapter is not wired until Bun exposes an embedder-safe
+# startup/linking surface (see docs/v2/adr/0001-subprocess-as-production-jsc.md).
 #
 # Cost: the first `cargo build` here takes 20-40 minutes on a clean
 # cache -- basically every Bun workspace crate needs to compile.
