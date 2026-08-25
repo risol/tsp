@@ -1,0 +1,10 @@
+{
+  "name": "websocket-server",
+  "module": "index.ts",
+  "type": "module",
+  "dependencies": {
+    "bufferutil": "4.1.0",
+    "utf-8-validate": "6.0.6",
+    "ws": "8.21.3"
+  }
+}

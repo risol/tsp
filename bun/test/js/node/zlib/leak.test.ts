@@ -1,0 +1,137 @@
+import { beforeAll, describe, expect, test } from "bun:test";
+import { isASAN, rss } from "harness";
+import { promisify } from "node:util";
+import zlib from "node:zlib";
+
+const input = Buffer.alloc(50000);
+for (let i = 0; i < input.length; i++) input[i] = Math.random();
+
+const upper = 1024 * 1024 * (isASAN ? 20 : 10);
+
+// The leak assertion (RSS stable across iterations) is quality-agnostic; the
+// default quality (11) makes each brotli test take multiple seconds in CI.
+const brotliOpts = { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 2 } };
+
+describe("zlib compression does not leak memory", () => {
+  beforeAll(() => {
+    for (let index = 0; index < 10_000; index++) {
+      zlib.deflateSync(input);
+    }
+    Bun.gc(true);
+    console.log("beforeAll done");
+  });
+
+  for (const compress of ["deflate", "gzip"] as const) {
+    test(
+      compress,
+      async () => {
+        for (let index = 0; index < 10_000; index++) {
+          await promisify(zlib[compress])(input);
+        }
+        const baseline = rss();
+        console.log(baseline);
+        for (let index = 0; index < 10_000; index++) {
+          await promisify(zlib[compress])(input);
+        }
+        Bun.gc(true);
+        const after = rss();
+        console.log(after);
+        console.log("-", after - baseline);
+        console.log("-", upper);
+        expect(after - baseline).toBeLessThan(upper);
+      },
+      0,
+    );
+  }
+
+  for (const compress of ["deflateSync", "gzipSync"] as const) {
+    test(
+      compress,
+      async () => {
+        for (let index = 0; index < 10_000; index++) {
+          zlib[compress](input);
+        }
+        const baseline = rss();
+        console.log(baseline);
+        for (let index = 0; index < 10_000; index++) {
+          zlib[compress](input);
+        }
+        Bun.gc(true);
+        const after = rss();
+        console.log(after);
+        console.log("-", after - baseline);
+        console.log("-", upper);
+        expect(after - baseline).toBeLessThan(upper);
+      },
+      0,
+    );
+  }
+
+  test("brotliCompress", async () => {
+    for (let index = 0; index < 1_000; index++) {
+      await promisify(zlib.brotliCompress)(input, brotliOpts);
+    }
+    const baseline = rss();
+    console.log(baseline);
+    for (let index = 0; index < 1_000; index++) {
+      await promisify(zlib.brotliCompress)(input, brotliOpts);
+    }
+    Bun.gc(true);
+    const after = rss();
+    console.log(after);
+    console.log("-", after - baseline);
+    console.log("-", upper);
+    expect(after - baseline).toBeLessThan(upper);
+  }, 0);
+
+  test("brotliCompressSync", async () => {
+    for (let index = 0; index < 1_000; index++) {
+      zlib.brotliCompressSync(input, brotliOpts);
+    }
+    const baseline = rss();
+    console.log(baseline);
+    for (let index = 0; index < 1_000; index++) {
+      zlib.brotliCompressSync(input, brotliOpts);
+    }
+    Bun.gc(true);
+    const after = rss();
+    console.log(after);
+    console.log("-", after - baseline);
+    console.log("-", upper);
+    expect(after - baseline).toBeLessThan(upper);
+  }, 0);
+
+  test("zstdCompress", async () => {
+    for (let index = 0; index < 1_000; index++) {
+      await promisify(zlib.zstdCompress)(input);
+    }
+    const baseline = rss();
+    console.log(baseline);
+    for (let index = 0; index < 1_000; index++) {
+      await promisify(zlib.zstdCompress)(input);
+    }
+    Bun.gc(true);
+    const after = rss();
+    console.log(after);
+    console.log("-", after - baseline);
+    console.log("-", upper);
+    expect(after - baseline).toBeLessThan(upper);
+  }, 0);
+
+  test("zstdCompressSync", async () => {
+    for (let index = 0; index < 1_000; index++) {
+      zlib.zstdCompressSync(input);
+    }
+    const baseline = rss();
+    console.log(baseline);
+    for (let index = 0; index < 1_000; index++) {
+      zlib.zstdCompressSync(input);
+    }
+    Bun.gc(true);
+    const after = rss();
+    console.log(after);
+    console.log("-", after - baseline);
+    console.log("-", upper);
+    expect(after - baseline).toBeLessThan(upper);
+  }, 0);
+});
