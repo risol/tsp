@@ -1386,15 +1386,78 @@ is green.
   - File upload multipart (16g deferred -- Bun 1.4
     parser hang).
   - `ctx.session` (Phase 8).
-- **Next:** slice 16m = persistent JS adapter realm
-  for call-capable services (spec sect.17). The
-  session side of Phase 8 is closed (16k in-memory
-  store + 16l Redis opt-in). After 16m: file /
+- **Next:** slice 16n = wrap-side abort listener so
+  `ctx.signal` actually fires inside the page (16i
+  shipped the host side / kill backstop; the page
+  never sees the abort marker because bun 1.4 stdin
+  data events are not guaranteed to fire while a
+  `setTimeout` is parked). After that: file /
   rotation logger backends (16j follow-up), then
-  the wrap-side abort listener (16i follow-up so
-  `ctx.signal` actually fires inside the page), then
-  spec sect.17.2 dev-tool diagnosis (Phase 11
-  territory).
+  spec sect.17.2 dev-tool diagnosis of page-owned
+  durable resources (Phase 11 territory). Phase 8's
+  service + session shape is closed; the
+  persistent-JS-adapter-realm RPC stays an
+  open-ended Phase 8 follow-up that depends on a
+  real persistent host process (16m only landed the
+  snapshot shape; the IPC channel is a separate
+  slice).
+
+### Slice 16m -- `time` service: call-capable read-only snapshot (done, bun commit `8dfefe6c`)
+
+- **Why:** spec sect.17 says services expose read
+  surfaces to pages; 16j shipped the fire-and-forget
+  logger, 16k shipped the host-driven session.
+  16m fills the third quadrant: a service the page
+  can **read** (not call) via `ctx.services.time`.
+  This is the simplest non-trivial demonstration of
+  a call-capable service surface that still respects
+  17.2 (`.tsp` modules MUST NOT own durable state) and
+  17.3 (no wrapper identity across requests).
+  A real persistent JS adapter realm with a round-trip
+  IPC is a separate slice; 16m pins down the snapshot
+  shape that any such realm will round-trip through.
+- **What landed (in `bun/src/runtime/tsp/services.rs`):**
+  - `BUILTIN_TIME = "time"`.
+  - `TimeService { started: Instant }` -- the host
+    captures a per-request snapshot via
+    `snapshot_now()`; the wire form is
+    `{kind:"time", scope:"runtime", iso:"YYYY-MM-DDTHH:MM:SS.sssZ", epoch_ms, uptime_ms}`.
+  - `format_iso8601_utc(SystemTime)` -- hand-rolled
+    UTC formatter, no `chrono` / `time` dep, kept
+    to the "no new dep" discipline.
+  - `Service for TimeService`: runtime-scoped,
+    `is_request_varying() = true` (the page may
+    read live values, so the generation cache must
+    not replay a stale snapshot).
+  - `ServiceRegistry::with_defaults` /
+    `with_backends` now register the time service
+    alongside logger + session. Server log:
+    `services registered: logger, session, time`.
+  - 5 unit tests (descriptor shape, snapshot
+    monotonicity, ISO-8601 epoch, etc.).
+- **Verify:** `cargo check --lib` 0 warnings. E2E
+  on `routes/time.tsp`:
+  ```
+  GET /time  -> 200 iso=2026-08-25T03:59:14.865Z                        epoch_ms=1787630354865                        uptime_ms=14315                        kind=time
+  GET /time  (50ms later) -> 200 uptime_ms grew by ~50
+  GET /session, GET /     -> 200 (16k / 16f regression-free)
+  ```
+  The page reads `ctx.services.time` as a normal
+  frozen JS object (the wrap preamble's existing
+  `Object.freeze(__sDesc__)` path covers everything
+  that isn't `kind === 'logger'`, so no JS-side
+  changes were required).
+- **Deferred (16n+):** wrap-side abort listener
+  (16i follow-up so `ctx.signal` fires inside the
+  page); file / rotation logger backends (16j
+  follow-up); spec sect.17.2 dev-tool diagnosis of
+  page-owned durable resources (Phase 11);
+  persistent JS adapter realm with a real IPC
+  channel (16n+; the time service shows the
+  snapshot shape, but the realm itself -- a long-
+  lived bun or Node process that hosts call-capable
+  services and round-trips RPC to the v2 host -- is
+  still open-ended).
 
 ### Slice 16l -- session backend abstraction + Redis opt-in (done, bun commit `c2aaa16a`)
 
