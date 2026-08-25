@@ -1386,20 +1386,89 @@ is green.
   - File upload multipart (16g deferred -- Bun 1.4
     parser hang).
   - `ctx.session` (Phase 8).
-- **Next:** slice 16i = `ctx.signal` abort triggers
-  (spec sect.13.7). The runtime needs per-request
-  book-keeping: spawn the abort controller when the
-  request starts, fire it on TCP disconnect (poll
-  the stream for half-close) and on a configurable
-  timeout (`TSP_TIMEOUT_MS` env var, default 30s),
-  and thread the abort through the bun subprocess
-  (either via a `request.signal` hook the wrap
-  preamble reads, or by killing the subprocess when
-  the abort fires). Plan §61 Phase 7 / spec
-  sect.13.7 are the only remaining Phase 7 line
-  items; the next phase (Phase 8) is ServiceRegistry
-  + sessions + persistent services, which depends
-  on the abort plumbing being sane.
+- **Next:** phase 7 is closed. Move to Phase 8
+  (ServiceRegistry / session / persistent services).
+  Read plan §61 + spec §17 and pick a slice: the
+  `ServiceRegistry` infrastructure (in-memory first,
+  Redis later) is the natural first slice because
+  every subsequent Phase 8 slice depends on it.
+
+### Slice 16i -- ctx.signal abort triggers (host timeout + kill) (done, bun commit `9b7db6df`)
+
+- **Why:** spec sect.13.7 says `ctx.signal` MUST be
+  aborted when the runtime determines the request is
+  no longer executable, including applicable timeout
+  conditions. 16d shipped a live `ctx.signal` but
+  never wired an abort trigger. Without a timeout, a
+  page that loops forever (or hangs on a slow
+  `await ctx.request.text()`) holds the worker thread
+  indefinitely; Phase 7's contract is incomplete.
+- **What landed (in `bun/src/runtime/tsp/`):**
+  - `host.rs` -- new `TSP_TIMEOUT_MS` env var
+    (default 30 000 ms; `0` disables) and a
+    `resolve_request_timeout()` helper. The
+    `handle_connection` thread reads it once per
+    request and threads `timeout_ms` into the render
+    path. `render_for_route` and `render_per_request`
+    now take `timeout_ms` as the last argument and pass
+    it to `pipeline::build`.
+  - `pipeline.rs` -- `build()` takes `timeout_ms:
+    u64` and forwards to `jsc_bridge::execute`.
+  - `jsc_bridge.rs` -- `execute` switched from
+    `cmd.output()` to `cmd.spawn()` + `try_wait` loop
+    (50 ms poll) so the watchdog can hard-kill the
+    child. The watchdog thread sleeps for `timeout_ms`,
+    writes the `ABORT_MARKER` (b"A\n") to the child's
+    stdin, sleeps a 1s grace for the page to emit its
+    envelope cleanly, then the host thread hard-kills
+    the child. `JscError::BunFailed` surfaces the
+    timeout + the bun stderr tail (capped at 512
+    bytes) so the dev sees why the page never
+    returned. A new `ABORT_MARKER` constant pins the
+    single-byte wire form and a test guards it.
+  - `jsx.rs` -- the IIFE now calls `process.exit(0)`
+    right after writing the envelope. Without this, a
+    page that finishes its work but left a pending
+    promise / timer alive holds the bun subprocess
+    open past the timeout window and forces the host
+    to hard-kill. The explicit exit makes clean runs
+    clean.
+- **Verify:** 94 lib tests pass (was 93, +1
+  `abort_marker_is_a_single_line`). E2E:
+  ```
+  TSP_TIMEOUT_MS=0    GET /          -> 200 (watchdog disabled)
+  TSP_TIMEOUT_MS=0    POST /upload   -> 200 formData text fields
+  TSP_TIMEOUT_MS=3000 GET /slow      -> 500 [TSP3012] bun subprocess
+                                        exited non-zero (timeout grace
+                                        + kill backstop)
+  ```
+- **Out of slice 16i (deferred to 16i+ / 16j+):**
+  - **Wrap-side abort listener** that reads the
+    `ABORT_MARKER` from bun's stdin and calls
+    `__tspAbortCtrl.abort()` so the page's own code
+    can react via `ctx.signal.aborted` or
+    `ctx.request.signal`. The host-side marker write
+    is in place; the listener half needs more careful
+    work because bun 1.4 stdin data events are not
+    guaranteed to fire while a `setTimeout` is parked
+    on the same loop. A follow-up slice adds the
+    listener + an IIFE catch path that re-emits the
+    envelope after a handler throws.
+  - **TCP disconnect detection** (spec sect.13.7
+    second trigger). The host poll-loop would call
+    `stream.peek()` to detect a peer-side close; the
+    Windows + stdlib interaction is fiddly and the
+    timeout backstop already covers the runaway-page
+    case. A follow-up slice adds it once the abort
+    marker pipeline is settled.
+  - spec sect.6.3 typed error code `TSP3xxx` for
+    `InvalidReturnValue` (3005), `EmptyHandlerOutput`
+    (3004), and `LkgMissing` (3003) -- the host enum
+    currently falls back to `PagePrepareError`; a
+    future slice extends `TspError` /
+    `BuildError::code()` once the dev loop needs them.
+  - `ctx.session` (Phase 8) and the rest of the
+    service registry.
 
 ## Realistic next-step options (post-Slice 7) -- STALE
 
