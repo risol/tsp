@@ -1842,7 +1842,7 @@ fn render_per_request(
     route: &crate::router::Route,
     requested: HttpMethod,
     bun: &BunRuntime,
-    _ctx: &Context,
+    ctx: &Context,
     ctx_json: &str,
     timeout_ms: u64,
     cancellation: &CancellationToken,
@@ -1860,6 +1860,8 @@ fn render_per_request(
                 ctx_json,
                 timeout_ms,
                 cancellation,
+                &ctx.headers,
+                &ctx.body,
             ) {
                 Ok(body) => ("HTTP/1.1 200 OK", "text/html; charset=utf-8", None, body),
                 Err(e) => {
@@ -1935,7 +1937,7 @@ fn render_for_route(
     page_ref: &PageRef,
     registry: &PageRegistry,
     bun: &BunRuntime,
-    _ctx: &Context,
+    ctx: &Context,
     ctx_json: &str,
     timeout_ms: u64,
     cancellation: &CancellationToken,
@@ -1986,6 +1988,8 @@ fn render_for_route(
                         ctx_json,
                         timeout_ms,
                         cancellation,
+                        &ctx.headers,
+                        &ctx.body,
                     );
                     match build_result {
                         Ok(body) => {

@@ -29,13 +29,17 @@ use std::sync::Arc;
 
 use bun_runtime_tsp::generation::{PageRef, PageRegistry};
 use bun_runtime_tsp::host;
-use bun_runtime_tsp::jsc_bridge::{self, BunRuntime};
+use bun_runtime_tsp::jsc_bridge::{self, BunRuntime, PersistentBunWorker};
 use bun_runtime_tsp::module_graph::ModuleGraph;
 use bun_runtime_tsp::router::RouteTable;
 use bun_runtime_tsp::services::SESSION_STORE_CAP_DEFAULT;
 use bun_runtime_tsp::services::ServiceRegistry;
 use bun_runtime_tsp::session_backend::{MemoryBackend, RedisBackend, SessionBackend};
 use bun_runtime_tsp::watcher::{self, WatchConfig};
+use bun_runtime_tsp::worker::pool::WorkerPool;
+use bun_runtime_tsp::worker::lifecycle::RecyclePolicy;
+use bun_runtime_tsp::worker::sandbox::ResourceLimits;
+use bun_runtime_tsp::worker::application::{Application, ApplicationRegistry, WorkerGroup};
 
 fn main() -> ExitCode {
     match std::env::args().nth(1).as_deref() {
@@ -89,14 +93,94 @@ fn serve_main() -> ExitCode {
         }
     };
 
-    let bun: &'static BunRuntime = match jsc_bridge::resolve_bun_bin() {
-        Ok(p) => leak_bun(BunRuntime { bin: p }),
+    let embedded_worker_enabled = matches!(
+        std::env::var("TSP_EMBEDDED_WORKER").as_deref(),
+        Ok("1") | Ok("true")
+    );
+    let bun: &'static BunRuntime = if embedded_worker_enabled {
+        let worker_binary = match resolve_worker_bin() {
+            Ok(path) => path,
+            Err(error) => {
+                eprintln!("TSPv2PoC1: {error}");
+                return ExitCode::from(2);
+            }
+        };
+        let socket_dir = std::env::temp_dir().join(format!("tsp-v24-workers-{}", std::process::id()));
+        if let Err(error) = std::fs::create_dir_all(&socket_dir) {
+            eprintln!("TSPv2PoC1: cannot create worker socket directory: {error}");
+            return ExitCode::from(2);
+        }
+        let worker_count = std::env::var("TSP_WORKER_COUNT")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(1)
+            .max(1);
+        let max_in_flight = std::env::var("TSP_WORKER_MAX_IN_FLIGHT")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(worker_count * 2)
+            .max(worker_count);
+        let recycle_policy = RecyclePolicy {
+            max_requests: env_u64("TSP_WORKER_MAX_REQUESTS"),
+            max_age: env_u64("TSP_WORKER_MAX_AGE_MS").map(std::time::Duration::from_millis),
+            max_memory_bytes: env_u64("TSP_WORKER_MAX_MEMORY_BYTES"),
+        };
+        let resource_limits = ResourceLimits {
+            cgroup_root: std::env::var_os("TSP_CGROUP_ROOT").map(PathBuf::from),
+            memory_max: env_u64("TSP_WORKER_MEMORY_MAX"),
+            cpu_max: std::env::var("TSP_WORKER_CPU_MAX").ok(),
+            pids_max: env_u64("TSP_WORKER_PIDS_MAX"),
+        };
+        let pool = WorkerPool::new(worker_binary.clone(), socket_dir, worker_count, max_in_flight)
+            .with_recycle_policy(recycle_policy)
+            .with_resource_limits(resource_limits);
+        let pool = Arc::new(pool);
+        let application_name = std::env::var("TSP_APPLICATION_NAME").unwrap_or_else(|_| "main".into());
+        ApplicationRegistry::global().register(Application::new(
+            application_name,
+            WorkerGroup::new(Arc::clone(&pool)),
+        ));
+        if let Err(error) = pool.start() {
+            eprintln!("TSPv2PoC1: embedded worker failed to start: {error}");
+            return ExitCode::from(2);
+        }
+        eprintln!(
+            "TSPv2PoC1: v2.4 embedded worker enabled ({})",
+            worker_binary.display()
+        );
+        leak_bun(BunRuntime {
+            bin: worker_binary,
+            persistent_worker: None,
+            embedded_worker: None,
+            embedded_pool: Some(pool),
+        })
+    } else {
+        match jsc_bridge::resolve_bun_bin() {
+        Ok(p) => {
+            let persistent_worker = match std::env::var("TSP_PERSISTENT_WORKER").as_deref() {
+                Ok("1") | Ok("true") => {
+                    match PersistentBunWorker::new(p.clone(), Some(routes_dir.clone())) {
+                    Ok(worker) => {
+                        eprintln!("TSPv2PoC1: persistent Bun worker enabled");
+                        Some(Arc::new(worker))
+                    }
+                    Err(e) => {
+                        eprintln!("TSPv2PoC1: persistent Bun worker failed to start: {e}");
+                        return ExitCode::from(2);
+                    }
+                    }
+                }
+                _ => None,
+            };
+            leak_bun(BunRuntime { bin: p, persistent_worker, embedded_worker: None, embedded_pool: None })
+        }
         Err(e) => {
             eprintln!("TSPv2PoC1: {e}");
             return ExitCode::from(2);
         }
+        }
     };
-    eprintln!("TSPv2PoC1: bun = {}", bun.bin.display());
+    eprintln!("TSPv2PoC1: worker executable = {}", bun.bin.display());
 
     // Slice 16j (Phase 8): the host-owned ServiceRegistry.
     // `with_defaults` registers the runtime-scoped logger
@@ -189,8 +273,37 @@ fn resolve_routes_dir() -> PathBuf {
 
 fn print_help() {
     println!(
-        "TSP v2 commands:\n  tspserver_v2              run the native HTTP server\n  tspserver_v2 check       validate routes and local imports\n  tspserver_v2 routes      list filesystem routes and exports\n  tspserver_v2 graph       print the resolved module graph\n\nEnvironment:\n  TSP_ROUTES_DIR       route root (default: routes)\n  TSP_PUBLIC_DIR       public asset root (default: public)\n  TSP_PORT             HTTP port (default: 3000)\n  TSP_BUN_BIN          explicit bundled Bun runtime path\n  TSP_INVALIDATION_FILE shared cross-worker invalidation log"
+        "TSP v2 commands:\n  tspserver_v2              run the native HTTP server\n  tspserver_v2 check       validate routes and local imports\n  tspserver_v2 routes      list filesystem routes and exports\n  tspserver_v2 graph       print the resolved module graph\n\nEnvironment:\n  TSP_ROUTES_DIR       route root (default: routes)\n  TSP_PUBLIC_DIR       public asset root (default: public)\n  TSP_PORT             HTTP port (default: 3000)\n  TSP_BUN_BIN          legacy one-shot Bun runtime path\n  TSP_PERSISTENT_WORKER legacy external Bun worker\n  TSP_EMBEDDED_WORKER  enable v2.4 Rust worker with embedded Bun\n  TSP_WORKER_BIN       Bun executable containing the embedded worker\n  TSP_INVALIDATION_FILE shared cross-worker invalidation log\n  TSP_WORKER_MAX_REQUESTS recycle after N requests\n  TSP_WORKER_MAX_AGE_MS recycle after this many milliseconds\n  TSP_WORKER_MAX_MEMORY_BYTES recycle after RSS reaches this limit\n  TSP_CGROUP_ROOT explicit Linux cgroup v2 parent directory\n  TSP_WORKER_MEMORY_MAX / TSP_WORKER_CPU_MAX / TSP_WORKER_PIDS_MAX cgroup limits"
     );
+}
+
+fn env_u64(name: &str) -> Option<u64> {
+    std::env::var(name)
+        .ok()?
+        .parse::<u64>()
+        .ok()
+        .filter(|value| *value > 0)
+}
+
+fn resolve_worker_bin() -> Result<PathBuf, String> {
+    if let Ok(path) = std::env::var("TSP_WORKER_BIN") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Ok(path);
+        }
+        return Err(format!("TSP_WORKER_BIN does not point to a file: {}", path.display()));
+    }
+    let executable_dir = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(PathBuf::from));
+    let filename = if cfg!(windows) { "bun-debug.exe" } else { "bun-debug" };
+    if let Some(dir) = executable_dir {
+        let candidate = dir.join(filename);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+    Err("embedded worker executable not found; set TSP_WORKER_BIN".into())
 }
 
 fn run_routes() -> ExitCode {

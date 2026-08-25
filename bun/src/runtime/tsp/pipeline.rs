@@ -80,9 +80,11 @@ pub fn build(
     ctx_json: &str,
     timeout_ms: u64,
     cancellation: &CancellationToken,
+    request_headers: &[(String, String)],
+    request_body: &[u8],
 ) -> Result<String, BuildError> {
     let source = page::prepare(route).map_err(BuildError::Prepare)?;
-    jsc_bridge::execute_from_path(
+    jsc_bridge::execute_from_path_with_request(
         bun,
         &source.text,
         method,
@@ -90,6 +92,8 @@ pub fn build(
         timeout_ms,
         cancellation,
         &route.source,
+        request_headers,
+        request_body,
     )
     .map_err(BuildError::Jsc)
 }

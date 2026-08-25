@@ -42,3 +42,4 @@ pub mod services;
 pub mod session_backend;
 pub mod static_files;
 pub mod watcher;
+pub mod worker;

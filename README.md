@@ -4,6 +4,9 @@
 
 A TypeScript server that executes `.tsp` files directly like PHP, designed for AI-driven development.
 
+[![CI](https://github.com/risol/tsp/actions/workflows/ci.yml/badge.svg)](https://github.com/risol/tsp/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/risol/tsp?display_name=tag)](https://github.com/risol/tsp/releases)
+
 ## Features
 
 - **Simple to Use** - Execute `.tsp` files directly like PHP

@@ -51,15 +51,54 @@ pub fn tsx_to_js(source: &str) -> Result<String, JsxError> {
 /// `.tsp` is intentionally rejected as an import target; route modules are
 /// entry points, not reusable library modules.
 pub fn rewrite_local_imports(source: &str, importer_dir: &std::path::Path) -> Result<String, JsxError> {
+    rewrite_local_imports_at_generation(source, importer_dir, None)
+}
+
+/// Rewrite local imports with a generation query. Bun's module cache keys
+/// file URLs, so a new query makes changed dependencies load into the
+/// persistent worker without restarting the master or creating a Bun child.
+pub fn rewrite_local_imports_for_generation(
+    source: &str,
+    importer_dir: &std::path::Path,
+    generation: u64,
+) -> Result<String, JsxError> {
+    rewrite_local_imports_at_generation(source, importer_dir, Some(generation))
+}
+
+fn rewrite_local_imports_at_generation(
+    source: &str,
+    importer_dir: &std::path::Path,
+    generation: Option<u64>,
+) -> Result<String, JsxError> {
     let mut out = String::with_capacity(source.len());
     for (line_no, line) in source.lines().enumerate() {
         let mut rewritten = line.to_string();
         for quote in ['"', '\''] {
             let marker = format!("from {quote}");
-            rewritten = rewrite_import_marker(&rewritten, &marker, quote, importer_dir, line_no + 1)?;
+            rewritten = rewrite_import_marker(
+                &rewritten,
+                &marker,
+                quote,
+                importer_dir,
+                line_no + 1,
+                generation,
+            )?;
             let marker = format!("import{quote}");
-            rewritten = rewrite_import_marker(&rewritten, &marker, quote, importer_dir, line_no + 1)?;
-            rewritten = rewrite_dynamic_import(&rewritten, quote, importer_dir, line_no + 1)?;
+            rewritten = rewrite_import_marker(
+                &rewritten,
+                &marker,
+                quote,
+                importer_dir,
+                line_no + 1,
+                generation,
+            )?;
+            rewritten = rewrite_dynamic_import(
+                &rewritten,
+                quote,
+                importer_dir,
+                line_no + 1,
+                generation,
+            )?;
         }
         out.push_str(&rewritten);
         out.push('\n');
@@ -72,6 +111,7 @@ fn rewrite_dynamic_import(
     quote: char,
     importer_dir: &std::path::Path,
     line_no: usize,
+    generation: Option<u64>,
 ) -> Result<String, JsxError> {
     let marker = format!("import({quote}");
     let Some(start) = line.find(&marker) else { return Ok(line.to_string()); };
@@ -92,7 +132,7 @@ fn rewrite_dynamic_import(
             reason: "local dynamic import could not be resolved",
         });
     };
-    let url = file_url(&path);
+    let url = file_url(&path, generation);
     let mut result = String::with_capacity(line.len() + url.len());
     result.push_str(&line[..spec_start]);
     result.push_str(&url);
@@ -106,6 +146,7 @@ fn rewrite_import_marker(
     quote: char,
     importer_dir: &std::path::Path,
     line_no: usize,
+    generation: Option<u64>,
 ) -> Result<String, JsxError> {
     let Some(start) = line.find(marker) else {
         return Ok(line.to_string());
@@ -131,7 +172,7 @@ fn rewrite_import_marker(
             reason: "local import could not be resolved",
         });
     };
-    let url = file_url(&path);
+    let url = file_url(&path, generation);
     let mut result = String::with_capacity(line.len() + url.len());
     result.push_str(&line[..spec_start]);
     result.push_str(&url);
@@ -156,14 +197,17 @@ fn resolve_local_module(importer_dir: &std::path::Path, specifier: &str) -> Opti
     candidates.into_iter().find(|path| path.is_file())
 }
 
-fn file_url(path: &std::path::Path) -> String {
+fn file_url(path: &std::path::Path, generation: Option<u64>) -> String {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let mut value = canonical.to_string_lossy().replace('\\', "/");
     value = value.replace('%', "%25").replace(' ', "%20").replace('#', "%23");
+    let suffix = generation
+        .map(|generation| format!("?tsp_generation={generation}"))
+        .unwrap_or_default();
     if value.starts_with('/') {
-        format!("file://{value}")
+        format!("file://{value}{suffix}")
     } else {
-        format!("file:///{value}")
+        format!("file:///{value}{suffix}")
     }
 }
 
@@ -550,6 +594,35 @@ pub fn wrap_for_bun_cli(
     out
 }
 
+/// Adapt the normal TSP wrapper for a Bun VM that stays alive across requests.
+///
+/// The page execution and response-envelope logic remains identical to the
+/// subprocess path. Only the transport changes: the envelope is placed on a
+/// well-known global for the native worker to read, and the wrapper does not
+/// call `process.exit`, which would tear down the embedded runtime.
+pub fn wrap_for_embedded_worker(
+    transformed: &str,
+    method: &str,
+    ctx_json: Option<&str>,
+) -> String {
+    let mut wrapped = wrap_for_bun_cli(transformed, method, ctx_json);
+    // A worker VM serves more than one request. Clear the previous request's
+    // result before loading the next entry point so a failed execution cannot
+    // accidentally reuse a stale envelope.
+    wrapped = format!(
+        "globalThis.__tspEmbeddedResponse = undefined;\nglobalThis.__tspEmbeddedError = undefined;\n{wrapped}"
+    );
+    let stdout_success = "__tspConsoleLog('__TSP_OUT_V1__' + '\\n' + __tspEnvelope__);\n         process.exit(0);";
+    let embedded_success = "globalThis.__tspEmbeddedResponse = __tspEnvelope__;";
+    if !wrapped.contains(stdout_success) {
+        return wrapped;
+    }
+    wrapped = wrapped.replace(stdout_success, embedded_success);
+    let stdout_error = "console.error(String(e && e.stack || e)); process.exit(1);";
+    let embedded_error = "globalThis.__tspEmbeddedError = String(e && e.stack || e);";
+    wrapped.replace(stdout_error, embedded_error)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,6 +669,21 @@ mod tests {
         let err = rewrite_local_imports("import page from './page.tsp';\n", &dir).unwrap_err();
         assert!(matches!(err, JsxError::UnsupportedShape { .. }));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn generation_import_urls_bust_persistent_worker_cache() {
+        let dir = std::env::temp_dir().join(format!("tsp-v2-jsx-generation-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("shared.ts"), "export const value = 'ok';\n").unwrap();
+        let out = rewrite_local_imports_for_generation(
+            "import { value } from './shared';\n",
+            &dir,
+            17,
+        )
+        .unwrap();
+        assert!(out.contains("tsp_generation=17"), "got: {out}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -654,6 +742,15 @@ mod tests {
         assert!(wrapped.contains("__tspHandler__()"));
         assert!(wrapped.contains("__TSP_OUT_V1__"));
         assert!(wrapped.contains("const __tspContext = undefined;"));
+    }
+
+    #[test]
+    fn embedded_wrapper_does_not_exit_or_write_stdout() {
+        let body = "function GET() { return 'ok'; }\n";
+        let wrapped = wrap_for_embedded_worker(body, "GET", None);
+        assert!(wrapped.contains("__tspEmbeddedResponse"));
+        assert!(!wrapped.contains("process.exit(0)"));
+        assert!(!wrapped.contains("__tspConsoleLog('__TSP_OUT_V1__"));
     }
 
     #[test]

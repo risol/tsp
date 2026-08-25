@@ -655,6 +655,10 @@ pub fn spawn(
                     &mut last_seen,
                     &mut dependency_index,
                 );
+                if !changed.changed_files.is_empty() {
+                    let generation = crate::jsc_bridge::bump_execution_generation();
+                    eprintln!("TSPv2PoC1: published execution generation {generation}");
+                }
                 if let Some(bus) = invalidation_bus.as_mut() {
                     if let Err(error) = bus.publish(&changed.changed_files) {
                         eprintln!("TSPv2PoC1: invalidation publish failed: {error}");

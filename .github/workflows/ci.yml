@@ -1,0 +1,101 @@
+name: TSP CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Public repositories use standard GitHub-hosted runners without charge.
+# Keep these labels on standard runners; do not replace them with larger
+# runner labels or self-hosted paid infrastructure.
+permissions:
+  contents: read
+
+concurrency:
+  group: tsp-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typescript:
+    name: TypeScript tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.14'
+
+      - name: Install root dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Run unit tests
+        run: bun test tests/unit
+
+  native-linux:
+    name: Native runtime (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+    defaults:
+      run:
+        working-directory: bun
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: rustup show active-toolchain
+
+      - name: Run native runtime tests
+        run: cargo test -p bun_runtime_tsp --lib --no-fail-fast
+
+      - name: Check Linux v2 host
+        run: cargo check -p bun_runtime_tsp --bin tspserver_v2 --target x86_64-unknown-linux-gnu
+
+  native-windows:
+    name: Native runtime (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+    defaults:
+      run:
+        working-directory: bun
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: rustup show active-toolchain
+
+      - name: Check Windows embedded worker
+        run: cargo check -p bun_bin --target x86_64-pc-windows-msvc
+
+  native-macos:
+    name: Native runtime (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+    defaults:
+      run:
+        working-directory: bun
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: rustup show active-toolchain
+
+      - name: Check macOS v2 host
+        run: cargo check -p bun_runtime_tsp --bin tspserver_v2

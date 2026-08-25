@@ -64,6 +64,7 @@ pub mod dns_jsc;
 pub mod image;
 pub mod test_runner;
 pub mod valkey_jsc;
+pub mod tsp_worker;
 
 // ─── crate-root re-exports for `cli/` submodules ────────────────────────────
 // Modules under `src/runtime/cli/**` use crate-root paths

@@ -195,6 +195,10 @@ pub(crate) unsafe extern "C" fn main(argc: c_int, argv: *const *const c_char) ->
     StackCheck::configure_thread();
     bun_io::ParentDeathWatchdog::install();
 
+    if bun_runtime::tsp_worker::requested() {
+        return bun_runtime::tsp_worker::run();
+    }
+
     // 7. CLI dispatch.
     bun_runtime::cli::Cli::start();
     // `Global::exit` is `-> !`; it coerces to the `c_int` return type.

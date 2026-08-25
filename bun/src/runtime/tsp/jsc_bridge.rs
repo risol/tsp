@@ -14,23 +14,340 @@
 //! have the time budget for the heavy cold compile.
 use std::fs;
 use std::io;
+use std::io::BufRead as _;
+use std::io::BufReader;
 use std::io::Read as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::Arc;
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use crate::jsx;
 use crate::router::HttpMethod;
+use crate::worker::manager::{ManagerError, WorkerManager};
+use crate::worker::pool::{PoolError, WorkerPool};
+use crate::worker::protocol::ExecuteRequest;
+use crate::worker::application::ApplicationRegistry;
 
 /// Where `bun.exe` lives. Resolved once at boot via
 /// [`resolve_bun_bin`]; the host can override via `TSP_BUN_BIN`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct BunRuntime {
     pub bin: PathBuf,
+    pub persistent_worker: Option<Arc<PersistentBunWorker>>,
+    /// v2.4 path: the master owns only this protocol manager. Bun/JSC lives
+    /// inside the executable started by the manager.
+    pub embedded_worker: Option<Arc<Mutex<WorkerManager>>>,
+    /// v2.4 multi-worker path. Each pool slot owns its own worker process and
+    /// embedded VM; the master only sees the protocol-facing pool.
+    pub embedded_pool: Option<Arc<WorkerPool>>,
+}
+
+const WORKER_PROTOCOL_PREFIX: &str = "__TSP_WORKER_V1__";
+const WORKER_SCRIPT: &str = include_str!("worker_runtime.ts");
+const WORKER_MAX_LINE_BYTES: usize = 64 * 1024 * 1024;
+static EXECUTION_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+pub fn bump_execution_generation() -> u64 {
+    EXECUTION_GENERATION.fetch_add(1, Ordering::AcqRel).saturating_add(1)
+}
+
+fn execution_generation() -> u64 {
+    EXECUTION_GENERATION.load(Ordering::Acquire)
+}
+
+/// A single persistent Bun process used by the first worker vertical slice.
+/// Requests are serialized deliberately; the manager/pool can be added after
+/// the lifecycle and protocol are proven with one worker.
+#[derive(Debug)]
+pub struct PersistentBunWorker {
+    bin: PathBuf,
+    app_root: Option<PathBuf>,
+    session: Mutex<Option<WorkerSession>>,
+    serial: Mutex<()>,
+}
+
+#[derive(Debug)]
+struct WorkerSession {
+    child: Arc<Mutex<Child>>,
+    stdin: Arc<Mutex<ChildStdin>>,
+    stdout: BufReader<ChildStdout>,
+}
+
+impl Drop for WorkerSession {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
+impl WorkerSession {
+    fn spawn(bin: &Path, app_root: Option<&Path>) -> Result<Self, JscError> {
+        let mut command = Command::new(bin);
+        command
+            .arg("--eval")
+            .arg(WORKER_SCRIPT)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(root) = app_root {
+            // The executed wrapper is written to the system temp directory.
+            // Keep Bun's cwd and package search roots aligned with the route
+            // application so persistent mode matches one-shot mode.
+            command.current_dir(root);
+            let mut node_paths = vec![root.join("node_modules")];
+            if let Some(parent) = root.parent() {
+                node_paths.push(parent.join("node_modules"));
+            }
+            if let Ok(cwd) = std::env::current_dir() {
+                node_paths.push(cwd.join("node_modules"));
+            }
+            let separator = if cfg!(windows) { ";" } else { ":" };
+            command.env(
+                "NODE_PATH",
+                node_paths
+                    .iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join(separator),
+            );
+        }
+        let mut child = command.spawn().map_err(JscError::WorkerSpawn)?;
+
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| JscError::WorkerProtocol("worker stdin was not piped".into()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| JscError::WorkerProtocol("worker stdout was not piped".into()))?;
+        if let Some(mut stderr) = child.stderr.take() {
+            thread::spawn(move || {
+                let mut sink = Vec::new();
+                let _ = stderr.read_to_end(&mut sink);
+            });
+        }
+
+        let child = Arc::new(Mutex::new(child));
+        let mut session = Self {
+            child,
+            stdin: Arc::new(Mutex::new(stdin)),
+            stdout: BufReader::new(stdout),
+        };
+
+        let mut line = String::new();
+        session
+            .stdout
+            .read_line(&mut line)
+            .map_err(JscError::WorkerSpawn)?;
+        if line.trim_end() != format!("{WORKER_PROTOCOL_PREFIX}ready") {
+            session.kill();
+            return Err(JscError::WorkerProtocol(format!(
+                "worker did not become ready: {}",
+                line.trim_end()
+            )));
+        }
+        Ok(session)
+    }
+
+    fn send(&self, line: &str) -> Result<(), JscError> {
+        let mut stdin = self
+            .stdin
+            .lock()
+            .map_err(|_| JscError::WorkerProtocol("worker stdin lock poisoned".into()))?;
+        stdin
+            .write_all(line.as_bytes())
+            .and_then(|_| stdin.flush())
+            .map_err(JscError::WorkerSpawn)
+    }
+
+    fn send_execute(&self, id: u64, path: &Path) -> Result<(), JscError> {
+        let encoded = percent_encode(path.to_string_lossy().as_bytes());
+        self.send(&format!("execute\t{id}\t{encoded}\n"))
+    }
+
+    fn read_response(&mut self, id: u64) -> Result<String, JscError> {
+        let mut line = String::new();
+        let expected_id = id.to_string();
+        loop {
+            line.clear();
+            let count = self
+                .stdout
+                .read_line(&mut line)
+                .map_err(JscError::WorkerSpawn)?;
+            if count == 0 {
+                return Err(JscError::WorkerExited);
+            }
+            if line.len() > WORKER_MAX_LINE_BYTES {
+                return Err(JscError::WorkerProtocol("worker response exceeded size limit".into()));
+            }
+            let payload = line
+                .strip_prefix(WORKER_PROTOCOL_PREFIX)
+                .unwrap_or_default()
+                .trim_end();
+            let mut fields = payload.splitn(3, '\t');
+            match fields.next() {
+                Some("response") if fields.next() == Some(expected_id.as_str()) => {
+                    return Ok(fields.next().unwrap_or_default().to_string());
+                }
+                Some("error") if fields.next() == Some(expected_id.as_str()) => {
+                    return Err(JscError::WorkerProtocol(
+                        fields.next().unwrap_or("worker execution failed").to_string(),
+                    ));
+                }
+                // Ignore non-protocol Bun output. User console output is not
+                // allowed to corrupt the response channel.
+                _ => {}
+            }
+        }
+    }
+
+    fn kill(&self) {
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+impl PersistentBunWorker {
+    pub fn new(bin: PathBuf, app_root: Option<PathBuf>) -> Result<Self, JscError> {
+        let session = WorkerSession::spawn(&bin, app_root.as_deref())?;
+        Ok(Self {
+            bin,
+            app_root,
+            session: Mutex::new(Some(session)),
+            serial: Mutex::new(()),
+        })
+    }
+
+    pub fn execute_file(
+        &self,
+        path: &Path,
+        timeout_ms: u64,
+        cancellation: &CancellationToken,
+    ) -> Result<String, JscError> {
+        let _serial = self
+            .serial
+            .lock()
+            .map_err(|_| JscError::WorkerProtocol("worker serialization lock poisoned".into()))?;
+        let mut slot = self
+            .session
+            .lock()
+            .map_err(|_| JscError::WorkerProtocol("worker session lock poisoned".into()))?;
+        if slot.is_none() {
+            *slot = Some(WorkerSession::spawn(&self.bin, self.app_root.as_deref())?);
+        }
+        let session = slot.as_mut().expect("worker session initialized");
+        let request_id = WORKER_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+        session.send_execute(request_id, path)?;
+
+        const WATCHDOG_RUNNING: u8 = 0;
+        const CHILD_COMPLETED: u8 = 1;
+        const WATCHDOG_TIMED_OUT: u8 = 2;
+        const WATCHDOG_CANCELLED: u8 = 3;
+        let watchdog_state = Arc::new(AtomicU8::new(WATCHDOG_RUNNING));
+        let watchdog = {
+            let state = Arc::clone(&watchdog_state);
+            let stdin = Arc::clone(&session.stdin);
+            let child = Arc::clone(&session.child);
+            let cancellation = cancellation.clone();
+            thread::spawn(move || {
+                let deadline = (timeout_ms > 0)
+                    .then(|| std::time::Instant::now() + Duration::from_millis(timeout_ms));
+                loop {
+                    if state.load(Ordering::SeqCst) != WATCHDOG_RUNNING {
+                        return;
+                    }
+                    let reason = if cancellation.is_cancelled() {
+                        WATCHDOG_CANCELLED
+                    } else if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+                        WATCHDOG_TIMED_OUT
+                    } else {
+                        thread::sleep(Duration::from_millis(10));
+                        continue;
+                    };
+                    if state
+                        .compare_exchange(
+                            WATCHDOG_RUNNING,
+                            reason,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        )
+                        .is_ok()
+                    {
+                        if let Ok(mut stdin) = stdin.lock() {
+                            let _ = writeln!(stdin, "cancel\t{request_id}");
+                            let _ = stdin.flush();
+                        }
+                        let grace_start = std::time::Instant::now();
+                        while grace_start.elapsed() < GRACE_AFTER_MARKER {
+                            if state.load(Ordering::SeqCst) == CHILD_COMPLETED {
+                                return;
+                            }
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                        if state.load(Ordering::SeqCst) != CHILD_COMPLETED {
+                            if let Ok(mut child) = child.lock() {
+                                let _ = child.kill();
+                            }
+                        }
+                    }
+                    return;
+                }
+            })
+        };
+
+        let response = session.read_response(request_id);
+        let _ = watchdog_state.compare_exchange(
+            WATCHDOG_RUNNING,
+            CHILD_COMPLETED,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+        let _ = watchdog.join();
+        let reason = watchdog_state.load(Ordering::SeqCst);
+        let should_restart = reason != CHILD_COMPLETED
+            || matches!(
+                &response,
+                Err(JscError::WorkerExited | JscError::WorkerSpawn(_))
+            );
+
+        let result = match reason {
+            WATCHDOG_TIMED_OUT => Err(JscError::TimedOut {
+                stderr_tail: "persistent worker timeout".into(),
+            }),
+            WATCHDOG_CANCELLED => Err(JscError::Cancelled),
+            _ => response,
+        };
+
+        if should_restart {
+            let old = slot.take();
+            drop(old);
+            *slot = WorkerSession::spawn(&self.bin, self.app_root.as_deref()).ok();
+        }
+        result.map(|envelope| format!("__TSP_OUT_V1__\n{envelope}"))
+    }
+}
+
+static WORKER_REQUEST_ID: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
+
+fn percent_encode(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len());
+    for &byte in bytes {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            output.push(byte as char);
+        } else {
+            output.push('%');
+            output.push(char::from(b"0123456789ABCDEF"[(byte >> 4) as usize]));
+            output.push(char::from(b"0123456789ABCDEF"[(byte & 0x0F) as usize]));
+        }
+    }
+    output
 }
 
 /// One-shot cancellation shared by the host connection and the Bun
@@ -80,6 +397,12 @@ pub enum JscError {
     /// the only `JscError` a `.tsp` author can fix by editing their
     /// own code (the rest are infra).
     Jsx(jsx::JsxError),
+    /// The persistent worker could not be started.
+    WorkerSpawn(io::Error),
+    /// The persistent worker violated the request/response protocol.
+    WorkerProtocol(String),
+    /// The persistent worker exited before returning a response.
+    WorkerExited,
 }
 
 impl std::fmt::Display for JscError {
@@ -100,6 +423,9 @@ impl std::fmt::Display for JscError {
             Self::EmptyStdout => write!(f, "bun produced no stdout (page returned undefined?)"),
             Self::WriteTemp(e) => write!(f, "write temp .js failed: {e}"),
             Self::Jsx(e) => write!(f, "{e}"),
+            Self::WorkerSpawn(e) => write!(f, "persistent worker spawn failed: {e}"),
+            Self::WorkerProtocol(e) => write!(f, "persistent worker protocol failed: {e}"),
+            Self::WorkerExited => write!(f, "persistent worker exited before responding"),
         }
     }
 }
@@ -122,6 +448,9 @@ impl JscError {
             Self::EmptyStdout => "TSP3013",
             Self::WriteTemp(_) => "TSP3014",
             Self::Jsx(_) => "TSP3002",
+            Self::WorkerSpawn(_) => "TSP3016",
+            Self::WorkerProtocol(_) => "TSP3017",
+            Self::WorkerExited => "TSP3018",
         }
     }
 
@@ -138,6 +467,9 @@ impl JscError {
             Self::EmptyStdout => "bun produced no stdout",
             Self::WriteTemp(_) => "writing bun temp file failed",
             Self::Jsx(_) => "jsx transform error",
+            Self::WorkerSpawn(_) => "persistent worker spawn failed",
+            Self::WorkerProtocol(_) => "persistent worker protocol failed",
+            Self::WorkerExited => "persistent worker exited",
         }
     }
 }
@@ -218,7 +550,18 @@ pub fn execute(
     timeout_ms: u64,
     cancellation: &CancellationToken,
 ) -> Result<String, JscError> {
-    execute_inner(bun, source, method, ctx_json, timeout_ms, cancellation, None, None)
+    execute_inner(
+        bun,
+        source,
+        method,
+        ctx_json,
+        timeout_ms,
+        cancellation,
+        None,
+        None,
+        None,
+        None,
+    )
 }
 
 /// Execute a page while resolving its relative imports against the route's
@@ -241,6 +584,8 @@ pub fn execute_from_dir(
         timeout_ms,
         cancellation,
         Some(source_dir),
+        None,
+        None,
         None,
     )
 }
@@ -267,6 +612,36 @@ pub fn execute_from_path(
         cancellation,
         Some(source_dir),
         Some(source_path),
+        None,
+        None,
+    )
+}
+
+/// Execute a page through the Master -> Worker IPC path while explicitly
+/// carrying the original HTTP headers and body in the request frame.
+pub fn execute_from_path_with_request(
+    bun: &BunRuntime,
+    source: &str,
+    method: HttpMethod,
+    ctx_json: Option<&str>,
+    timeout_ms: u64,
+    cancellation: &CancellationToken,
+    source_path: &Path,
+    headers: &[(String, String)],
+    body: &[u8],
+) -> Result<String, JscError> {
+    let source_dir = source_path.parent().unwrap_or_else(|| Path::new("."));
+    execute_inner(
+        bun,
+        source,
+        method,
+        ctx_json,
+        timeout_ms,
+        cancellation,
+        Some(source_dir),
+        Some(source_path),
+        Some(headers),
+        Some(body),
     )
 }
 
@@ -279,17 +654,31 @@ fn execute_inner(
     cancellation: &CancellationToken,
     source_dir: Option<&Path>,
     source_path: Option<&Path>,
+    request_headers: Option<&[(String, String)]>,
+    request_body: Option<&[u8]>,
 ) -> Result<String, JscError> {
+    let use_embedded_worker = bun.embedded_worker.is_some() || bun.embedded_pool.is_some();
     let source = match source_dir {
+        Some(dir) if use_embedded_worker => jsx::rewrite_local_imports_for_generation(
+            source,
+            dir,
+            execution_generation(),
+        )
+        .map_err(JscError::Jsx)?,
         Some(dir) => jsx::rewrite_local_imports(source, dir).map_err(JscError::Jsx)?,
         None => source.to_string(),
     };
     let js_body = jsx::tsx_to_js(&source).map_err(JscError::Jsx)?;
-    let mut wrapped = jsx::wrap_for_bun_cli(&js_body, method.as_str(), ctx_json);
+    let mut wrapped = if use_embedded_worker {
+        jsx::wrap_for_embedded_worker(&js_body, method.as_str(), ctx_json)
+    } else {
+        jsx::wrap_for_bun_cli(&js_body, method.as_str(), ctx_json)
+    };
     if let Some(path) = source_path {
         let source_url = format!("tsp://{}", path.to_string_lossy().replace('\\', "/"));
         wrapped.push_str(&format!("\n//# sourceURL={}\n", source_url));
     }
+    let script = wrapped.into_bytes();
 
     // Use a per-call temp file. On Windows `std::env::temp_dir()` is
     // `%TEMP%`; the unique suffix avoids collisions under concurrent
@@ -304,7 +693,78 @@ fn execute_inner(
             .unwrap_or(0)
     );
     tempfile.push(suffix);
-    fs::write(&tempfile, &wrapped).map_err(JscError::WriteTemp)?;
+    let application_name = std::env::var("TSP_APPLICATION_NAME").unwrap_or_else(|_| "main".into());
+    let registered_application = ApplicationRegistry::global().get(&application_name);
+    let registered_pool = registered_application
+        .as_ref()
+        .map(|application| application.workers().pool());
+    if let Some(pool) = registered_pool.or(bun.embedded_pool.as_ref()) {
+        let request = ExecuteRequest {
+            application: application_name.clone(),
+            method: method.as_str().to_string(),
+            path: source_path
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            deadline_ms: request_deadline_ms(timeout_ms),
+            headers: request_headers.unwrap_or(&[]).to_vec(),
+            body: request_body.unwrap_or(&[]).to_vec(),
+            script: script.clone(),
+            context_json: ctx_json.unwrap_or_default().to_string(),
+        };
+        let result = pool
+            .execute(request, timeout_ms)
+            .map_err(map_pool_error)?;
+        let _ = fs::remove_file(&tempfile);
+        if cancellation.is_cancelled() {
+            return Err(JscError::Cancelled);
+        }
+        let envelope = String::from_utf8(result.body)
+            .map_err(|_| JscError::WorkerProtocol("embedded worker response was not UTF-8".into()))?;
+        return Ok(format!("__TSP_OUT_V1__\n{envelope}"));
+    }
+
+    if let Some(worker) = &bun.embedded_worker {
+        let request = ExecuteRequest {
+            application: application_name.clone(),
+            method: method.as_str().to_string(),
+            path: source_path
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            deadline_ms: request_deadline_ms(timeout_ms),
+            headers: request_headers.unwrap_or(&[]).to_vec(),
+            body: request_body.unwrap_or(&[]).to_vec(),
+            script: script.clone(),
+            context_json: ctx_json.unwrap_or_default().to_string(),
+        };
+        let result = worker
+            .lock()
+            .map_err(|_| JscError::WorkerProtocol("worker manager mutex poisoned".into()))?
+            .execute_with_timeout(request, timeout_ms)
+            .map_err(map_manager_error)?;
+        let _ = fs::remove_file(&tempfile);
+        if cancellation.is_cancelled() {
+            return Err(JscError::Cancelled);
+        }
+        if result.status >= 400 {
+            return Err(JscError::WorkerProtocol(format!(
+                "embedded worker returned transport status {}",
+                result.status
+            )));
+        }
+        let envelope = String::from_utf8(result.body)
+            .map_err(|_| JscError::WorkerProtocol("embedded worker response was not UTF-8".into()))?;
+        return Ok(format!("__TSP_OUT_V1__\n{envelope}"));
+    }
+
+    // The legacy external paths still materialize the script in the master;
+    // the embedded IPC path above sends the script bytes to the worker.
+    fs::write(&tempfile, &script).map_err(JscError::WriteTemp)?;
+
+    if let Some(worker) = &bun.persistent_worker {
+        let result = worker.execute_file(&tempfile, timeout_ms, cancellation);
+        let _ = fs::remove_file(&tempfile);
+        return result;
+    }
 
     let mut cmd = Command::new(&bun.bin);
     cmd.arg("run").arg(&tempfile);
@@ -566,6 +1026,42 @@ fn execute_inner(
     Ok(stdout)
 }
 
+fn request_deadline_ms(timeout_ms: u64) -> u64 {
+    if timeout_ms == 0 {
+        return 0;
+    }
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|now| now.as_millis().checked_add(u128::from(timeout_ms)))
+        .and_then(|deadline| u64::try_from(deadline).ok())
+        .unwrap_or(u64::MAX)
+}
+
+fn map_manager_error(error: ManagerError) -> JscError {
+    match error {
+        ManagerError::Io(error) => JscError::WorkerSpawn(error),
+        ManagerError::Protocol(error) => JscError::WorkerProtocol(error.to_string()),
+        ManagerError::WorkerNotReady | ManagerError::WorkerExited => JscError::WorkerExited,
+        ManagerError::WorkerTimeout => JscError::TimedOut {
+            stderr_tail: "embedded worker deadline expired; worker was restarted".into(),
+        },
+        ManagerError::ResourceIsolation(error) => JscError::WorkerProtocol(error),
+        ManagerError::UnsupportedPlatform => {
+            JscError::WorkerProtocol("embedded worker transport is unsupported on this platform".into())
+        }
+    }
+}
+
+fn map_pool_error(error: PoolError) -> JscError {
+    match error {
+        PoolError::Manager(error) => map_manager_error(error),
+        PoolError::Backpressure => JscError::WorkerProtocol("embedded worker pool is full".into()),
+        PoolError::NoWorkers => JscError::WorkerExited,
+        PoolError::Poisoned => JscError::WorkerProtocol("worker pool mutex poisoned".into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -646,14 +1142,43 @@ mod tests {
             return;
         };
         let result = execute(
-            &BunRuntime { bin },
+            &BunRuntime { bin, persistent_worker: None, embedded_worker: None, embedded_pool: None },
             "export function GET(ctx) { return 'ok'; }\n",
         HttpMethod::Get,
         Some(r#"{"method":"GET","path":"/","query":"","params":{},"body_b64":"","headers":{}}"#),
         5_000,
         &CancellationToken::new(),
-    );
+        );
         assert!(result.is_ok(), "normal page must not wait for timeout: {result:?}");
+    }
+
+    #[test]
+    fn persistent_worker_reuses_one_process_for_multiple_requests() {
+        let Ok(bin) = resolve_bun_bin() else {
+            return;
+        };
+        let worker = match PersistentBunWorker::new(bin, None) {
+            Ok(worker) => worker,
+            Err(error) => panic!("persistent worker should start: {error}"),
+        };
+        let path = std::env::temp_dir().join(format!(
+            "tsp-v2-persistent-worker-test-{}.tsx",
+            std::process::id()
+        ));
+        let source = jsx::tsx_to_js("export function GET() { return 'persistent'; }\n")
+            .expect("fixture should transform");
+        let wrapped = jsx::wrap_for_bun_cli(&source, "GET", None);
+        fs::write(&path, wrapped).expect("worker fixture should be written");
+
+        for _ in 0..2 {
+            let result = worker
+                .execute_file(&path, 5_000, &CancellationToken::new())
+                .expect("persistent worker request should succeed");
+            assert!(result.contains("__TSP_OUT_V1__"));
+            assert!(result.contains("persistent"));
+        }
+
+        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -662,7 +1187,7 @@ mod tests {
             return;
         };
         let result = execute(
-            &BunRuntime { bin },
+            &BunRuntime { bin, persistent_worker: None, embedded_worker: None, embedded_pool: None },
             r#"
 import { type Context, json } from "tsp:server";
 export async function GET(ctx: Context) {
@@ -687,7 +1212,7 @@ export async function GET(ctx: Context) {
             return;
         };
         let result = execute(
-            &BunRuntime { bin },
+            &BunRuntime { bin, persistent_worker: None, embedded_worker: None, embedded_pool: None },
             r#"
 import { HttpError } from "tsp:server";
 export function GET() {
@@ -710,7 +1235,7 @@ export function GET() {
             return;
         };
         let result = execute(
-            &BunRuntime { bin },
+            &BunRuntime { bin, persistent_worker: None, embedded_worker: None, embedded_pool: None },
             r#"
 function Item({ value }: { value: string }) {
   return <li data-value={value}><span>{value}</span></li>;
@@ -734,7 +1259,7 @@ export async function GET(ctx: Context) {
             return;
         };
         let result = execute(
-            &BunRuntime { bin },
+            &BunRuntime { bin, persistent_worker: None, embedded_worker: None, embedded_pool: None },
             r#"
 import { type Context, fragment } from "tsp:server";
 export const list = fragment(async (ctx: Context) => <ul><li>one</li><li>two</li></ul>);
@@ -761,7 +1286,7 @@ export const list = fragment(async (ctx: Context) => <ul><li>one</li><li>two</li
         )
         .unwrap();
         let result = execute_from_dir(
-            &BunRuntime { bin },
+            &BunRuntime { bin, persistent_worker: None, embedded_worker: None, embedded_pool: None },
             r#"
 import { Shared } from "./shared";
 export function GET() { return <p><Shared /></p>; }
@@ -788,7 +1313,7 @@ export function GET() { return <p><Shared /></p>; }
         std::fs::write(package.join("package.json"), r#"{"name":"tsp-v2-fixture","module":"index.ts"}"#).unwrap();
         std::fs::write(package.join("index.ts"), "export const answer = 42;\n").unwrap();
         let result = execute_from_dir(
-            &BunRuntime { bin },
+            &BunRuntime { bin, persistent_worker: None, embedded_worker: None, embedded_pool: None },
             r#"
 import { answer } from "tsp-v2-fixture";
 export function GET() { return <p>{answer}</p>; }
@@ -816,7 +1341,7 @@ export function GET() { return <p>{answer}</p>; }
             cancel_later.cancel();
         });
         let result = execute(
-            &BunRuntime { bin },
+            &BunRuntime { bin, persistent_worker: None, embedded_worker: None, embedded_pool: None },
             "export async function GET(ctx) { await new Promise(() => {}); return 'never'; }\n",
             HttpMethod::Get,
             Some(r#"{"method":"GET","path":"/slow","query":"","params":{},"body_b64":"","headers":{}}"#),
