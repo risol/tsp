@@ -32,6 +32,7 @@ use bun_runtime_tsp::host;
 use bun_runtime_tsp::jsc_bridge::{self, BunRuntime};
 use bun_runtime_tsp::module_graph::ModuleGraph;
 use bun_runtime_tsp::router::RouteTable;
+use bun_runtime_tsp::services::ServiceRegistry;
 use bun_runtime_tsp::watcher::{self, WatchConfig};
 
 fn main() -> ExitCode {
@@ -82,6 +83,19 @@ fn main() -> ExitCode {
     };
     eprintln!("TSPv2PoC1: bun = {}", bun.bin.display());
 
+    // Slice 16j (Phase 8): the host-owned ServiceRegistry.
+    // `with_defaults` registers the runtime-scoped logger
+    // (spec sect.17). It is Box::leak'ed like the PageRegistry
+    // so every connection thread shares the same instance; it
+    // is never owned by a page generation, so reloads do not
+    // tear services down (plan sect.61 Phase 8 acceptance).
+    let services: &'static ServiceRegistry =
+        Box::leak(Box::new(ServiceRegistry::with_defaults()));
+    eprintln!(
+        "TSPv2PoC1: services registered: {}",
+        services.snapshot(&[]).iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
+    );
+
     // Slice 11b: build the module graph (frozen at boot; slice 12
     // lets the watcher pick up new routes without a restart) and
     // spawn the watcher thread. Any file change under the routes
@@ -108,7 +122,7 @@ fn main() -> ExitCode {
         watcher::DEFAULT_POLL_MS
     );
 
-    if let Err(e) = host::serve("0.0.0.0", port, routes, registry, bun) {
+    if let Err(e) = host::serve("0.0.0.0", port, routes, registry, bun, services) {
         // serve returns only on a fatal listener error; dropping
         // watcher_handle here stops + joins the watcher thread.
         drop(watcher_handle);

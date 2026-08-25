@@ -34,6 +34,7 @@ use crate::generation::{
 };
 use crate::jsc_bridge::BunRuntime;
 use crate::pipeline;
+use crate::services::{LogLine, ServiceRegistry};
 use crate::router::{HttpMethod, MatchResult, RouteTable};
 use std::sync::Arc;
 
@@ -235,6 +236,12 @@ pub struct Context {
     /// Duplicate names are joined with ", " (the Web `Headers`
     /// combine rule for non-Set-Cookie headers).
     pub headers: Vec<(String, String)>,
+    /// `ctx.services` snapshot for the wire (spec sect.17).
+    /// Each entry is `(name, full JSON object)` -- the
+    /// runtime-scoped registry snapshot plus any request-scoped
+    /// services this request created (16j: registry only). The
+    /// wrap preamble hydrates these into `ctx.services`.
+    pub services: Vec<(String, String)>,
 }
 
 impl Context {
@@ -290,6 +297,20 @@ impl Context {
             json_string(&mut out, k);
             out.push(':');
             json_string(&mut out, v);
+        }
+        out.push_str("},\"services\":{");
+        let mut first = true;
+        for (name, json) in &self.services {
+            if !first {
+                out.push(',');
+            }
+            first = false;
+            json_string(&mut out, name);
+            out.push(':');
+            // `json` is a full pre-serialised JSON object from
+            // `Service::describe_json` (valid JSON, braces
+            // included) -- embed verbatim, do NOT re-escape.
+            out.push_str(json);
         }
         out.push_str("}}");
         out
@@ -364,6 +385,10 @@ struct EnvelopeOutcome {
     status_line: &'static str,
     body: String,
     headers: Vec<(String, String)>,
+    /// Log lines the page buffered via `ctx.services.*`
+    /// (spec sect.17 / slice 16j). The host flushes them
+    /// into the owning runtime service after parsing.
+    service_logs: Vec<LogLine>,
 }
 
 const ENVELOPE_TAG: &str = "__TSP_OUT_V1__";
@@ -680,6 +705,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
         status_line,
         body,
         headers,
+        service_logs,
     } = if head == ENVELOPE_TAG {
         match parse_json(body_json) {
             Some(JsonValue::Object(entries)) => {
@@ -692,6 +718,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
                 };
                 let body = obj.get("body").and_then(JsonValue::as_str).unwrap_or("").to_string();
                 let headers = parse_envelope_headers(obj.get("headers"));
+                let service_logs = parse_service_logs(obj.get("service_logs"));
                 match kind {
                     EnvelopeKind::Html => EnvelopeOutcome {
                         kind,
@@ -699,6 +726,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
                         status_line: "HTTP/1.1 200 OK",
                         body,
                         headers,
+                        service_logs: service_logs.clone(),
                     },
                     EnvelopeKind::Response => {
                         let status = obj.get("status").and_then(JsonValue::as_u16).unwrap_or(200);
@@ -714,6 +742,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
                             status_line,
                             body,
                             headers,
+                            service_logs: service_logs.clone(),
                         }
                     }
                     EnvelopeKind::Legacy => EnvelopeOutcome {
@@ -722,6 +751,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
                         status_line: "HTTP/1.1 200 OK",
                         body,
                         headers,
+                        service_logs: service_logs.clone(),
                     },
                 }
             }
@@ -731,6 +761,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
                 status_line: "HTTP/1.1 200 OK",
                 body: stdout.to_string(),
                 headers: Vec::new(),
+                service_logs: Vec::new(),
             },
         }
     } else {
@@ -741,6 +772,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
             status_line: "HTTP/1.1 200 OK",
             body: stdout.to_string(),
             headers: Vec::new(),
+            service_logs: Vec::new(),
         }
     };
 
@@ -750,6 +782,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
         status_line,
         body,
         headers,
+        service_logs,
     }
 }
 
@@ -787,6 +820,32 @@ fn parse_envelope_headers(v: Option<&JsonValue>) -> Vec<(String, String)> {
                 .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
                 .collect()
         }
+        _ => Vec::new(),
+    }
+}
+
+/// Extract the envelope's `service_logs` array (slice 16j).
+/// Wire shape (produced by the wrap preamble):
+/// `[{"svc": "logger", "level": "info", "message": "..."}, ...]`.
+/// Entries that are not objects or miss any of the three
+/// string fields are dropped (the page envelope stays valid;
+/// only the malformed line is lost).
+fn parse_service_logs(v: Option<&JsonValue>) -> Vec<LogLine> {
+    let Some(v) = v else { return Vec::new() };
+    match v {
+        JsonValue::Array(items) => items
+            .iter()
+            .filter_map(|item| {
+                let service = item.get("svc")?.as_str()?.to_string();
+                let level = item.get("level")?.as_str()?.to_string();
+                let message = item.get("message")?.as_str()?.to_string();
+                Some(LogLine {
+                    service,
+                    level,
+                    message,
+                })
+            })
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -940,6 +999,7 @@ pub fn serve(
     routes: Arc<RouteTable>,
     registry: &'static PageRegistry,
     bun: &'static BunRuntime,
+    services: &'static ServiceRegistry,
 ) -> Result<(), HostError> {
     let addr = format!("{host}:{port}");
     let listener = TcpListener::bind(&addr).map_err(HostError::Bind)?;
@@ -963,7 +1023,7 @@ pub fn serve(
         eprintln!("TSPv2PoC1: accepted {peer}");
         let routes_for_thread = Arc::clone(&routes);
         thread::spawn(move || {
-            if let Err(e) = handle_connection(stream, &routes_for_thread, registry, bun) {
+            if let Err(e) = handle_connection(stream, &routes_for_thread, registry, bun, services) {
                 eprintln!("TSPv2PoC1: {e}");
             }
         });
@@ -976,6 +1036,7 @@ fn handle_connection(
     routes: &Arc<RouteTable>,
     registry: &PageRegistry,
     bun: &BunRuntime,
+    services: &ServiceRegistry,
 ) -> Result<(), HostError> {
     // Slice 16d: read the full request (header block up to
     // CRLFCRLF + exactly Content-Length body bytes). Body
@@ -1054,6 +1115,10 @@ fn handle_connection(
                 params,
                 body,
                 headers,
+                // Slice 16j: `ctx.services` snapshot from the
+                // runtime-scoped registry (spec sect.17). The
+                // request-scoped list is empty in 16j.
+                services: services.snapshot(&[]),
             };
             match matched {
             MatchResult::Found { route, method: req_method } => {
@@ -1078,7 +1143,13 @@ fn handle_connection(
                 // param-less GET-style rendering).
                 let per_request = !ctx.body.is_empty()
                     || !ctx.query.is_empty()
-                    || !ctx.params.is_empty();
+                    || !ctx.params.is_empty()
+                    // Slice 16j: a registered runtime service that
+                    // reports `is_request_varying()` (e.g. the
+                    // logger's `total_lines`) makes every render
+                    // request-dependent -- the cache would replay a
+                    // stale service-state snapshot.
+                    || services.any_request_varying();
                 let (_status_line, _ct, allow_header, body) = if per_request {
                     render_per_request(&route, req_method, bun, &ctx, timeout_ms)
                 } else {
@@ -1090,6 +1161,14 @@ fn handle_connection(
                 // parse_envelope unpacks it and surfaces the
                 // correct status / content-type / body / headers.
                 let outcome = parse_envelope(&body);
+                // Slice 16j: flush the page's `ctx.services.*`
+                // log lines into the owning runtime service now
+                // that the envelope is back (the page ran in a
+                // throwaway subprocess; the envelope is the only
+                // back-channel). The flush lands BEFORE this
+                // response is written, so the next request's
+                // snapshot observes it.
+                services.flush_log_lines(&outcome.service_logs);
                 // The envelope is the source of truth for the
                 // page's actual status when the page ran. When
                 // the envelope is absent (Legacy), the body is
@@ -1775,6 +1854,7 @@ mod tests {
             params: std::collections::HashMap::new(),
             body: Vec::new(),
             headers: Vec::new(),
+            services: Vec::new(),
         };
         let s = ctx.to_json();
         // The exact wire form is part of the slice 16a
@@ -1789,6 +1869,73 @@ mod tests {
     }
 
     #[test]
+    fn context_to_json_serialises_services() {
+        // Slice 16j: the wire Context carries the
+        // `ctx.services` snapshot (spec sect.17). Values are
+        // pre-serialised JSON objects from the registry.
+        let ctx = Context {
+            method: HttpMethod::Get,
+            path: "/".to_string(),
+            query: String::new(),
+            params: std::collections::HashMap::new(),
+            body: Vec::new(),
+            headers: Vec::new(),
+            services: vec![(
+                "logger".to_string(),
+                "{\"kind\":\"logger\",\"scope\":\"runtime\",\"total_lines\":7}".to_string(),
+            )],
+        };
+        let s = ctx.to_json();
+        assert!(
+            s.contains("\"services\":{\"logger\":{\"kind\":\"logger\",\"scope\":\"runtime\",\"total_lines\":7}}"),
+            "got: {s}"
+        );
+    }
+
+    #[test]
+    fn envelope_parses_service_logs() {
+        // Slice 16j: the envelope may carry `service_logs`
+        // buffered by `ctx.services.*` calls in the page.
+        let envelope = "__TSP_OUT_V1__\n{\"type\":\"html\",\"body\":\"hi\",\"headers\":[],\"service_logs\":[{\"svc\":\"logger\",\"level\":\"info\",\"message\":\"hit\"},{\"svc\":\"logger\",\"level\":\"error\",\"message\":\"boom\"}]}\n";
+        let out = parse_envelope(envelope);
+        assert_eq!(out.kind, EnvelopeKind::Html);
+        assert_eq!(
+            out.service_logs,
+            vec![
+                LogLine {
+                    service: "logger".to_string(),
+                    level: "info".to_string(),
+                    message: "hit".to_string()
+                },
+                LogLine {
+                    service: "logger".to_string(),
+                    level: "error".to_string(),
+                    message: "boom".to_string()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn envelope_service_logs_are_dropped_when_malformed() {
+        // A page envelope stays valid even if a service_logs
+        // entry is malformed; only the bad entries are dropped
+        // (missing field, non-object item).
+        let envelope = "__TSP_OUT_V1__\n{\"type\":\"response\",\"status\":200,\"headers\":[],\"body\":\"ok\",\"service_logs\":[{\"svc\":\"logger\",\"level\":\"info\",\"message\":\"ok\"},{\"svc\":\"logger\",\"level\":\"info\"},42,\"junk\"]}\n";
+        let out = parse_envelope(envelope);
+        assert_eq!(out.kind, EnvelopeKind::Response);
+        assert_eq!(out.service_logs.len(), 1);
+        assert_eq!(out.service_logs[0].message, "ok");
+    }
+
+    #[test]
+    fn envelope_without_service_logs_has_empty_list() {
+        let envelope = "__TSP_OUT_V1__\n{\"type\":\"html\",\"body\":\"hi\",\"headers\":[]}\n";
+        let out = parse_envelope(envelope);
+        assert!(out.service_logs.is_empty());
+    }
+
+    #[test]
     fn context_to_json_with_query() {
         let ctx = Context {
             method: HttpMethod::Get,
@@ -1797,6 +1944,7 @@ mod tests {
             params: std::collections::HashMap::new(),
             body: Vec::new(),
             headers: Vec::new(),
+            services: Vec::new(),
         };
         let s = ctx.to_json();
         assert!(s.contains("\"q=hello&page=2\""), "got: {s}");
@@ -1814,6 +1962,7 @@ mod tests {
             params,
             body: Vec::new(),
             headers: Vec::new(),
+            services: Vec::new(),
         };
         let s = ctx.to_json();
         assert!(s.contains("\"id\":\"42\""), "got: {s}");
@@ -1833,6 +1982,7 @@ mod tests {
                 ("content-type".to_string(), "application/x-www-form-urlencoded".to_string()),
                 ("x-trace".to_string(), "abc".to_string()),
             ],
+            services: Vec::new(),
         };
         let s = ctx.to_json();
         // base64("hello=world") = "aGVsbG89d29ybGQ="
@@ -1857,6 +2007,7 @@ mod tests {
             params: std::collections::HashMap::new(),
             body: vec![0x00, 0x01, 0x02, 0xff, 0xfe, 0x80],
             headers: Vec::new(),
+            services: Vec::new(),
         };
         let s = ctx.to_json();
         // base64([0x00,0x01,0x02,0xff,0xfe,0x80]) = "AAEC//6A"

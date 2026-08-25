@@ -36,4 +36,5 @@ pub mod jsx;
 pub mod module_graph;
 pub mod page;
 pub mod router;
+pub mod services;
 pub mod watcher;
