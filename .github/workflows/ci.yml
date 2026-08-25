@@ -55,6 +55,17 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Set up bootstrap Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.14'
+
+      - name: Fetch Cargo path dependencies
+        run: |
+          bun scripts/build/fetch-cli.ts dep lolhtml oven-sh/lol-html 725ce499aa9b71e38b7a2d0a9fbb6d7294a4079e vendor/lolhtml build/cache/tarballs
+          bun scripts/build/fetch-cli.ts dep rust-argon2 sru-systems/rust-argon2 ed81866f163f0c7026aa6fd8388adf37242eb32a vendor/rust-argon2 build/cache/tarballs patches/rust-argon2/legacy-low-memory.patch
+        working-directory: bun
+
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
@@ -90,6 +101,17 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Set up bootstrap Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.14'
+
+      - name: Fetch Cargo path dependencies
+        run: |
+          bun scripts/build/fetch-cli.ts dep lolhtml oven-sh/lol-html 725ce499aa9b71e38b7a2d0a9fbb6d7294a4079e vendor/lolhtml build/cache/tarballs
+          bun scripts/build/fetch-cli.ts dep rust-argon2 sru-systems/rust-argon2 ed81866f163f0c7026aa6fd8388adf37242eb32a vendor/rust-argon2 build/cache/tarballs patches/rust-argon2/legacy-low-memory.patch
+        working-directory: bun
+
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
@@ -124,6 +146,17 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+
+      - name: Set up bootstrap Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.14'
+
+      - name: Fetch Cargo path dependencies
+        run: |
+          bun scripts/build/fetch-cli.ts dep lolhtml oven-sh/lol-html 725ce499aa9b71e38b7a2d0a9fbb6d7294a4079e vendor/lolhtml build/cache/tarballs
+          bun scripts/build/fetch-cli.ts dep rust-argon2 sru-systems/rust-argon2 ed81866f163f0c7026aa6fd8388adf37242eb32a vendor/rust-argon2 build/cache/tarballs patches/rust-argon2/legacy-low-memory.patch
+        working-directory: bun
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
