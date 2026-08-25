@@ -1386,21 +1386,96 @@ is green.
   - File upload multipart (16g deferred -- Bun 1.4
     parser hang).
   - `ctx.session` (Phase 8).
-- **Next:** slice 16n = wrap-side abort listener so
-  `ctx.signal` actually fires inside the page (16i
-  shipped the host side / kill backstop; the page
-  never sees the abort marker because bun 1.4 stdin
-  data events are not guaranteed to fire while a
-  `setTimeout` is parked). After that: file /
-  rotation logger backends (16j follow-up), then
-  spec sect.17.2 dev-tool diagnosis of page-owned
-  durable resources (Phase 11 territory). Phase 8's
-  service + session shape is closed; the
-  persistent-JS-adapter-realm RPC stays an
-  open-ended Phase 8 follow-up that depends on a
-  real persistent host process (16m only landed the
-  snapshot shape; the IPC channel is a separate
-  slice).
+- **Next:** slice 16n' = robust wrap-side abort
+  signalling. 16i shipped the host-side kill
+  backstop; 16n attempted to fire `ctx.signal` inside
+  the page via (a) a `process.stdin` `data` listener
+  and (b) a `setInterval(50ms)` file watcher polling
+  a per-request marker file the watchdog creates
+  on timeout. E2E in this dev environment showed
+  bun 1.4's `setTimeout`-parked loop neither
+  delivers stdin `data` events NOR runs the
+  `setInterval` callback chain (we tried replacing
+  `setInterval` with a self-rescheduling `setTimeout`
+  and the file still did not propagate). The marker
+  file route is rolled back; the host-side kill
+  backstop from 16i remains the only working
+  timeout path. A future slice (16n') can revisit
+  with a different IPC channel (named pipe, TCP
+  loopback, IPC file under a file-system watcher
+  bun ships as a native binding, etc.). After
+  that: file / rotation logger backends (16j
+  follow-up), then spec sect.17.2 dev-tool diagnosis
+  of page-owned durable resources (Phase 11
+  territory). Phase 8's service + session shape is
+  closed; the persistent-JS-adapter-realm RPC stays
+  an open-ended Phase 8 follow-up that depends on a
+  real persistent host process (16m only landed
+  the snapshot shape; the IPC channel is a
+  separate slice).
+
+### Slice 16n -- wrap-side abort signalling (deferred, not landed)
+
+- **Why:** spec sect.13.7 says `ctx.signal` MUST
+  fire when the host determines the request is no
+  longer executable, including a timeout. 16i
+  shipped the host-side kill backstop but left the
+  page-side abort listener as a follow-up; 16n was
+  the slice to land that listener.
+- **What we tried:**
+  1. `process.stdin.on('data', () =>
+     __tspAbortCtrl.abort())` plus writing the
+     `ABORT_MARKER` (`b"A
+"`) to the bun
+     subprocess's stdin from the host watchdog
+     (the protocol 16i designed). E2E showed
+     `request timed out after 3000ms; abort marker
+     fired but page did not stop in time` -- the
+     `data` event never fired while the page was
+     parked in `setTimeout` / `await new Promise`.
+  2. Robust file-watcher fallback: the host
+     writes a per-request marker file at
+     `TSP_ABORT_FILE` and the wrap preamble polls
+     it via `Bun.fs.statSync` every 50ms inside a
+     `setInterval`. We also tried a
+     self-rescheduling `setTimeout` to avoid
+     bun 1.4's `setInterval` keep-alive behaviour.
+     E2E still showed the file marker did not
+     fire `__tspAbortCtrl.abort()`; every
+     `setTimeout` / `setInterval` tick was
+     deferred while the page was parked, and the
+     page never got a chance to observe the abort
+     before the host's 1s grace expired and the
+     child was hard-killed.
+- **What was rolled back:** the `jsc_bridge.rs`
+  marker-file plumbing (env var, spawn-time path
+  computation, watchdog touch, post-reap cleanup)
+  and the `jsx.rs` `__tspAbortCtrl` + `setInterval`
+  watcher were both reverted. The host-side
+  backstop (stdin marker + 1s grace + hard-kill)
+  shipped in 16i is the only working timeout
+  mechanism today.
+- **Status:** the slice did not land a code change.
+  Progress recorded for trace-ability. The
+  follow-up slice (16n') needs a different IPC
+  channel; candidates include a named pipe
+  (Windows + POSIX), a localhost TCP loopback
+  port, or a Bun-native file watcher (the
+  `Bun.watch` API) that the page-side wrap would
+  subscribe to. None of these are zero-dependency
+  today, so the work is parked until a real
+  persistent host process (16n+ follow-up) lands
+  a proper IPC channel.
+- **Production check-list (for the user, not the
+  slice):** timeouts work today via the host
+  hard-kill backstop (16i). Pages that listen on
+  `ctx.signal` for cooperative cancellation will
+  receive the signal on every request that finishes
+  before the watchdog fires; they will NOT receive
+  the signal when the page is parked in
+  `setTimeout` at the moment the watchdog fires.
+  The host still hard-kills in 1s and the request
+  returns 500 [TSP3012] in that case.
 
 ### Slice 16m -- `time` service: call-capable read-only snapshot (done, bun commit `8dfefe6c`)
 
