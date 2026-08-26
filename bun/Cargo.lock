@@ -246,6 +246,7 @@ dependencies = [
  "bun_mimalloc_sys",
  "bun_platform",
  "bun_runtime",
+ "bun_runtime_tsp",
  "bun_sys",
  "libc",
 ]
@@ -1677,6 +1678,7 @@ name = "bun_runtime_tsp"
 version = "0.0.0"
 dependencies = [
  "bun_runtime",
+ "libc",
 ]
 
 [[package]]

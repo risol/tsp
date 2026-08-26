@@ -35,6 +35,17 @@ workspace = true
 # Subsequent `cargo build` calls are fast.
 [features]
 in-process-jsc = ["dep:bun_runtime"]
+# Enabled only when this host is linked into the bundled `tspserver_v2`
+# executable. The master then creates workers from the same executable.
+embedded-worker-entry = []
 
 [dependencies]
 bun_runtime = { workspace = true, optional = true }
+libc.workspace = true
+
+[dev-dependencies]
+# The process-model and start-order tests use `libc::kill` /
+# `libc::SIGTERM` directly; the production crate already
+# depends on `libc`, but integration tests cannot see the
+# parent's deps, so the dev-dep is the documented path.
+libc.workspace = true
