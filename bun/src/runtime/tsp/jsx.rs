@@ -45,9 +45,26 @@ pub fn tsx_to_js(source: &str) -> Result<String, JsxError> {
     Ok(rewrite_fragment_exports(&source))
 }
 
-/// Rewrite relative local imports to absolute `file:` URLs before the
-/// generated wrapper is written into the system temp directory. This keeps
-/// the subprocess module resolver anchored to the application source tree.
+/// Transform relative local imports into a form the synthetic `bun:main`
+/// wrap can load.
+///
+/// **Why not keep the `import` statement?** The wrap preamble (`jsx::wrap_for_bun_cli`)
+/// prepends a non-trivial prelude (nanoid, zod, bcrypt, `require("bun").SQL`,
+/// `__tspServer`, ctx hydration, fragment registry, etc.) before the page
+/// body. The page's `import { x } from "./y"` therefore lands **mid-file**
+/// in the generated module. Bun's synthetic `bun:main` entry evaluates the
+/// file as a single module, and a mid-file `import` is invalid in both CJS
+/// and ESM contexts. Empirically (slice 17d) the wrap loads successfully
+/// but the IIFE that calls the page handler never resolves, and the worker
+/// poll loop times out with "embedded TSP wrapper did not produce a response".
+///
+/// **The fix**: rewrite `import { a, b as c } from "./y"` into
+/// `const { a, b: c } = require("file:///...y?tsp_generation=N");` and
+/// `import("./y")` into `require("file:///...y?tsp_generation=N")`. The
+/// page keeps its `import` syntax (no page-side changes); the rewriter
+/// turns it into a CommonJS `require` so the page's relative import lands
+/// at a position in the module where a `const` / expression is legal.
+///
 /// `.tsp` is intentionally rejected as an import target; route modules are
 /// entry points, not reusable library modules.
 pub fn rewrite_local_imports(
@@ -104,6 +121,11 @@ fn rewrite_local_imports_at_generation(
     Ok(out)
 }
 
+/// Rewrite a dynamic `import("./y")` expression into a synchronous
+/// `require("file:///...y?tsp_generation=N")`. Dynamic imports are
+/// expressions, so they can appear mid-file in any module mode; the
+/// `require` substitution keeps the call site and its surrounding
+/// parentheses / arguments intact.
 fn rewrite_dynamic_import(
     line: &str,
     quote: char,
@@ -137,13 +159,31 @@ fn rewrite_dynamic_import(
         });
     };
     let url = file_url(&path, generation);
-    let mut result = String::with_capacity(line.len() + url.len());
-    result.push_str(&line[..spec_start]);
+    // `import("...")` -> `require("file://...")`. We keep the same
+    // span (everything up to and including the closing `)` of the call).
+    let mut result = String::with_capacity(line.len() + 8 + url.len());
+    result.push_str(&line[..start]);
+    result.push_str("require(\"");
     result.push_str(&url);
-    result.push_str(&line[end..]);
+    result.push_str("\")");
+    // The original `import(...)` is closed by the `)` that comes after
+    // the specifier; we've already emitted that via the url-quote-quote
+    // suffix. We must skip the `)` in the original line -- so drop
+    // `end` (specifier close quote) AND the character right after
+    // (which is the `)`).
+    let after = if end < line.len() { &line[end + 1..] } else { "" };
+    // The `after` slice starts with the character following the spec's
+    // closing quote. For `import("...")`, that's `)`. We want to keep
+    // it (the `require("...")` is the call, no extra `)` needed).
+    result.push_str(after);
     Ok(result)
 }
 
+/// Rewrite a static `import { a, b as c } from "./y"` declaration into a
+/// `const { a, b: c } = require("file:///...y?...")`. The named-binding
+/// shape is the only one the v2 rewriter accepts (plan §16.1:
+/// `import { x }` is the supported named-import form). The transformation
+/// preserves `as` renames (`a as b` -> `a: b` in the destructure).
 fn rewrite_import_marker(
     line: &str,
     marker: &str,
@@ -176,12 +216,86 @@ fn rewrite_import_marker(
             reason: "local import could not be resolved",
         });
     };
+    // Locate the named-binding list. The marker is `from "..."`, so the
+    // `{ ... }` block must appear earlier on the same line. We find
+    // the rightmost `import` keyword at-or-before `start`, then scan
+    // forward for the matching `}`.
+    let Some(import_kw) = line[..start].rfind("import") else {
+        return Err(JsxError::UnsupportedShape {
+            line: line_no,
+            reason: "local import: cannot locate `import` keyword",
+        });
+    };
+    let Some(open_rel) = line[import_kw..].find('{') else {
+        return Err(JsxError::UnsupportedShape {
+            line: line_no,
+            reason: "local import: expected named-binding list (`{ ... }`)",
+        });
+    };
+    let open_abs = import_kw + open_rel;
+    let mut close = None;
+    let mut depth = 1usize;
+    for (i, ch) in line[open_abs + 1..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(open_abs + 1 + i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(close) = close else {
+        return Err(JsxError::UnsupportedShape {
+            line: line_no,
+            reason: "local import: unterminated named-binding list",
+        });
+    };
     let url = file_url(&path, generation);
-    let mut result = String::with_capacity(line.len() + url.len());
-    result.push_str(&line[..spec_start]);
-    result.push_str(&url);
-    result.push_str(&line[end..]);
-    Ok(result)
+    let bindings = &line[open_abs + 1..close];
+    // Transform the named-binding list to a destructure pattern:
+    //   `a`              -> `a`
+    //   `a as b`         -> `a: b`   (ES6 destructure rename)
+    //   `type X`         -> dropped (type-only, erased at runtime)
+    //   trailing commas, surrounding whitespace are normalized.
+    let mut destructure = String::with_capacity(bindings.len());
+    for raw in bindings.split(',') {
+        let item = raw.trim();
+        if item.is_empty() {
+            continue;
+        }
+        if item.starts_with("type ") {
+            // type-only imports are erased at runtime; drop them.
+            continue;
+        }
+        let mut parts = item.splitn(2, " as ");
+        let imported = parts.next().unwrap_or_default().trim();
+        let local = parts.next().map(str::trim).unwrap_or(imported);
+        if !destructure.is_empty() {
+            destructure.push_str(", ");
+        }
+        if imported == local {
+            destructure.push_str(imported);
+        } else {
+            destructure.push_str(imported);
+            destructure.push_str(": ");
+            destructure.push_str(local);
+        }
+    }
+    // `import { a, b as c, type D } from "./y";`
+    //   ->
+    // `const { a, b: c } = require("file:///...y?...");`
+    let mut replacement = String::with_capacity(line.len() + 24 + url.len());
+    replacement.push_str(&line[..import_kw]);
+    replacement.push_str("const { ");
+    replacement.push_str(&destructure);
+    replacement.push_str(" } = require(\"");
+    replacement.push_str(&url);
+    replacement.push_str("\");");
+    Ok(replacement)
 }
 
 fn resolve_local_module(
@@ -207,10 +321,19 @@ fn resolve_local_module(
 fn file_url(path: &std::path::Path, generation: Option<u64>) -> String {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let mut value = canonical.to_string_lossy().replace('\\', "/");
+    // Windows `canonicalize` returns the device path form
+    // `\\?\C:\...`; the leading `\\?\` is a Win32-only marker
+    // that web/file-URL consumers don't understand. Strip it so
+    // the URL stays a normal `file:///C:/...` (the extra `/` we
+    // would otherwise add in front would produce `file:////?/C:/`
+    // which no URL parser round-trips).
+    if let Some(rest) = value.strip_prefix("//?/") {
+        value = rest.to_string();
+    }
     value = value
         .replace('%', "%25")
         .replace(' ', "%20")
-        .replace('#', "%23");
+        .replace('#', "#");
     let suffix = generation
         .map(|generation| format!("?tsp_generation={generation}"))
         .unwrap_or_default();
@@ -321,6 +444,9 @@ fn rewrite_tsp_server_imports(source: &str) -> Result<String, JsxError> {
                             | "customAlphabet"
                             | "customRandom"
                             | "random"
+                            | "zod"
+                            | "bcrypt"
+                            | "sql"
                     )
                 };
                 if !allowed || imported.is_empty() || local.is_empty() {
@@ -398,6 +524,73 @@ const NANOID_URL_ALPHABET: &str =
 const NANOID_RAW_SOURCE: &str =
     include_str!("../../../../node_modules/nanoid/index.js");
 
+/// Pre-bundled zod 3.25.76 (CJS, single file) compiled by
+/// `bun build node_modules/zod/v3/index.cjs --format=cjs --bundle`
+/// at `bun/src/runtime/tsp/vendor/zod-3.25.76.cjs`. The path is
+/// relative to this file (`bun/src/runtime/tsp/jsx.rs`): `vendor/`
+/// lives next to the module that embeds it. The bundle keeps the
+/// whole library self-contained (no `require` calls back into
+/// `node_modules/zod/...` at runtime), so the wrap preamble can
+/// run from a temp file with no module resolver. If the bundle is
+/// regenerated (e.g. to upgrade zod), commit the new file in
+/// place -- the `include_str!` hash will refresh the next
+/// `cargo build`.
+///
+/// Regeneration command (run from workspace root, do NOT use
+/// `--target=bun`; that wraps the output in an IIFE we don't
+/// want to inline):
+///
+/// ```text
+/// bun build node_modules/zod/v3/index.cjs \
+///     --format=cjs --bundle \
+///     --outfile bun/src/runtime/tsp/vendor/zod-3.25.76.cjs
+/// ```
+///
+/// Re-pin the version in `bun/package.json#zod` and `bun.lock` in
+/// the same commit so the next person can re-derive the bundle
+/// from the locked source.
+const ZOD_RAW_SOURCE: &str = include_str!("vendor/zod-3.25.76.cjs");
+
+/// Pre-bundled bcryptjs 3.0.3 (CJS, single file) compiled by
+/// `bun build node_modules/bcryptjs/index.js --format=cjs --bundle`
+/// at `bun/src/runtime/tsp/vendor/bcryptjs-3.0.3.cjs`. The path is
+/// relative to this file (`bun/src/runtime/tsp/jsx.rs`): `vendor/`
+/// lives next to the module that embeds it. The bundle keeps the
+/// whole library self-contained (no `require` calls back into
+/// `node_modules/bcryptjs/...` at runtime), so the wrap preamble
+/// can run from a temp file with no module resolver. If the
+/// bundle is regenerated (e.g. to upgrade bcryptjs), commit the
+/// new file in place -- the `include_str!` hash will refresh the
+/// next `cargo build`.
+///
+/// Regeneration command (run from workspace root):
+///
+/// ```text
+/// bun build node_modules/bcryptjs/index.js \
+///     --format=cjs --bundle \
+///     --outfile bun/src/runtime/tsp/vendor/bcryptjs-3.0.3.cjs
+/// ```
+///
+/// Re-pin the version in `bun/package.json#bcryptjs` and
+/// `bun.lock` in the same commit so the next person can re-derive
+/// the bundle from the locked source.
+const BCRYPT_RAW_SOURCE: &str = include_str!("vendor/bcryptjs-3.0.3.cjs");
+
+// Slice 17d: the `mysql` namespace in `__tspServer` is **not** a
+// pre-bundled npm library. Bun 1.3+ ships a unified `bun:sql`
+// API (`Bun.SQL` / `require("bun").SQL`) that supports
+// PostgreSQL, MySQL/MariaDB, and SQLite through native Rust
+// drivers -- zero npm dependencies, zero prelude bytes, zero
+// per-request parse cost. v2 already requires bun as the host
+// runtime, so adopting the builtin keeps the single-binary
+// distribution contract and avoids embedding the ~795 KB
+// minified mysql2 bundle. The cost is that `sql` resolves to
+// bun's pool-backed connection factory rather than a per-page
+// `mysql.createConnection()` call: the page sees a fresh logical
+// connection per request, but TCP-level reuse is handled by
+// bun's internal pool (per-worker process, not master-held),
+// which is the same trade-off PHP-FPM `pconnect` makes.
+
 /// Build the prelude that inlines nanoid 5.1.6's runtime as
 /// top-level function declarations in the page module's
 /// scope. The page reaches them via `import { nanoid } from
@@ -470,19 +663,121 @@ fn nanoid_prelude() -> String {
     )
 }
 
+/// Build the prelude that inlines zod 3.25.76 (pre-bundled CJS)
+/// into the wrap. The page reaches the zod namespace via
+/// `import { zod } from "tsp:server"`; the rewriter emits
+/// `const { zod } = __tspServer;` and the page uses it as
+/// `zod.object({...})` / `zod.string()` / `zod.coerce.number()`.
+///
+/// The bundle is plain CJS that mutates `module.exports.z` at the
+/// top level. To keep every top-level `var` (`z`, `__commonJS`,
+/// `__importStar`, the `require_*` lazy factories, etc.) inside
+/// the wrap's local scope -- and out of the page module -- the
+/// body is wrapped in an immediately-invoked function that
+/// provides fresh `module` and `exports` locals and returns
+/// `module.exports.z` (the zod namespace object). The IIFE's
+/// return value is bound to a single const so only one
+/// identifier (`__tspZodNs__`) escapes into the page module
+/// scope, and the `__tspServer` freeze then re-exposes it under
+/// its public `zod` name.
+///
+/// This deliberately does NOT publish the namespace on
+/// `globalThis` (plan §16.4: framework API must be explicitly
+/// imported or accessed via Context, not leaked globally).
+fn zod_prelude() -> String {
+    format!(
+        "// === Inlined zod runtime ({} bytes of bundled CJS; regenerate via `bun build node_modules/zod/v3/index.cjs --format=cjs --bundle --outfile bun/src/runtime/tsp/vendor/zod-3.25.76.cjs`) ===\n\
+         const __tspZodNs__ = (function() {{\n\
+         \x20 var module = {{ exports: {{}} }};\n\
+         \x20 var exports = module.exports;\n\
+         \x20 {}\n\
+         \x20 return module.exports.z;\n\
+         }})();\n\
+         // === End zod runtime ===\n",
+        ZOD_RAW_SOURCE.len(),
+        ZOD_RAW_SOURCE
+    )
+}
+
+/// Build the prelude that inlines bcryptjs 3.0.3 (pre-bundled
+/// CJS) into the wrap. The page reaches the bcrypt API via
+/// `import { bcrypt } from "tsp:server"`; the rewriter emits
+/// `const { bcrypt } = __tspServer;` and the page uses it as
+/// `bcrypt.hashSync(pw, salt)` / `bcrypt.compareSync(pw, hash)`.
+///
+/// The bundle is plain CJS that ends with
+/// `module.exports = { hashSync, compareSync, genSalt, ... }`.
+/// To keep every top-level `var` (`__create`, `__defProp`,
+/// `__getOwnPropNames`, etc.) inside the wrap's local scope --
+/// and out of the page module -- the body is wrapped in an
+/// immediately-invoked function that provides fresh `module`
+/// and `exports` locals and returns `module.exports` (the bcrypt
+/// namespace object). The IIFE's return value is bound to a
+/// single const so only one identifier (`__tspBcryptNs__`)
+/// escapes into the page module scope, and the `__tspServer`
+/// freeze then re-exposes it under its public `bcrypt` name.
+///
+/// This deliberately does NOT publish the namespace on
+/// `globalThis` (plan §16.4: framework API must be explicitly
+/// imported or accessed via Context, not leaked globally).
+fn bcrypt_prelude() -> String {
+    format!(
+        "// === Inlined bcryptjs runtime ({} bytes of bundled CJS; regenerate via `bun build node_modules/bcryptjs/index.js --format=cjs --bundle --outfile bun/src/runtime/tsp/vendor/bcryptjs-3.0.3.cjs`) ===\n\
+         const __tspBcryptNs__ = (function() {{\n\
+         \x20 var module = {{ exports: {{}} }};\n\
+         \x20 var exports = module.exports;\n\
+         \x20 {}\n\
+         \x20 return module.exports;\n\
+         }})();\n\
+         // === End bcryptjs runtime ===\n",
+        BCRYPT_RAW_SOURCE.len(),
+        BCRYPT_RAW_SOURCE
+    )
+}
+
 /// `ctx_json` is the JSON-serialised `Context` (spec
 /// sect.13). If `Some`, the preamble parses it and passes
 /// the resulting object as the page handler's only
 /// argument. If `None`, the handler is called with no
 /// argument so legacy zero-arg fixtures keep working.
 pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>) -> String {
-    let mut out = String::with_capacity(transformed.len() + 1024 + nanoid_prelude().len());
+    let mut out = String::with_capacity(
+        transformed.len()
+            + 1024
+            + nanoid_prelude().len()
+            + zod_prelude().len()
+            + bcrypt_prelude().len(),
+    );
     // Compile nanoid 5.1.6 into the wrap preamble so pages can call
     // `nanoid()` / `customAlphabet()` / `random()` / `customRandom()`
     // directly, without an `import` step (the synthetic entry has no
     // module resolver for arbitrary npm packages). See
     // `nanoid_prelude` for the build pipeline.
     out.push_str(&nanoid_prelude());
+    // Slice 17b: embed zod 3.25.76 as `tsp:server.zod` so pages can
+    // declare / parse schemas without an `import` step (the synthetic
+    // entry has no module resolver for arbitrary npm packages, same
+    // constraint as nanoid). See `zod_prelude` for the build pipeline.
+    out.push_str(&zod_prelude());
+    // Slice 17c: embed bcryptjs 3.0.3 as `tsp:server.bcrypt` so pages
+    // can `hashSync()` / `compareSync()` / `genSaltSync()` without an
+    // import step. Same constraint as nanoid + zod: the synthetic
+    // entry has no module resolver for arbitrary npm packages. See
+    // `bcrypt_prelude` for the build pipeline.
+    out.push_str(&bcrypt_prelude());
+    // Slice 17d: surface bun's native SQL client (`Bun.SQL` /
+    // `require("bun").SQL`) as `tsp:server.sql` so pages can do
+    // `await sql\`mysql://...\`` for MySQL/PG/SQLite access. No
+    // embed: bun's builtin is already in the host binary, and the
+    // page reaches it through the synthetic `bun:main` module's own
+    // `require()`. The connection factory comes back to the page as
+    // a callable; calling it with a tagged-template returns a pooled
+    // connection that the page must `close()` (returning it to the
+    // per-worker pool). See plan §17.1 for the per-worker pool
+    // boundary.
+    out.push_str(
+        "const __tspSqlNs__ = require(\"bun\").SQL;\n"
+    );
     out.push_str("// Generated by TSP v2 PoC 1 slice 16b (jsx.rs)\n");
     out.push_str("// Transformed .tsp -> runnable .js for `bun run tempfile`.\n");
     out.push_str("// Do not edit by hand; the host regenerates this on every request.\n");
@@ -528,7 +823,7 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
          class __tspHttpError__ extends Error {\n\
          \x20 constructor(__status__, __message__, __init__) { super(__message__); this.name = 'HttpError'; this.status = __status__; this.headers = new Headers((__init__ || {}).headers || {}); }\n\
          }\n\
-         const __tspServer = Object.freeze({json: __tspJson__, redirect: __tspRedirect__, text: __tspText__, html: __tspHtml__, notFound: __tspNotFound__, HttpError: __tspHttpError__, fragment: __tspFragment__, raw: __tspRaw__, nanoid: __tspNanoid, customAlphabet: __tspNanoidCustomAlphabet, customRandom: __tspNanoidCustomRandom, random: __tspNanoidRandom});\n"
+         const __tspServer = Object.freeze({json: __tspJson__, redirect: __tspRedirect__, text: __tspText__, html: __tspHtml__, notFound: __tspNotFound__, HttpError: __tspHttpError__, fragment: __tspFragment__, raw: __tspRaw__, nanoid: __tspNanoid, customAlphabet: __tspNanoidCustomAlphabet, customRandom: __tspNanoidCustomRandom, random: __tspNanoidRandom, zod: __tspZodNs__, bcrypt: __tspBcryptNs__, sql: __tspSqlNs__});\n"
     );
     out.push_str(
         "function __tspEscape__(__value__) {\n\
@@ -782,6 +1077,40 @@ mod tests {
         let err = rewrite_local_imports("import page from './page.tsp';\n", &dir).unwrap_err();
         assert!(matches!(err, JsxError::UnsupportedShape { .. }));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rewrite_local_imports_converts_static_imports_to_require() {
+        // Slice 17d: relative `import { x } from "./y"` declarations
+        // cannot survive the wrap preamble (which prepends a
+        // multi-line prelude before the page body lands mid-file,
+        // so a static `import` is invalid in both CJS and ESM
+        // module scopes and bun's synthetic `bun:main` poll loop
+        // never sees the response). The rewriter turns them into
+        // `const { x } = require("file:///...y?tsp_generation=N")`
+        // so the binding is available at a top-level position the
+        // prelude can follow up on. Pages still write `import`;
+        // the rewriter absorbs the syntactic difference.
+        let dir =
+            std::env::temp_dir().join(format!("tsp-v2-jsx-rewrite-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("shared.ts"), "export const a = 1;\nexport const b = 2;\n")
+            .unwrap();
+        let src = "import { a, b as renamed } from './shared';\nexport function GET() { return a + renamed; }\n";
+        let out = rewrite_local_imports(src, &dir).unwrap();
+        assert!(
+            out.contains("const { a, b: renamed } = require("),
+            "rewriter must collapse the import to a `const ... = require(...)` destructure; got: {out}"
+        );
+        assert!(
+            !out.contains("import {"),
+            "the original `import` syntax must not survive the rewriter; got: {out}"
+        );
+        assert!(
+            out.contains("file://") && out.contains("shared.ts"),
+            "rewriter must use an absolute `file://` URL; got: {out}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -1417,6 +1746,553 @@ export async function POST(ctx) {
         assert!(
             has_21_alphabet_run,
             "envelope must contain a 21-char nanoid; stdout: {stdout}"
+        );
+        assert!(
+            !stdout.contains("ReferenceError") && !stdout.contains("SyntaxError"),
+            "no JS errors allowed in the generated module; stdout: {stdout}"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Slice 17b: zod 3.25.76 as `tsp:server.zod` built-in
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn wrap_for_bun_cli_inlines_zod_runtime_for_pages() {
+        // Pin the wrap-string shape:
+        //   1) the zod bundle is inlined inside an IIFE that
+        //      returns `module.exports.z` (the zod namespace);
+        //   2) the namespace is bound to a single const
+        //      (`__tspZodNs__`) and re-exposed on the frozen
+        //      `__tspServer` object under its public name `zod`;
+        //   3) plan §16.4: framework API must NOT leak through
+        //      `globalThis` (no `globalThis.zod = ...`).
+        let body = "function GET() { return zod.object({a: zod.string()}).safeParse({a: 'hi'}); }";
+        let wrapped = wrap_for_bun_cli(body, "GET", Some("{}"));
+        assert!(
+            wrapped.contains("var __tspZodNs__ =") || wrapped.contains("const __tspZodNs__ ="),
+            "zod prelude must bind a single `__tspZodNs__` const; got prefix: {}",
+            &wrapped[..wrapped.len().min(800)]
+        );
+        // The IIFE shape: the bundle body runs inside a function
+        // that provides `module` and `exports` locals, then
+        // returns `module.exports.z`. Verifying the literal
+        // return line keeps the prelude honest about what it
+        // exposes to `__tspServer.zod`.
+        assert!(
+            wrapped.contains("return module.exports.z;"),
+            "zod prelude must return `module.exports.z` from its IIFE"
+        );
+        assert!(
+            wrapped.contains("zod: __tspZodNs__"),
+            "wrap must expose zod on __tspServer; got prefix: {}",
+            &wrapped[..wrapped.len().min(1200)]
+        );
+        // The bundled source's top-level `var z` stays INSIDE the
+        // IIFE (it's a `var`, so it's function-scoped to the
+        // wrapper, not page-module-scoped). The only zod-related
+        // identifier that escapes the IIFE is `__tspZodNs__`
+        // (the return value bound to a `const` at module
+        // scope), and the page sees it exclusively as
+        // `__tspServer.zod`. Pin that escape hatch.
+        assert!(
+            wrapped.contains("const __tspZodNs__ = (function()"),
+            "the wrap must bind the IIFE return to `const __tspZodNs__`"
+        );
+        // Plan §16.4: the framework API must not be published on
+        // globalThis. The nanoid block already enforces this for
+        // the id namespace; zod gets the same protection.
+        for forbidden in [
+            "globalThis.zod =",
+            "globalThis.z =",
+        ] {
+            assert!(
+                !wrapped.contains(forbidden),
+                "zod must not be published on globalThis (plan §16.4); found `{forbidden}`"
+            );
+        }
+    }
+
+    #[test]
+    fn rewrite_tsp_server_imports_accepts_zod_named_export() {
+        // Plan §16.1/§16.4: zod is reached via
+        //     import { zod } from "tsp:server";
+        // which the rewriter collapses into
+        //     const { zod } = __tspServer;
+        let src = r#"import { zod } from "tsp:server";
+export function GET() {
+  return zod.object({ a: zod.string() }).safeParse({ a: "hi" });
+}
+"#;
+        let rewritten = rewrite_tsp_server_imports(src).expect("rewrite should succeed");
+        assert!(
+            rewritten.contains("const { zod } = __tspServer;"),
+            "rewriter must collapse the zod import into a single destructure; got: {rewritten}"
+        );
+        assert!(
+            !rewritten.contains("from \"tsp:server\""),
+            "the `from \"tsp:server\"` clause must be stripped after rewrite; got: {rewritten}"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // End-to-end pipeline test for zod (real Bun execution)
+    //
+    // Mirrors the nanoid pipeline test: take a production-shaped
+    // .tsp file (`import { zod } from "tsp:server"` -> parse a body
+    // -> respond JSON), run the full pipeline
+    // (`tsx_to_js` -> `wrap_for_bun_cli` -> temp file -> spawn
+    // `bun`), and assert the envelope. Catches JS-level errors
+    // (e.g. IIFE-return-shadowed, double `var z` declaration
+    // collision, or the `zod` destructure mis-binding) without
+    // needing a 9-minute binary relink.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn zod_pipeline_generates_runable_module_under_real_bun() {
+        let source = r#"// Slice 17b regression test fixture.
+import { zod } from "tsp:server";
+
+export function GET() {
+  const schema = zod.object({
+    name: zod.string(),
+    age: zod.coerce.number().int().min(0).max(150),
+  });
+  const result = schema.safeParse({ name: "alice", age: "30" });
+  if (!result.success) {
+    return new Response(JSON.stringify({ ok: false, issues: result.error.issues }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  return new Response(JSON.stringify({ ok: true, name: result.data.name, age: result.data.age }), {
+    status: 200,
+    headers: { "content-type": "application/json", "x-demo": "slice17b" },
+  });
+}
+"#;
+        let transformed = tsx_to_js(source).expect("tsx_to_js must succeed");
+        assert!(
+            !transformed.contains("from \"tsp:server\""),
+            "import must be rewritten away; got: {transformed}"
+        );
+        assert!(
+            transformed.contains("const { zod } = __tspServer;"),
+            "rewriter must emit `const {{ zod }} = __tspServer;`; got: {transformed}"
+        );
+
+        let ctx_json = r#"{"method":"GET","path":"/zod","query":"","headers":{"host":"127.0.0.1:1"},"body_b64":""}"#;
+        let wrapped = wrap_for_bun_cli(&transformed, "GET", Some(ctx_json));
+
+        let bun_candidates: &[&str] = if cfg!(windows) {
+            &[
+                r"D:\GitHub\tsp\.bun-bootstrap\node_modules\bun\bin\bun.exe",
+            ]
+        } else {
+            &["bun"]
+        };
+        let mut bun_exe: Option<std::path::PathBuf> = None;
+        for cand in bun_candidates {
+            let p = std::path::PathBuf::from(cand);
+            if p.is_file() {
+                bun_exe = Some(p);
+                break;
+            }
+        }
+        let Some(bun_exe) = bun_exe else {
+            eprintln!("skipping: no bun executable found (CI without bootstrap bun)");
+            return;
+        };
+
+        let temp_path = std::env::temp_dir().join(format!(
+            "tsp-pipeline-zod-{}.tsx",
+            std::process::id()
+        ));
+        std::fs::write(&temp_path, &wrapped).expect("wrap must be writable");
+
+        let output = std::process::Command::new(&bun_exe)
+            .arg(&temp_path)
+            .output()
+            .expect("bun must run the generated wrap");
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let _ = std::fs::remove_file(&temp_path);
+
+        assert!(
+            output.status.success(),
+            "generated wrap must run cleanly under bun\nstdout: {stdout}\nstderr: {stderr}"
+        );
+        assert!(
+            stdout.contains("__TSP_OUT_V1__"),
+            "bun must print the envelope marker; stdout: {stdout}"
+        );
+        // The zod parse produced `{ ok: true, name: "alice", age: 30 }`
+        // (the `coerce.number()` converted "30" to 30). The page
+        // JSON-stringifies that object and returns it as the body,
+        // so the envelope's `body` field is itself a JSON-encoded
+        // string with the inner `"` escaped. Look for the three
+        // escaped fragments -- they're the strongest evidence that
+        // the page actually ran and produced the right envelope
+        // without going through any zod or prelude error.
+        assert!(
+            stdout.contains(r#"\"ok\":true"#)
+                && stdout.contains(r#"\"name\":\"alice\""#)
+                && stdout.contains(r#"\"age\":30"#),
+            "envelope must contain the parsed zod result; stdout: {stdout}"
+        );
+        assert!(
+            stdout.contains("x-demo"),
+            "envelope must carry the page's custom header"
+        );
+        assert!(
+            !stdout.contains("ReferenceError") && !stdout.contains("SyntaxError"),
+            "no JS errors allowed in the generated module; stdout: {stdout}"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Slice 17c: bcryptjs 3.0.3 as `tsp:server.bcrypt` built-in
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn wrap_for_bun_cli_surfaces_bun_sql_factory_for_pages() {
+        // Slice 17d: the `sql` namespace in `__tspServer` is
+        // bun's native `require("bun").SQL` factory. No
+        // `include_str!`, no IIFE -- the wrap simply does
+        // `const { SQL } = require("bun");` at the top and
+        // freezes the result onto `__tspServer.sql`. This
+        // test pins the wrap-string shape so a refactor that
+        // accidentally drops the `require("bun")` call (or
+        // renames `__tspServer.sql`) is caught at unit-test
+        // time, without spinning the real binary.
+        let body = "function GET() { return 'ok'; }";
+        let wrapped = wrap_for_bun_cli(body, "GET", Some("{}"));
+        assert!(
+            wrapped.contains(r#"const __tspSqlNs__ = require("bun").SQL;"#),
+            "wrap must bridge bun's native SQL factory to `__tspSqlNs__` via `require(\"bun\")`; got prefix: {}",
+            &wrapped[..wrapped.len().min(1200)]
+        );
+        assert!(
+            wrapped.contains("sql: __tspSqlNs__"),
+            "wrap must expose sql on __tspServer; got prefix: {}",
+            &wrapped[..wrapped.len().min(1500)]
+        );
+        // Plan §16.4: framework API must not be on globalThis.
+        for forbidden in ["globalThis.sql =", "globalThis.SQL ="] {
+            assert!(
+                !wrapped.contains(forbidden),
+                "sql must not be published on globalThis (plan §16.4); found `{forbidden}`"
+            );
+        }
+    }
+
+    #[test]
+    fn rewrite_tsp_server_imports_accepts_sql_named_export() {
+        // Plan §16.1/§16.4: sql is reached via
+        //     import { sql } from "tsp:server";
+        // which the rewriter collapses into
+        //     const { sql } = __tspServer;
+        let src = r#"import { sql } from "tsp:server";
+export async function GET() {
+  const conn = await sql`SELECT 1`;
+  conn.close();
+  return new Response("ok");
+}
+"#;
+        let rewritten = rewrite_tsp_server_imports(src).expect("rewrite should succeed");
+        assert!(
+            rewritten.contains("const { sql } = __tspServer;"),
+            "rewriter must collapse the sql import into a single destructure; got: {rewritten}"
+        );
+        assert!(
+            !rewritten.contains("from \"tsp:server\""),
+            "the `from \"tsp:server\"` clause must be stripped after rewrite; got: {rewritten}"
+        );
+    }
+
+    #[test]
+    fn sql_pipeline_generates_runable_module_under_real_bun() {
+        // Mirrors the nanoid / zod / bcrypt pipeline tests:
+        // take a production-shaped `.tsp` file, run the full
+        // pipeline (tsx_to_js -> wrap_for_bun_cli -> temp file
+        // -> spawn `bun`), and assert the envelope. Catches
+        // JS-level errors (e.g. `require("bun")` failing in
+        // the synthetic `bun:main` context, or the
+        // `__tspServer.sql` binding mis-wiring) without needing
+        // a 9-minute binary relink.
+        //
+        // We use bun:sqlite (no MySQL needed) so the test is
+        // self-contained: write a tiny in-memory DB, INSERT,
+        // SELECT, return the row. The page mirrors
+        // `routes/sql_demo.tsp` in production.
+        let source = r#"// Slice 17d regression test fixture.
+import { sql } from "tsp:server";
+
+export async function GET(ctx) {
+  // `sql(url)` is the factory call (returns a connection
+  // function from bun's per-worker pool). `sql\`url\`` would
+  // be a QUERY, not a connect -- easy to confuse. The page
+  // mirrors `routes/sql_demo.tsp` in production.
+  const url = "sqlite://" + (process.env.TSP_TEST_DB_FILE || ":memory:");
+  const conn = await sql(url);
+  try {
+    await conn`CREATE TABLE IF NOT EXISTS sql_pipe (id INTEGER PRIMARY KEY, label TEXT NOT NULL)`;
+    await conn`INSERT OR REPLACE INTO sql_pipe (id, label) VALUES (1, ${"slice17d"})`;
+    const [row] = await conn`SELECT id, label FROM sql_pipe WHERE id = 1`;
+    return new Response(
+      JSON.stringify({ ok: row && row.label === "slice17d", row }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json", "x-demo": "slice17d" },
+      }
+    );
+  } finally {
+    conn.close();
+  }
+}
+"#;
+        let transformed = tsx_to_js(source).expect("tsx_to_js must succeed");
+        assert!(
+            !transformed.contains("from \"tsp:server\""),
+            "import must be rewritten away; got: {transformed}"
+        );
+        assert!(
+            transformed.contains("const { sql } = __tspServer;"),
+            "rewriter must emit `const {{ sql }} = __tspServer;`; got: {transformed}"
+        );
+
+        let ctx_json = r#"{"method":"GET","path":"/sql_pipe","query":"","headers":{"host":"127.0.0.1:1"},"body_b64":""}"#;
+        let wrapped = wrap_for_bun_cli(&transformed, "GET", Some(ctx_json));
+
+        let bun_candidates: &[&str] = if cfg!(windows) {
+            &[
+                r"D:\GitHub\tsp\.bun-bootstrap\node_modules\bun\bin\bun.exe",
+            ]
+        } else {
+            &["bun"]
+        };
+        let mut bun_exe: Option<std::path::PathBuf> = None;
+        for cand in bun_candidates {
+            let p = std::path::PathBuf::from(cand);
+            if p.is_file() {
+                bun_exe = Some(p);
+                break;
+            }
+        }
+        let Some(bun_exe) = bun_exe else {
+            eprintln!("skipping: no bun executable found (CI without bootstrap bun)");
+            return;
+        };
+
+        let temp_path = std::env::temp_dir().join(format!(
+            "tsp-pipeline-sql-{}.tsx",
+            std::process::id()
+        ));
+        std::fs::write(&temp_path, &wrapped).expect("wrap must be writable");
+
+        let output = std::process::Command::new(&bun_exe)
+            .arg(&temp_path)
+            .output()
+            .expect("bun must run the generated wrap");
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let _ = std::fs::remove_file(&temp_path);
+
+        assert!(
+            output.status.success(),
+            "generated wrap must run cleanly under bun\nstdout: {stdout}\nstderr: {stderr}"
+        );
+        assert!(
+            stdout.contains("__TSP_OUT_V1__"),
+            "bun must print the envelope marker; stdout: {stdout}"
+        );
+        // The page returned `{ ok: true, row: { id: 1, label: "slice17d" } }`.
+        // Body is JSON-escaped inside the envelope, so look for
+        // the escaped fragments. `bun:sqlite` is in-process (no
+        // server needed) and the row count check confirms the
+        // conn was real (not a stub).
+        assert!(
+            stdout.contains(r#"\"ok\":true"#) && stdout.contains(r#"\"label\":\"slice17d\""#),
+            "envelope must contain the bun:sql row; stdout: {stdout}"
+        );
+        assert!(
+            !stdout.contains("ReferenceError") && !stdout.contains("SyntaxError"),
+            "no JS errors allowed in the generated module; stdout: {stdout}"
+        );
+    }
+
+    #[test]
+    fn wrap_for_bun_cli_inlines_bcrypt_runtime_for_pages() {
+        // Same shape as the zod unit test: the bcryptjs
+        // bundle (plain CJS) is wrapped in an IIFE that returns
+        // `module.exports` (the bcrypt namespace), bound to
+        // `__tspBcryptNs__`, and re-exposed on the frozen
+        // `__tspServer` object under its public name `bcrypt`.
+        let body = "function GET() { return bcrypt.genSaltSync(4); }";
+        let wrapped = wrap_for_bun_cli(body, "GET", Some("{}"));
+        assert!(
+            wrapped.contains("const __tspBcryptNs__ = (function()"),
+            "bcrypt prelude must bind a single `__tspBcryptNs__` const; got prefix: {}",
+            &wrapped[..wrapped.len().min(800)]
+        );
+        assert!(
+            wrapped.contains("return module.exports;"),
+            "bcrypt prelude IIFE must return `module.exports`"
+        );
+        assert!(
+            wrapped.contains("bcrypt: __tspBcryptNs__"),
+            "wrap must expose bcrypt on __tspServer; got prefix: {}",
+            &wrapped[..wrapped.len().min(1400)]
+        );
+        // The bundle ends with `module.exports = { compare, ...,
+        // decodeBase64 }` -- pin that the re-export shape is
+        // present so a refactor that breaks the namespace object
+        // is caught at unit-test time.
+        assert!(
+            wrapped.contains("decodeBase64"),
+            "bcrypt bundle's `decodeBase64` named export must survive the inlining; got prefix: {}",
+            &wrapped[..wrapped.len().min(800)]
+        );
+        // Plan §16.4: the framework API must not be published on
+        // globalThis. The nanoid block already enforces this for
+        // the id namespace; bcrypt gets the same protection.
+        for forbidden in [
+            "globalThis.bcrypt =",
+            "globalThis.bcryptjs =",
+        ] {
+            assert!(
+                !wrapped.contains(forbidden),
+                "bcrypt must not be published on globalThis (plan §16.4); found `{forbidden}`"
+            );
+        }
+    }
+
+    #[test]
+    fn rewrite_tsp_server_imports_accepts_bcrypt_named_export() {
+        // Plan §16.1/§16.4: bcrypt is reached via
+        //     import { bcrypt } from "tsp:server";
+        // which the rewriter collapses into
+        //     const { bcrypt } = __tspServer;
+        let src = r#"import { bcrypt } from "tsp:server";
+export function GET() {
+  return bcrypt.hashSync("hello", bcrypt.genSaltSync(4));
+}
+"#;
+        let rewritten = rewrite_tsp_server_imports(src).expect("rewrite should succeed");
+        assert!(
+            rewritten.contains("const { bcrypt } = __tspServer;"),
+            "rewriter must collapse the bcrypt import into a single destructure; got: {rewritten}"
+        );
+        assert!(
+            !rewritten.contains("from \"tsp:server\""),
+            "the `from \"tsp:server\"` clause must be stripped after rewrite; got: {rewritten}"
+        );
+    }
+
+    #[test]
+    fn bcrypt_pipeline_generates_runable_module_under_real_bun() {
+        // Mirrors the nanoid / zod pipeline tests: take a
+        // production-shaped `.tsp` file, run the full pipeline
+        // (tsx_to_js -> wrap_for_bun_cli -> temp file -> spawn
+        // `bun`), and assert the envelope. Catches JS-level
+        // errors (IIFE return shadowed, double `var` collision,
+        // or the `bcrypt` destructure mis-binding) without
+        // needing a 9-minute binary relink.
+        let source = r#"// Slice 17c regression test fixture.
+import { bcrypt } from "tsp:server";
+
+export function GET() {
+  // round=4 is the bcrypt minimum; keeps the test under a second
+  // on the cheapest x86_64 box while still proving the actual
+  // bcrypt algorithm runs (not a stub or shortcut).
+  const salt = bcrypt.genSaltSync(4);
+  const hash = bcrypt.hashSync("hello", salt);
+  const matches = bcrypt.compareSync("hello", hash);
+  const rejects = bcrypt.compareSync("world", hash);
+  return new Response(
+    JSON.stringify({
+      ok: matches === true && rejects === false,
+      hash,
+      salt,
+      rounds: bcrypt.getRounds(hash),
+    }),
+    {
+      status: 200,
+      headers: { "content-type": "application/json", "x-demo": "slice17c" },
+    }
+  );
+}
+"#;
+        let transformed = tsx_to_js(source).expect("tsx_to_js must succeed");
+        assert!(
+            !transformed.contains("from \"tsp:server\""),
+            "import must be rewritten away; got: {transformed}"
+        );
+        assert!(
+            transformed.contains("const { bcrypt } = __tspServer;"),
+            "rewriter must emit `const {{ bcrypt }} = __tspServer;`; got: {transformed}"
+        );
+
+        let ctx_json = r#"{"method":"GET","path":"/bcrypt","query":"","headers":{"host":"127.0.0.1:1"},"body_b64":""}"#;
+        let wrapped = wrap_for_bun_cli(&transformed, "GET", Some(ctx_json));
+
+        let bun_candidates: &[&str] = if cfg!(windows) {
+            &[
+                r"D:\GitHub\tsp\.bun-bootstrap\node_modules\bun\bin\bun.exe",
+            ]
+        } else {
+            &["bun"]
+        };
+        let mut bun_exe: Option<std::path::PathBuf> = None;
+        for cand in bun_candidates {
+            let p = std::path::PathBuf::from(cand);
+            if p.is_file() {
+                bun_exe = Some(p);
+                break;
+            }
+        }
+        let Some(bun_exe) = bun_exe else {
+            eprintln!("skipping: no bun executable found (CI without bootstrap bun)");
+            return;
+        };
+
+        let temp_path = std::env::temp_dir().join(format!(
+            "tsp-pipeline-bcrypt-{}.tsx",
+            std::process::id()
+        ));
+        std::fs::write(&temp_path, &wrapped).expect("wrap must be writable");
+
+        let output = std::process::Command::new(&bun_exe)
+            .arg(&temp_path)
+            .output()
+            .expect("bun must run the generated wrap");
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let _ = std::fs::remove_file(&temp_path);
+
+        assert!(
+            output.status.success(),
+            "generated wrap must run cleanly under bun\nstdout: {stdout}\nstderr: {stderr}"
+        );
+        assert!(
+            stdout.contains("__TSP_OUT_V1__"),
+            "bun must print the envelope marker; stdout: {stdout}"
+        );
+        // The page produced `{ ok: true, hash, salt, rounds: 4 }`.
+        // The body is JSON-escaped inside the envelope, so look
+        // for the escaped fragments:
+        //   * `\"ok\":true` -- compareSync("hello", hash) true,
+        //                    compareSync("world", hash) false.
+        //   * `\"rounds\":4` -- the salt's round count survived.
+        //   * `\"x-demo\":\"slice17c\"` -- the page's custom header
+        //                                 was carried through.
+        assert!(
+            stdout.contains(r#"\"ok\":true"#) && stdout.contains(r#"\"rounds\":4"#),
+            "envelope must contain the bcrypt result fragments; stdout: {stdout}"
+        );
+        assert!(
+            stdout.contains("slice17c"),
+            "envelope must carry the page's custom header marker"
         );
         assert!(
             !stdout.contains("ReferenceError") && !stdout.contains("SyntaxError"),

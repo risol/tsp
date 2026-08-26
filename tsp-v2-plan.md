@@ -1261,79 +1261,116 @@ globalThis.__tspBuiltins
 
 ## 17.1 目标
 
-DI 的核心不是参数注入，而是 **资源 ownership 和生命周期**。
+v2 走 **PHP-FPM 风格 per-request fresh state**——每个请求得到全新的 page module
+scope（`bun:main` 由 `clear_entry_point` + `load_entry_point` 重新 evaluate，见
+`docs/v2/bugs/0001`），应用代码不应依赖跨请求共享的 module state。
+
+唯一允许"跨请求持久"的是 **host 持有的基础设施**——它们有自己的生命周期理由
+（进程级 logger、session backend 内存/redis 句柄、配置），由 host 进程单例持有，
+page 通过 `ctx.services.*` 拿到 **per-request view**（同一个 host 单例的快照，
+不持有 host 端 mutable 状态）。
 
 模型：
 
 ```text
-Native Runtime
+Native Runtime (process singleton, host-owned)
   └── ServiceRegistry
-        ├── logger
-        ├── sessionStore
-        ├── db.main
-        ├── redis.main
-        └── application-defined services
+        ├── logger          # logger 全局单例是合理的（同一 sink 不该被 reset）
+        └── sessionStore    # session 句柄单例是合理的（句柄复用以支持持久化）
+
+Per-request page module scope (eval per request, never shared)
+  ├── mysql.*             # LIBRARY, page 自己 .createConnection() per request
+  ├── bcrypt.*            # LIBRARY, page 自己 .hash() per request
+  ├── zod.*               # LIBRARY, page 自己 .parse() per request
+  └── application code    # page 自己的状态，per request
 
 RequestContext
-  └── ServiceView
+  └── ServiceView (snapshot of host registry, read-only descriptor for page)
         ↓
 JSC ctx.services
 ```
 
+**关键设计原则**：
+- **Libraries vs Services 分清**——zod / mysql2 / bcryptjs 是 stateless libraries，
+  page 用 namespace import 直接调用，不要走 service registry
+- **Db connection 不该走单例**——PHP-FPM 30 年没单例 db connection，page 每次
+  `mysql.createConnection(config)` 拿新连接、用完 close。v2 同款
+- **Page 侧 module 全部 per-request**——任何"page 自己持有的可变 state"在请求结束
+  就该被 GC。强行跨请求持久 = 跟 v2 架构冲突
+
 ## 17.2 Service 生命周期
 
-建议：
+只承认两档：
 
 ```text
-singleton      process lifetime
-request        request lifetime
-transient      each resolve
+host singleton   process lifetime（host 持有，跨请求）
+per-request      page module scope（每次请求重新 evaluate）
 ```
 
-v2.0 可以只实现 singleton + request。
+不要 `transient each resolve`——v2 page module 本身就在每请求重 evaluate，模块级
+const 已经是 per-request 了，再加 transient 档位是冗余。
 
-## 17.3 JS service adapters
+## 17.3 Libraries (推荐) vs Service adapters (anti-pattern)
 
-对于 mysql2、Redis 等现成 JS 生态，第一版允许 service 实际对象存在于 persistent JSC realm。
+对于 mysql2、Redis 等现成 JS 生态，**v2 走 namespace library 路径而不是 service
+adapter**：
 
-重要的是：
+```ts
+// page 内：
+import { mysql } from "tsp:server";
+import { zod } from "tsp:server";
+import { bcrypt } from "tsp:server";
 
-```text
-service instance != page generation
+const conn = await mysql.createConnection({ host, port, user, password, database });
+const User = zod.z.object({ id: zod.z.number(), name: zod.z.string() });
+const user = User.parse(await conn.query("SELECT id, name FROM users WHERE id = ?", [42]));
+conn.close();
 ```
 
-必须放在 Persistent Runtime Realm/Registry，而不是 page module graph 中。
+实现方式跟 nanoid 同款：`include_str!` 编译期 embed（mysql2 / bcryptjs / zod 整包源码
++ 它的纯 JS 依赖），prelude 注入 `__tspServer.zod / __tspServer.mysql / __tspServer.bcrypt`
+namespace。**page 自己管 lifecycle**——每请求 new connection、用完 close。
+
+v1 那种 `registerDep("createMySQL", builder)` 的写法**不适用 v2**：
+- v1 lazy factory 省的是 import 加载成本，v2 wrap per-request 重新 evaluate，库代码每
+  请求都跑，lazy 没意义
+- v1 singleton service 通过 `globalThis` 持久，v2 明确禁止 framework API 挂
+  `globalThis`（§16.4）
+- v1 的 "host 持 pool、page 借 connection" 模式是 Java/.NET 思路，**不是 PHP-FPM 思路**
 
 ## 17.4 Native service
 
-后续可逐步 native 化：
+v2 走 native 化的是 host 侧基础设施：
 
 ```text
-logger
-session
-filesystem
-crypto
-DB drivers
+logger          # 日志
+session         # session backend（memory / redis 句柄）
+runtime         # runtime.version / env / development 元信息
 ```
 
-但不为纯 Rust 目标牺牲 v2 首版交付。
+**db / redis / bcrypt / zod / etc. 不走 native service**——它们已经在 page 侧走
+namespace library 路径（§17.3）。v1 列的"DB drivers / crypto"在 v2 重新归类：
+纯 JS 实现能 cover 的全部走 library；必须 native 的等真有需要时再说。
 
-## 17.5 application service 定义
+## 17.5 application service 定义（host 级，仅限跨请求有意义的）
 
-建议配置 API 后续设计为：
+只对**真正需要跨请求持久**的服务才走这条：
 
 ```ts
 // tsp.config.ts
 export default defineConfig({
   services: {
-    users: defineService(...),
+    mailer: defineService(...),    // 跨请求复用 SMTP 连接
+    metricsSink: defineService(...),// metrics 上报
   },
 });
 ```
 
-但如果要保证 server 完全不需要 JS bootstrap，可以优先使用 TOML/JSON 配置 + builtin provider。
+**不要把 db / redis 放这里**——它们的 lifecycle 是 per-request（§17.1）。v1 把 db
+放 services 是个错误设计，v2 修正。
 
-自定义 JS service 则加载到 persistent realm。
+如果 host 需要 JS bootstrap（要解释用户写的 service），自定义 JS service
+加载到 persistent realm。但 v2 首版默认走 TOML/JSON 配置 + host 实现。
 
 ---
 
