@@ -1,4 +1,4 @@
-# Build the v2 package first with `./tsp.sh build`.
+# Build the Linux v2 package first with `bash docker/build-linux.sh`.
 FROM debian:bookworm-slim
 
 RUN apt-get update \

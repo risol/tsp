@@ -12,7 +12,7 @@ command -v docker >/dev/null 2>&1 || {
 }
 
 echo "Building the TSP v2 runtime package..."
-(cd "$PROJECT_ROOT" && ./tsp.sh build)
+bash "$SCRIPT_DIR/build-linux.sh" "$PROJECT_ROOT/dist/tsp-v2"
 
 echo "Building Docker image ${IMAGE_NAME}:${IMAGE_TAG}..."
 docker build -f "$SCRIPT_DIR/Dockerfile" \

@@ -25,6 +25,26 @@ cd tsp
 ./tsp.sh build
 ```
 
+Build a Linux x64 `tspserver_v2` entirely inside Docker. The container uses
+the same Bun, Rust nightly, and LLVM versions as the Linux GitHub Actions
+release job, so a Windows or macOS host does not need the native build
+toolchain:
+
+```bash
+# Optional: build the reusable compiler environment once.
+bash docker/build-builder-image.sh
+
+# Compile the server using that environment.
+bash docker/build-linux.sh
+```
+
+The executable is written to `dist/tsp-v2-linux-x64/tspserver_v2`. To build the
+runtime image after compiling it, use:
+
+```bash
+bash docker/build.sh
+```
+
 Run the development server:
 
 ```bash

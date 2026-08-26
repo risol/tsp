@@ -52,10 +52,10 @@ pub const SHOW_CRASH_TRACE: bool = IS_DEBUG || IS_TEST || ENABLE_ASAN;
 
 pub const REPORTED_NODEJS_VERSION: &str = build_options::REPORTED_NODEJS_VERSION;
 pub const GIT_SHA: &str = build_options::SHA;
-pub const GIT_SHA_SHORT: &str = if !build_options::SHA.is_empty() {
+pub const GIT_SHA_SHORT: &str = if build_options::SHA.len() >= 9 {
     const_str_slice(build_options::SHA, 0, 9)
 } else {
-    ""
+    build_options::SHA
 };
 pub const IS_CANARY: bool = build_options::IS_CANARY;
 pub(crate) const CANARY_REVISION: &str = if IS_CANARY {

@@ -6,11 +6,11 @@
 .git
 examples
 node_modules
-packages/**/bun
 packages/**/bun-profile
 src/bun.js/WebKit
 src/bun.js/WebKit/LayoutTests
 build
+target
 vendor
 node_modules
 *.trace

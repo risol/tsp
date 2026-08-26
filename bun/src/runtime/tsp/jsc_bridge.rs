@@ -12,43 +12,29 @@
 //! The actual `bun_runtime` integration (in-process JSC VM, native
 //! module loader, the `tsp:*` builtins) lands in slice 7+ when we
 //! have the time budget for the heavy cold compile.
-use std::fs;
 use std::io;
-use std::io::BufRead as _;
-use std::io::BufReader;
-use std::io::Read as _;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
 
 use crate::jsx;
 use crate::router::HttpMethod;
 use crate::worker::application::ApplicationRegistry;
-use crate::worker::manager::{ManagerError, WorkerManager};
+use crate::worker::manager::ManagerError;
 use crate::worker::pool::{PoolError, WorkerPool};
 use crate::worker::protocol::ExecuteRequest;
 
-/// Where `bun.exe` lives. Resolved once at boot via
-/// [`resolve_bun_bin`]; the host can override via `TSP_BUN_BIN`.
+/// v2.4 self-spawn runtime handle. The master holds the pool; each pool
+/// slot owns a self-spawned `tspserver_v2[.exe]` worker process (see
+/// `worker/manager.rs` and `worker/pool.rs`). The `bin` field is the
+/// path the master itself was launched from — workers reuse the same
+/// executable and dispatch on `--tsp-worker`.
 #[derive(Debug)]
 pub struct BunRuntime {
     pub bin: PathBuf,
-    pub persistent_worker: Option<Arc<PersistentBunWorker>>,
-    /// v2.4 path: the master owns only this protocol manager. Bun/JSC lives
-    /// inside the executable started by the manager.
-    pub embedded_worker: Option<Arc<Mutex<WorkerManager>>>,
-    /// v2.4 multi-worker path. Each pool slot owns its own worker process and
-    /// embedded VM; the master only sees the protocol-facing pool.
     pub embedded_pool: Option<Arc<WorkerPool>>,
 }
 
-const WORKER_PROTOCOL_PREFIX: &str = "__TSP_WORKER_V1__";
-const WORKER_SCRIPT: &str = include_str!("worker_runtime.ts");
-const WORKER_MAX_LINE_BYTES: usize = 64 * 1024 * 1024;
 static EXECUTION_GENERATION: AtomicU64 = AtomicU64::new(1);
 static LAST_WORKER_RESTART_GENERATION: AtomicU64 = AtomicU64::new(0);
 static WORKER_RESTART_LOCK: Mutex<()> = Mutex::new(());
@@ -68,9 +54,9 @@ fn restart_workers_after_reload(pool: &WorkerPool) -> Result<(), JscError> {
     if LAST_WORKER_RESTART_GENERATION.load(Ordering::Acquire) == generation {
         return Ok(());
     }
-    let _guard = WORKER_RESTART_LOCK
-        .lock()
-        .map_err(|_| JscError::WorkerProtocol("worker restart lock poisoned".into()))?;
+    let _guard = WORKER_RESTART_LOCK.lock().map_err(|e| {
+        JscError::Spawn(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+    })?;
     if LAST_WORKER_RESTART_GENERATION.load(Ordering::Acquire) != generation {
         pool.restart_all().map_err(map_pool_error)?;
         LAST_WORKER_RESTART_GENERATION.store(generation, Ordering::Release);
@@ -78,300 +64,6 @@ fn restart_workers_after_reload(pool: &WorkerPool) -> Result<(), JscError> {
     Ok(())
 }
 
-/// A single persistent Bun process used by the first worker vertical slice.
-/// Requests are serialized deliberately; the manager/pool can be added after
-/// the lifecycle and protocol are proven with one worker.
-#[derive(Debug)]
-pub struct PersistentBunWorker {
-    bin: PathBuf,
-    app_root: Option<PathBuf>,
-    session: Mutex<Option<WorkerSession>>,
-    serial: Mutex<()>,
-}
-
-#[derive(Debug)]
-struct WorkerSession {
-    child: Arc<Mutex<Child>>,
-    stdin: Arc<Mutex<ChildStdin>>,
-    stdout: BufReader<ChildStdout>,
-}
-
-impl Drop for WorkerSession {
-    fn drop(&mut self) {
-        self.kill();
-    }
-}
-
-impl WorkerSession {
-    fn spawn(bin: &Path, app_root: Option<&Path>) -> Result<Self, JscError> {
-        let mut command = Command::new(bin);
-        command
-            .arg("--eval")
-            .arg(WORKER_SCRIPT)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        if let Some(root) = app_root {
-            // The executed wrapper is written to the system temp directory.
-            // Keep Bun's cwd and package search roots aligned with the route
-            // application so persistent mode matches one-shot mode.
-            command.current_dir(root);
-            let mut node_paths = vec![root.join("node_modules")];
-            if let Some(parent) = root.parent() {
-                node_paths.push(parent.join("node_modules"));
-            }
-            if let Ok(cwd) = std::env::current_dir() {
-                node_paths.push(cwd.join("node_modules"));
-            }
-            let separator = if cfg!(windows) { ";" } else { ":" };
-            command.env(
-                "NODE_PATH",
-                node_paths
-                    .iter()
-                    .map(|path| path.to_string_lossy().into_owned())
-                    .collect::<Vec<_>>()
-                    .join(separator),
-            );
-        }
-        let mut child = command.spawn().map_err(JscError::WorkerSpawn)?;
-
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| JscError::WorkerProtocol("worker stdin was not piped".into()))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| JscError::WorkerProtocol("worker stdout was not piped".into()))?;
-        if let Some(mut stderr) = child.stderr.take() {
-            thread::spawn(move || {
-                let mut sink = Vec::new();
-                let _ = stderr.read_to_end(&mut sink);
-            });
-        }
-
-        let child = Arc::new(Mutex::new(child));
-        let mut session = Self {
-            child,
-            stdin: Arc::new(Mutex::new(stdin)),
-            stdout: BufReader::new(stdout),
-        };
-
-        let mut line = String::new();
-        session
-            .stdout
-            .read_line(&mut line)
-            .map_err(JscError::WorkerSpawn)?;
-        if line.trim_end() != format!("{WORKER_PROTOCOL_PREFIX}ready") {
-            session.kill();
-            return Err(JscError::WorkerProtocol(format!(
-                "worker did not become ready: {}",
-                line.trim_end()
-            )));
-        }
-        Ok(session)
-    }
-
-    fn send(&self, line: &str) -> Result<(), JscError> {
-        let mut stdin = self
-            .stdin
-            .lock()
-            .map_err(|_| JscError::WorkerProtocol("worker stdin lock poisoned".into()))?;
-        stdin
-            .write_all(line.as_bytes())
-            .and_then(|_| stdin.flush())
-            .map_err(JscError::WorkerSpawn)
-    }
-
-    fn send_execute(&self, id: u64, path: &Path) -> Result<(), JscError> {
-        let encoded = percent_encode(path.to_string_lossy().as_bytes());
-        self.send(&format!("execute\t{id}\t{encoded}\n"))
-    }
-
-    fn read_response(&mut self, id: u64) -> Result<String, JscError> {
-        let mut line = String::new();
-        let expected_id = id.to_string();
-        loop {
-            line.clear();
-            let count = self
-                .stdout
-                .read_line(&mut line)
-                .map_err(JscError::WorkerSpawn)?;
-            if count == 0 {
-                return Err(JscError::WorkerExited);
-            }
-            if line.len() > WORKER_MAX_LINE_BYTES {
-                return Err(JscError::WorkerProtocol(
-                    "worker response exceeded size limit".into(),
-                ));
-            }
-            let payload = line
-                .strip_prefix(WORKER_PROTOCOL_PREFIX)
-                .unwrap_or_default()
-                .trim_end();
-            let mut fields = payload.splitn(3, '\t');
-            match fields.next() {
-                Some("response") if fields.next() == Some(expected_id.as_str()) => {
-                    return Ok(fields.next().unwrap_or_default().to_string());
-                }
-                Some("error") if fields.next() == Some(expected_id.as_str()) => {
-                    return Err(JscError::WorkerProtocol(
-                        fields
-                            .next()
-                            .unwrap_or("worker execution failed")
-                            .to_string(),
-                    ));
-                }
-                // Ignore non-protocol Bun output. User console output is not
-                // allowed to corrupt the response channel.
-                _ => {}
-            }
-        }
-    }
-
-    fn kill(&self) {
-        if let Ok(mut child) = self.child.lock() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-}
-
-impl PersistentBunWorker {
-    pub fn new(bin: PathBuf, app_root: Option<PathBuf>) -> Result<Self, JscError> {
-        let session = WorkerSession::spawn(&bin, app_root.as_deref())?;
-        Ok(Self {
-            bin,
-            app_root,
-            session: Mutex::new(Some(session)),
-            serial: Mutex::new(()),
-        })
-    }
-
-    pub fn execute_file(
-        &self,
-        path: &Path,
-        timeout_ms: u64,
-        cancellation: &CancellationToken,
-    ) -> Result<String, JscError> {
-        let _serial = self
-            .serial
-            .lock()
-            .map_err(|_| JscError::WorkerProtocol("worker serialization lock poisoned".into()))?;
-        let mut slot = self
-            .session
-            .lock()
-            .map_err(|_| JscError::WorkerProtocol("worker session lock poisoned".into()))?;
-        if slot.is_none() {
-            *slot = Some(WorkerSession::spawn(&self.bin, self.app_root.as_deref())?);
-        }
-        let session = slot.as_mut().expect("worker session initialized");
-        let request_id = WORKER_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-        session.send_execute(request_id, path)?;
-
-        const WATCHDOG_RUNNING: u8 = 0;
-        const CHILD_COMPLETED: u8 = 1;
-        const WATCHDOG_TIMED_OUT: u8 = 2;
-        const WATCHDOG_CANCELLED: u8 = 3;
-        let watchdog_state = Arc::new(AtomicU8::new(WATCHDOG_RUNNING));
-        let watchdog = {
-            let state = Arc::clone(&watchdog_state);
-            let stdin = Arc::clone(&session.stdin);
-            let child = Arc::clone(&session.child);
-            let cancellation = cancellation.clone();
-            thread::spawn(move || {
-                let deadline = (timeout_ms > 0)
-                    .then(|| std::time::Instant::now() + Duration::from_millis(timeout_ms));
-                loop {
-                    if state.load(Ordering::SeqCst) != WATCHDOG_RUNNING {
-                        return;
-                    }
-                    let reason = if cancellation.is_cancelled() {
-                        WATCHDOG_CANCELLED
-                    } else if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
-                        WATCHDOG_TIMED_OUT
-                    } else {
-                        thread::sleep(Duration::from_millis(10));
-                        continue;
-                    };
-                    if state
-                        .compare_exchange(
-                            WATCHDOG_RUNNING,
-                            reason,
-                            Ordering::SeqCst,
-                            Ordering::SeqCst,
-                        )
-                        .is_ok()
-                    {
-                        if let Ok(mut stdin) = stdin.lock() {
-                            let _ = writeln!(stdin, "cancel\t{request_id}");
-                            let _ = stdin.flush();
-                        }
-                        let grace_start = std::time::Instant::now();
-                        while grace_start.elapsed() < GRACE_AFTER_MARKER {
-                            if state.load(Ordering::SeqCst) == CHILD_COMPLETED {
-                                return;
-                            }
-                            thread::sleep(Duration::from_millis(10));
-                        }
-                        if state.load(Ordering::SeqCst) != CHILD_COMPLETED {
-                            if let Ok(mut child) = child.lock() {
-                                let _ = child.kill();
-                            }
-                        }
-                    }
-                    return;
-                }
-            })
-        };
-
-        let response = session.read_response(request_id);
-        let _ = watchdog_state.compare_exchange(
-            WATCHDOG_RUNNING,
-            CHILD_COMPLETED,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        );
-        let _ = watchdog.join();
-        let reason = watchdog_state.load(Ordering::SeqCst);
-        let should_restart = reason != CHILD_COMPLETED
-            || matches!(
-                &response,
-                Err(JscError::WorkerExited | JscError::WorkerSpawn(_))
-            );
-
-        let result = match reason {
-            WATCHDOG_TIMED_OUT => Err(JscError::TimedOut {
-                stderr_tail: "persistent worker timeout".into(),
-            }),
-            WATCHDOG_CANCELLED => Err(JscError::Cancelled),
-            _ => response,
-        };
-
-        if should_restart {
-            let old = slot.take();
-            drop(old);
-            *slot = WorkerSession::spawn(&self.bin, self.app_root.as_deref()).ok();
-        }
-        result.map(|envelope| format!("__TSP_OUT_V1__\n{envelope}"))
-    }
-}
-
-static WORKER_REQUEST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-
-fn percent_encode(bytes: &[u8]) -> String {
-    let mut output = String::with_capacity(bytes.len());
-    for &byte in bytes {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
-            output.push(byte as char);
-        } else {
-            output.push('%');
-            output.push(char::from(b"0123456789ABCDEF"[(byte >> 4) as usize]));
-            output.push(char::from(b"0123456789ABCDEF"[(byte & 0x0F) as usize]));
-        }
-    }
-    output
-}
 
 /// One-shot cancellation shared by the host connection and the Bun
 /// subprocess watchdog. A cancelled request must never write a response.
@@ -423,12 +115,6 @@ pub enum JscError {
     /// the only `JscError` a `.tsp` author can fix by editing their
     /// own code (the rest are infra).
     Jsx(jsx::JsxError),
-    /// The persistent worker could not be started.
-    WorkerSpawn(io::Error),
-    /// The persistent worker violated the request/response protocol.
-    WorkerProtocol(String),
-    /// The persistent worker exited before returning a response.
-    WorkerExited,
 }
 
 impl std::fmt::Display for JscError {
@@ -455,9 +141,6 @@ impl std::fmt::Display for JscError {
             Self::EmptyStdout => write!(f, "bun produced no stdout (page returned undefined?)"),
             Self::WriteTemp(e) => write!(f, "write temp .js failed: {e}"),
             Self::Jsx(e) => write!(f, "{e}"),
-            Self::WorkerSpawn(e) => write!(f, "persistent worker spawn failed: {e}"),
-            Self::WorkerProtocol(e) => write!(f, "persistent worker protocol failed: {e}"),
-            Self::WorkerExited => write!(f, "persistent worker exited before responding"),
         }
     }
 }
@@ -480,9 +163,6 @@ impl JscError {
             Self::EmptyStdout => "TSP3013",
             Self::WriteTemp(_) => "TSP3014",
             Self::Jsx(_) => "TSP3002",
-            Self::WorkerSpawn(_) => "TSP3016",
-            Self::WorkerProtocol(_) => "TSP3017",
-            Self::WorkerExited => "TSP3018",
         }
     }
 
@@ -499,66 +179,11 @@ impl JscError {
             Self::EmptyStdout => "bun produced no stdout",
             Self::WriteTemp(_) => "writing bun temp file failed",
             Self::Jsx(_) => "jsx transform error",
-            Self::WorkerSpawn(_) => "persistent worker spawn failed",
-            Self::WorkerProtocol(_) => "persistent worker protocol failed",
-            Self::WorkerExited => "persistent worker exited",
         }
     }
 }
 
-/// Resolve the bundled Bun runtime. `TSP_BUN_BIN` is an explicit override;
-/// production packages may place `bun.exe` beside `tspserver_v2.exe` or in a
-/// `.tsp-runtime/` child directory. The development bootstrap path remains a
-/// final fallback, so the target machine never needs a globally installed Bun
-/// CLI.
-pub fn resolve_bun_bin() -> Result<PathBuf, JscError> {
-    let bun_name = if cfg!(windows) { "bun.exe" } else { "bun" };
-    if let Ok(s) = std::env::var("TSP_BUN_BIN") {
-        let p = PathBuf::from(s);
-        if p.is_file() {
-            return Ok(p);
-        }
-        return Err(JscError::BunNotFound { tried: p });
-    }
-    let mut candidates = Vec::new();
-    if let Ok(runtime_dir) = std::env::var("TSP_RUNTIME_DIR") {
-        candidates.push(PathBuf::from(runtime_dir).join(bun_name));
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join(bun_name));
-            candidates.push(dir.join(format!(".tsp-runtime/{bun_name}")));
-            candidates.push(dir.join(format!("runtime/{bun_name}")));
-        }
-    }
-    candidates.push(PathBuf::from(format!(".tsp-runtime/{bun_name}")));
-    candidates.push(PathBuf::from(format!(
-        ".bun-bootstrap/node_modules/bun/bin/{bun_name}"
-    )));
-    for candidate in candidates {
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-    Err(JscError::BunNotFound {
-        tried: PathBuf::from("bundled bun.exe (set TSP_BUN_BIN to override)"),
-    })
-}
 
-/// The single-byte marker the host writes to the bun
-/// subprocess's stdin to fire `ctx.signal.abort()`
-/// (spec sect.13.7). The wrap preamble's stdin
-/// listener calls `__tspAbortCtrl.abort()` on the
-/// first byte it sees, so any token works; we use
-/// `A` for "abort" plus a newline so the listener
-/// can detect a complete line on line-buffered
-/// streams.
-pub const ABORT_MARKER: &[u8] = b"A\n";
-/// Grace window after the watchdog writes ABORT_MARKER before the
-/// host hard-kills the child. Long enough for the page to observe
-/// ctx.signal and exit cleanly (a few ms in practice), short enough
-/// that a runaway page cannot stall the worker thread indefinitely.
-const GRACE_AFTER_MARKER: std::time::Duration = std::time::Duration::from_millis(1000);
 
 /// Execute the page's `method` handler. Reads the .tsp source
 /// (already prepared in slice 5 as `page::PageSource`), transforms
@@ -691,394 +316,66 @@ fn execute_inner(
     request_headers: Option<&[(String, String)]>,
     request_body: Option<&[u8]>,
 ) -> Result<String, JscError> {
-    let use_embedded_worker = bun.embedded_worker.is_some() || bun.embedded_pool.is_some();
+    // v2.4 self-spawn only: every request goes through the WorkerPool
+    // backed by self-spawned `tspserver_v2[.exe]` workers. There is no
+    // `bun run tempfile` fallback - the wrapper runs inside the worker's
+    // embedded Bun VM and returns through the master<->worker IPC channel
+    // (see `worker/manager.rs::WorkerManager::spawn`).
     let source = match source_dir {
-        Some(dir) if use_embedded_worker => {
-            jsx::rewrite_local_imports_for_generation(source, dir, execution_generation())
-                .map_err(JscError::Jsx)?
-        }
-        Some(dir) => jsx::rewrite_local_imports(source, dir).map_err(JscError::Jsx)?,
+        Some(dir) => jsx::rewrite_local_imports_for_generation(source, dir, execution_generation())
+            .map_err(JscError::Jsx)?,
         None => source.to_string(),
     };
     let js_body = jsx::tsx_to_js(&source).map_err(JscError::Jsx)?;
-    let mut wrapped = if use_embedded_worker {
-        jsx::wrap_for_embedded_worker(&js_body, method.as_str(), ctx_json)
-    } else {
-        jsx::wrap_for_bun_cli(&js_body, method.as_str(), ctx_json)
-    };
+    let mut wrapped = jsx::wrap_for_embedded_worker(&js_body, method.as_str(), ctx_json);
     if let Some(path) = source_path {
-        let source_url = if use_embedded_worker {
-            format!(
-                "tsp://{}?generation={}",
-                path.to_string_lossy().replace('\\', "/"),
-                execution_generation()
-            )
-        } else {
-            format!("tsp://{}", path.to_string_lossy().replace('\\', "/"))
-        };
-        wrapped.push_str(&format!("\n//# sourceURL={}\n", source_url));
+        let source_url = format!(
+            "tsp://{}?generation={}",
+            path.to_string_lossy().replace('\\', "/"),
+            execution_generation()
+        );
+        wrapped.push_str(&format!("
+//# sourceURL={}
+", source_url));
     }
     let script = wrapped.into_bytes();
 
-    // Use a per-call temp file. On Windows `std::env::temp_dir()` is
-    // `%TEMP%`; the unique suffix avoids collisions under concurrent
-    // requests.
-    let mut tempfile = std::env::temp_dir();
-    let suffix = format!(
-        "tsp-v2-slice6-{}-{}.tsx",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    );
-    tempfile.push(suffix);
-    let application_name = std::env::var("TSP_APPLICATION_NAME").unwrap_or_else(|_| "main".into());
+    let application_name = std::env::var("TSP_APPLICATION_NAME")
+        .unwrap_or_else(|_| "main".into());
     let registered_application = ApplicationRegistry::global().get(&application_name);
     let registered_pool = registered_application
         .as_ref()
         .map(|application| application.workers().pool());
-    if let Some(pool) = registered_pool.or(bun.embedded_pool.as_ref()) {
-        restart_workers_after_reload(pool)?;
-        let request = ExecuteRequest {
-            application: application_name.clone(),
-            method: method.as_str().to_string(),
-            path: source_path
-                .map(|path| path.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-            deadline_ms: request_deadline_ms(timeout_ms),
-            headers: request_headers.unwrap_or(&[]).to_vec(),
-            body: request_body.unwrap_or(&[]).to_vec(),
-            script: script.clone(),
-            context_json: ctx_json.unwrap_or_default().to_string(),
-        };
-        let result = pool.execute(request, timeout_ms).map_err(map_pool_error)?;
-        let _ = fs::remove_file(&tempfile);
-        if cancellation.is_cancelled() {
-            return Err(JscError::Cancelled);
-        }
-        let envelope = String::from_utf8(result.body).map_err(|_| {
-            JscError::WorkerProtocol("embedded worker response was not UTF-8".into())
-        })?;
-        return Ok(format!("__TSP_OUT_V1__\n{envelope}"));
-    }
-
-    if let Some(worker) = &bun.embedded_worker {
-        let request = ExecuteRequest {
-            application: application_name.clone(),
-            method: method.as_str().to_string(),
-            path: source_path
-                .map(|path| path.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-            deadline_ms: request_deadline_ms(timeout_ms),
-            headers: request_headers.unwrap_or(&[]).to_vec(),
-            body: request_body.unwrap_or(&[]).to_vec(),
-            script: script.clone(),
-            context_json: ctx_json.unwrap_or_default().to_string(),
-        };
-        let result = worker
-            .lock()
-            .map_err(|_| JscError::WorkerProtocol("worker manager mutex poisoned".into()))?
-            .execute_with_timeout(request, timeout_ms)
-            .map_err(map_manager_error)?;
-        let _ = fs::remove_file(&tempfile);
-        if cancellation.is_cancelled() {
-            return Err(JscError::Cancelled);
-        }
-        if result.status >= 400 {
-            return Err(JscError::WorkerProtocol(format!(
-                "embedded worker returned transport status {}",
-                result.status
-            )));
-        }
-        let envelope = String::from_utf8(result.body).map_err(|_| {
-            JscError::WorkerProtocol("embedded worker response was not UTF-8".into())
-        })?;
-        return Ok(format!("__TSP_OUT_V1__\n{envelope}"));
-    }
-
-    // The legacy external paths still materialize the script in the master;
-    // the embedded IPC path above sends the script bytes to the worker.
-    fs::write(&tempfile, &script).map_err(JscError::WriteTemp)?;
-
-    if let Some(worker) = &bun.persistent_worker {
-        let result = worker.execute_file(&tempfile, timeout_ms, cancellation);
-        let _ = fs::remove_file(&tempfile);
-        return result;
-    }
-
-    let mut cmd = Command::new(&bun.bin);
-    cmd.arg("run").arg(&tempfile);
-    if let Some(json) = ctx_json {
-        // The env var is the side-channel the JS side reads in
-        // the wrap preamble. We embed the same JSON as a
-        // literal in the JS too (so a page that does not use
-        // the env var directly still gets the Context); the
-        // env var is here for completeness so JS code that
-        // wants the raw JSON (e.g. for streaming, or for
-        // debug) can read it. Slice 16d strips the request
-        // body from the env form -- env blocks on Windows are
-        // capped at ~32 KiB while bodies can reach the 1 MiB
-        // default limit; the body always rides inside the
-        // embedded literal.
-        cmd.env("TSP_CONTEXT_JSON", crate::host::ctx_json_for_env(json));
-    }
-    if let Some(dir) = source_dir {
-        // The generated entry file lives in the system temp directory. Tell
-        // Bun where application dependencies live and use the route directory
-        // as the process cwd so package resolution does not depend on the
-        // operator having installed dependencies next to `%TEMP%`.
-        let mut node_paths = vec![dir.join("node_modules")];
-        if let Some(parent) = dir.parent() {
-            node_paths.push(parent.join("node_modules"));
-        }
-        if let Ok(cwd) = std::env::current_dir() {
-            node_paths.push(cwd.join("node_modules"));
-        }
-        let separator = if cfg!(windows) { ";" } else { ":" };
-        cmd.env(
-            "NODE_PATH",
-            node_paths
-                .iter()
-                .map(|path| path.to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-                .join(separator),
-        );
-        cmd.current_dir(dir);
-    }
-    // The wrap preamble listens for `A\n` on stdin to
-    // fire the abort controller; pipe the stdin end so
-    // we can write to it from the watchdog thread.
-    cmd.stdin(Stdio::piped());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    let mut child = cmd.spawn().map_err(JscError::Spawn)?;
-    let pid = child.id();
-    let stdin_handle = child.stdin.take();
-
-    // Slice 16i: per-request timeout watchdog. The
-    // thread sleeps for `timeout_ms` (or skips entirely
-    // when 0), then writes the abort marker to the
-    // child's stdin. The grace period gives the page a
-    // chance to throw AbortError cleanly; if the child
-    // is still alive afterwards, the watchdog kills
-    // it so the host thread's `try_wait` loop exits.
-    let timed_out = Arc::new(AtomicBool::new(false));
-    // 0 = running, 1 = child completed, 2 = timeout won, 3 = client
-    // cancellation won. The CAS makes completion cancellation race-safe.
-    const WATCHDOG_RUNNING: u8 = 0;
-    const CHILD_COMPLETED: u8 = 1;
-    const WATCHDOG_TIMED_OUT: u8 = 2;
-    const WATCHDOG_CANCELLED: u8 = 3;
-    let watchdog_state = Arc::new(AtomicU8::new(WATCHDOG_RUNNING));
-    let watchdog = {
-        let timed_out = Arc::clone(&timed_out);
-        let watchdog_state = Arc::clone(&watchdog_state);
-        let cancellation = cancellation.clone();
-        let mut stdin = stdin_handle;
-        Some(thread::spawn(move || {
-            let deadline = (timeout_ms > 0)
-                .then(|| std::time::Instant::now() + Duration::from_millis(timeout_ms));
-            loop {
-                if watchdog_state.load(Ordering::SeqCst) != WATCHDOG_RUNNING {
-                    return;
-                }
-                let reason = if cancellation.is_cancelled() {
-                    Some(WATCHDOG_CANCELLED)
-                } else if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
-                    Some(WATCHDOG_TIMED_OUT)
-                } else {
-                    None
-                };
-                if let Some(reason) = reason {
-                    if watchdog_state
-                        .compare_exchange(
-                            WATCHDOG_RUNNING,
-                            reason,
-                            Ordering::SeqCst,
-                            Ordering::SeqCst,
-                        )
-                        .is_ok()
-                    {
-                        if reason == WATCHDOG_TIMED_OUT {
-                            timed_out.store(true, Ordering::SeqCst);
-                        }
-                        if let Some(ref mut s) = stdin {
-                            let _ = s.write_all(ABORT_MARKER);
-                            let _ = s.flush();
-                        }
-                    }
-                    return;
-                }
-                let sleep_for = deadline
-                    .map(|deadline| {
-                        deadline
-                            .saturating_duration_since(std::time::Instant::now())
-                            .min(Duration::from_millis(20))
-                    })
-                    .unwrap_or(Duration::from_millis(20));
-                thread::sleep(sleep_for);
-            }
-        }))
+    let pool = registered_pool
+        .or(bun.embedded_pool.as_ref())
+        .ok_or_else(|| JscError::Spawn(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no embedded worker pool available; the host must start one before serving requests",
+        )))?;
+    restart_workers_after_reload(pool)?;
+    let request = ExecuteRequest {
+        application: application_name,
+        method: method.as_str().to_string(),
+        path: source_path
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        deadline_ms: request_deadline_ms(timeout_ms),
+        headers: request_headers.unwrap_or(&[]).to_vec(),
+        body: request_body.unwrap_or(&[]).to_vec(),
+        script,
+        context_json: ctx_json.unwrap_or_default().to_string(),
     };
-
-    // Use `try_wait` polling rather than
-    // `wait_with_output` (which locks the child handle
-    // for the duration of the wait). With a 50ms poll
-    // interval the latency overhead is negligible
-    // compared to the bun subprocess cost, and the
-    // watchdog can still `kill` the process if the
-    // grace period expires.
-    let mut exited = false;
-    let mut final_status: Option<std::process::ExitStatus> = None;
-    while !exited {
-        match child.try_wait().map_err(JscError::Spawn)? {
-            Some(status) => {
-                let _ = watchdog_state.compare_exchange(
-                    WATCHDOG_RUNNING,
-                    CHILD_COMPLETED,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                );
-                final_status = Some(status);
-                exited = true;
-            }
-            None => {
-                if timed_out.load(Ordering::SeqCst) || cancellation.is_cancelled() {
-                    // The watchdog wrote ABORT_MARKER to the child stdin,
-                    // firing ctx.signal inside the page. Give the page a
-                    // grace window before hard-killing it. This covers
-                    // both timeout and client-disconnect cancellation.
-                    let grace_start = std::time::Instant::now();
-                    let mut killed = false;
-                    loop {
-                        if let Some(status) = child.try_wait().map_err(JscError::Spawn)? {
-                            final_status = Some(status);
-                            exited = true;
-                            break;
-                        }
-                        if grace_start.elapsed() >= GRACE_AFTER_MARKER {
-                            // Grace expired; hard-kill so the loop exits.
-                            // Best effort -- the kill may fail on Windows
-                            // if the process exited but try_wait missed it.
-                            killed = true;
-                            eprintln!(
-                                "TSPv2PoC1: timeout grace expired, killing bun subprocess pid={:?}",
-                                child.id()
-                            );
-                            let kill_result = child.kill();
-                            eprintln!("TSPv2PoC1: child.kill() result = {:?}", kill_result);
-                            let _ = child.wait();
-                            final_status = None;
-                            exited = true;
-                            break;
-                        }
-                        thread::sleep(Duration::from_millis(20));
-                    }
-                    let _ = killed;
-                } else {
-                    thread::sleep(Duration::from_millis(50));
-                }
-            }
-        }
-    }
-    // Drain stdout / stderr. After the child has
-    // exited, `take_stdout` / `take_stderr` returns
-    // the remaining bytes (Bun's stdout is line-buffered
-    // so any `__TSP_OUT_V1__\n` line emitted before the
-    // abort has been flushed).
-    let stdout = child
-        .stdout
-        .take()
-        .map(|mut s| {
-            let mut buf = Vec::new();
-            let _ = s.read_to_end(&mut buf);
-            buf
-        })
-        .unwrap_or_default();
-    let stderr = child
-        .stderr
-        .take()
-        .map(|mut s| {
-            let mut buf = Vec::new();
-            let _ = s.read_to_end(&mut buf);
-            buf
-        })
-        .unwrap_or_default();
-    let _ = pid; // child id reserved for future diagnostics
-
-    // Best-effort cleanup. Don't propagate a cleanup failure -- the
-    // request has already succeeded or failed on its own merits.
-    if let Some(h) = watchdog {
-        let _ = h.join();
-    }
-    // 16n' diagnosis: keep the generated tempfile for inspection
-    // when TSP_KEEP_TEMP=1 (mirrors 16n tracing; not a hot path).
-    if std::env::var("TSP_KEEP_TEMP")
-        .map(|v| v == "1")
-        .unwrap_or(false)
-    {
-        eprintln!("TSPv2PoC1: kept tempfile {}", tempfile.display());
-    } else {
-        let _ = fs::remove_file(&tempfile);
-    }
-
+    let result = pool.execute(request, timeout_ms).map_err(map_pool_error)?;
     if cancellation.is_cancelled() {
         return Err(JscError::Cancelled);
     }
-
-    if timed_out.load(Ordering::SeqCst) {
-        // Timeout is a hard failure -- a page that ignores
-        // the abort signal is a programming error the dev
-        // must see. The 500 body should tell them.
-        eprintln!("TSPv2PoC1: request timed out after {timeout_ms}ms");
-        // Slice 16n': distinguish a page that honored `ctx.signal`
-        // (exited cleanly after the abort) from one that had to be
-        // hard-killed. When the child exited successfully we surface
-        // its real stderr -- a cooperating page typically prints an
-        // "aborted" marker there -- so the E2E/dev can confirm the
-        // signal actually reached page code before the host declared
-        // the timeout.
-        let clean_abort = match &final_status {
-            Some(st) => st.success(),
-            None => false,
-        };
-        if clean_abort {
-            let mut tail_buf: Vec<u8> = stderr.iter().rev().take(1024).copied().collect();
-            tail_buf.reverse();
-            let tail = String::from_utf8_lossy(&tail_buf).into_owned();
-            return Err(JscError::TimedOut {
-                stderr_tail: format!(
-                    "request timed out after {timeout_ms}ms; page exited cleanly on ctx.signal (stderr follows)\n{tail}"
-                ),
-            });
-        }
-        return Err(JscError::TimedOut {
-            stderr_tail: format!(
-                "request timed out after {timeout_ms}ms; abort marker fired but page did not stop in time"
-            ),
-        });
-    }
-
-    if !final_status.as_ref().unwrap().success() {
-        // Cap stderr tail at 1 KiB so a JS error with a giant stack
-        // does not blow the 500 page into megabytes. Collect into a
-        // Vec<u8> first (so `from_utf8_lossy` takes a `&[u8]`), then
-        // reverse to restore the chronological order we truncated.
-        let mut tail_buf: Vec<u8> = stderr.iter().rev().take(1024).copied().collect();
-        tail_buf.reverse();
-        let tail = String::from_utf8_lossy(&tail_buf).into_owned();
-        return Err(JscError::BunFailed {
-            code: final_status.as_ref().unwrap().code(),
-            stderr_tail: tail,
-        });
-    }
-
-    let stdout = String::from_utf8_lossy(&stdout).into_owned();
-    if stdout.is_empty() {
-        return Err(JscError::EmptyStdout);
-    }
-    Ok(stdout)
+    let envelope = String::from_utf8(result.body)
+        .map_err(|_| JscError::Spawn(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "embedded worker response was not UTF-8",
+        )))?;
+    Ok(format!("__TSP_OUT_V1__
+{envelope}"))
 }
 
 fn request_deadline_ms(timeout_ms: u64) -> u64 {
@@ -1093,27 +390,35 @@ fn request_deadline_ms(timeout_ms: u64) -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-fn map_manager_error(error: ManagerError) -> JscError {
-    match error {
-        ManagerError::Io(error) => JscError::WorkerSpawn(error),
-        ManagerError::Protocol(error) => JscError::WorkerProtocol(error.to_string()),
-        ManagerError::WorkerNotReady | ManagerError::WorkerExited => JscError::WorkerExited,
-        ManagerError::WorkerTimeout => JscError::TimedOut {
-            stderr_tail: "embedded worker deadline expired; worker was restarted".into(),
-        },
-        ManagerError::ResourceIsolation(error) => JscError::WorkerProtocol(error),
-        ManagerError::UnsupportedPlatform => JscError::WorkerProtocol(
-            "embedded worker transport is unsupported on this platform".into(),
-        ),
-    }
-}
-
 fn map_pool_error(error: PoolError) -> JscError {
     match error {
-        PoolError::Manager(error) => map_manager_error(error),
-        PoolError::Backpressure => JscError::WorkerProtocol("embedded worker pool is full".into()),
-        PoolError::NoWorkers => JscError::WorkerExited,
-        PoolError::Poisoned => JscError::WorkerProtocol("worker pool mutex poisoned".into()),
+        PoolError::Manager(manager) => match manager {
+            ManagerError::Io(io) => JscError::Spawn(io),
+            ManagerError::Protocol(_) | ManagerError::ResourceIsolation(_) => {
+                JscError::Spawn(std::io::Error::other(manager.to_string()))
+            }
+            ManagerError::WorkerNotReady
+            | ManagerError::WorkerExited
+            | ManagerError::UnsupportedPlatform => JscError::Spawn(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                manager.to_string(),
+            )),
+            ManagerError::WorkerTimeout => JscError::TimedOut {
+                stderr_tail: "embedded worker deadline expired; worker was restarted".into(),
+            },
+        },
+        PoolError::Backpressure => JscError::Spawn(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "embedded worker pool is full",
+        )),
+        PoolError::NoWorkers => JscError::Spawn(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "embedded worker pool has no live workers",
+        )),
+        PoolError::Poisoned => JscError::Spawn(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "worker pool mutex poisoned",
+        )),
     }
 }
 
@@ -1122,65 +427,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_bun_bin_reports_missing_path() {
-        // `resolve_bun_bin` reads TSP_BUN_BIN first, then falls back
-        // to the vendored path. On most developer machines the
-        // vendored binary is present (the common case during
-        // slice-6 development), so this test is a no-op there. When
-        // the binary really is missing the error must be
-        // `BunNotFound` so the operator gets an actionable message.
-        if let Ok(p) = resolve_bun_bin() {
-            eprintln!(
-                "note: bun resolved to {} in this environment; skipping missing-path check",
-                p.display()
-            );
-            return;
-        }
-        match resolve_bun_bin() {
-            Err(JscError::BunNotFound { .. }) => {}
-            Err(other) => panic!("expected BunNotFound, got {other:?}"),
-            Ok(_) => unreachable!("just checked Err above"),
-        }
-    }
-
-    #[test]
     fn jsc_error_codes_are_stable() {
-        // Slice 16h: the host formats 500 bodies with the
-        // JSC bridge's own code + description. Pin the
-        // code table here so a refactor cannot silently
-        // renumber the prefix (e.g. accidentally reusing
-        // the timeout code `TSP3009` for JSX).
+        // Pin the v2.4 self-spawn-only error code table. A refactor must
+        // not silently renumber the prefix (e.g. accidentally reusing
+        // `TSP3009` for JSX).
         let pairs: &[(JscError, &str)] = &[
-            (
-                JscError::BunNotFound {
-                    tried: PathBuf::from("x"),
-                },
-                "TSP3010",
-            ),
-            (
-                JscError::BunFailed {
-                    code: Some(1),
-                    stderr_tail: String::new(),
-                },
-                "TSP3012",
-            ),
-            (
-                JscError::TimedOut {
-                    stderr_tail: String::new(),
-                },
-                "TSP3009",
-            ),
+            (JscError::BunNotFound { tried: PathBuf::from("x") }, "TSP3010"),
             (JscError::Cancelled, "TSP3015"),
+            (JscError::TimedOut { stderr_tail: String::new() }, "TSP3009"),
             (JscError::EmptyStdout, "TSP3013"),
             (
-                JscError::WriteTemp(std::io::Error::new(std::io::ErrorKind::Other, "x")),
-                "TSP3014",
-            ),
-            (
-                JscError::Jsx(jsx::JsxError::UnsupportedShape {
-                    line: 1,
-                    reason: "x",
-                }),
+                JscError::Jsx(jsx::JsxError::UnsupportedShape { line: 1, reason: "x" }),
                 "TSP3002",
             ),
         ];
@@ -1188,307 +445,5 @@ mod tests {
             assert_eq!(err.code(), *want, "err = {err:?}");
             assert!(!err.describe().is_empty(), "describe empty for {err:?}");
         }
-    }
-
-    #[test]
-    fn abort_marker_is_a_single_line() {
-        // Slice 16i: the host writes `ABORT_MARKER` to the
-        // bun subprocess's stdin when the per-request
-        // timeout fires. The wrap preamble's listener
-        // reads whatever is buffered and calls
-        // `__tspAbortCtrl.abort()`. Pin the marker shape
-        // here so a future refactor cannot silently
-        // change the wire form (e.g. multi-byte tokens
-        // that would race with the listener's first-byte
-        // check).
-        assert_eq!(ABORT_MARKER, b"A\n");
-        assert_eq!(ABORT_MARKER.len(), 2);
-    }
-
-    #[test]
-    fn normal_page_exits_before_timeout_watchdog() {
-        let Ok(bin) = resolve_bun_bin() else {
-            // The vendored Bun binary is optional for the library-only test
-            // environment; the host's integration test supplies it.
-            return;
-        };
-        let result = execute(
-            &BunRuntime {
-                bin,
-                persistent_worker: None,
-                embedded_worker: None,
-                embedded_pool: None,
-            },
-            "export function GET(ctx) { return 'ok'; }\n",
-            HttpMethod::Get,
-            Some(
-                r#"{"method":"GET","path":"/","query":"","params":{},"body_b64":"","headers":{}}"#,
-            ),
-            5_000,
-            &CancellationToken::new(),
-        );
-        assert!(
-            result.is_ok(),
-            "normal page must not wait for timeout: {result:?}"
-        );
-    }
-
-    #[test]
-    fn persistent_worker_reuses_one_process_for_multiple_requests() {
-        let Ok(bin) = resolve_bun_bin() else {
-            return;
-        };
-        let worker = match PersistentBunWorker::new(bin, None) {
-            Ok(worker) => worker,
-            Err(error) => panic!("persistent worker should start: {error}"),
-        };
-        let path = std::env::temp_dir().join(format!(
-            "tsp-v2-persistent-worker-test-{}.tsx",
-            std::process::id()
-        ));
-        let source = jsx::tsx_to_js("export function GET() { return 'persistent'; }\n")
-            .expect("fixture should transform");
-        let wrapped = jsx::wrap_for_bun_cli(&source, "GET", None);
-        fs::write(&path, wrapped).expect("worker fixture should be written");
-
-        for _ in 0..2 {
-            let result = worker
-                .execute_file(&path, 5_000, &CancellationToken::new())
-                .expect("persistent worker request should succeed");
-            assert!(result.contains("__TSP_OUT_V1__"));
-            assert!(result.contains("persistent"));
-        }
-
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn tsp_server_json_helper_executes_through_subprocess_bridge() {
-        let Ok(bin) = resolve_bun_bin() else {
-            return;
-        };
-        let result = execute(
-            &BunRuntime {
-                bin,
-                persistent_worker: None,
-                embedded_worker: None,
-                embedded_pool: None,
-            },
-            r#"
-import { type Context, json } from "tsp:server";
-export async function GET(ctx: Context) {
-  return json({ ok: true, method: ctx.method });
-}
-"#,
-            HttpMethod::Get,
-            Some(
-                r#"{"method":"GET","path":"/","query":"","params":{},"body_b64":"","headers":{}}"#,
-            ),
-            5_000,
-            &CancellationToken::new(),
-        );
-        let stdout = result.expect("tsp:server json helper should execute");
-        assert!(stdout.contains("\"status\":200"), "stdout={stdout}");
-        assert!(
-            stdout.contains("\"content-type\",\"application/json; charset=utf-8\""),
-            "stdout={stdout}"
-        );
-        assert!(stdout.contains("\"ok\":true"), "stdout={stdout}");
-        assert!(stdout.contains("\"method\":\"GET\""), "stdout={stdout}");
-    }
-
-    #[test]
-    fn tsp_server_http_error_becomes_response_envelope() {
-        let Ok(bin) = resolve_bun_bin() else {
-            return;
-        };
-        let result = execute(
-            &BunRuntime {
-                bin,
-                persistent_worker: None,
-                embedded_worker: None,
-                embedded_pool: None,
-            },
-            r#"
-import { HttpError } from "tsp:server";
-export function GET() {
-  throw new HttpError(404, "missing");
-}
-"#,
-            HttpMethod::Get,
-            None,
-            5_000,
-            &CancellationToken::new(),
-        );
-        let stdout = result.expect("HttpError should become a response envelope");
-        assert!(stdout.contains("\"status\":404"), "stdout={stdout}");
-        assert!(stdout.contains("\"body\":\"missing\""), "stdout={stdout}");
-    }
-
-    #[test]
-    fn nested_tsx_async_components_render_with_escaping() {
-        let Ok(bin) = resolve_bun_bin() else {
-            return;
-        };
-        let result = execute(
-            &BunRuntime {
-                bin,
-                persistent_worker: None,
-                embedded_worker: None,
-                embedded_pool: None,
-            },
-            r#"
-function Item({ value }: { value: string }) {
-  return <li data-value={value}><span>{value}</span></li>;
-}
-export async function GET(ctx: Context) {
-  return <div className="card"><Item value="<unsafe>" /><>{42}{null}<strong>ok</strong></></div>;
-}
-"#,
-            HttpMethod::Get,
-            Some(
-                r#"{"method":"GET","path":"/","query":"","params":{},"body_b64":"","headers":{}}"#,
-            ),
-            5_000,
-            &CancellationToken::new(),
-        );
-        let stdout = result.expect("nested TSX should render");
-        assert!(stdout.contains("<div class=\"card\"><li data-value=\"&lt;unsafe&gt;\"><span>&lt;unsafe&gt;</span></li>42<strong>ok</strong></div>"), "stdout={stdout}");
-    }
-
-    #[test]
-    fn named_fragment_export_renders_when_selected_by_context() {
-        let Ok(bin) = resolve_bun_bin() else {
-            return;
-        };
-        let result = execute(
-            &BunRuntime {
-                bin,
-                persistent_worker: None,
-                embedded_worker: None,
-                embedded_pool: None,
-            },
-            r#"
-import { type Context, fragment } from "tsp:server";
-export const list = fragment(async (ctx: Context) => <ul><li>one</li><li>two</li></ul>);
-"#,
-            HttpMethod::Get,
-            Some(
-                r#"{"method":"GET","path":"/users","query":"","params":{},"body_b64":"","headers":{},"__tsp_fragment":"list"}"#,
-            ),
-            5_000,
-            &CancellationToken::new(),
-        );
-        let stdout = result.expect("selected fragment should render");
-        assert!(
-            stdout.contains("<ul><li>one</li><li>two</li></ul>"),
-            "stdout={stdout}"
-        );
-    }
-
-    #[test]
-    fn relative_ts_dependency_executes_from_route_source_directory() {
-        let Ok(bin) = resolve_bun_bin() else {
-            return;
-        };
-        let dir = std::env::temp_dir().join(format!("tsp-v2-dep-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("shared.tsx"),
-            "export function Shared() { return <em>from-dep</em>; }\n",
-        )
-        .unwrap();
-        let result = execute_from_dir(
-            &BunRuntime {
-                bin,
-                persistent_worker: None,
-                embedded_worker: None,
-                embedded_pool: None,
-            },
-            r#"
-import { Shared } from "./shared";
-export function GET() { return <p><Shared /></p>; }
-"#,
-            HttpMethod::Get,
-            None,
-            5_000,
-            &CancellationToken::new(),
-            &dir,
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-        let stdout = result.expect("relative TypeScript dependency should execute");
-        assert!(
-            stdout.contains("<p><em>from-dep</em></p>"),
-            "stdout={stdout}"
-        );
-    }
-
-    #[test]
-    fn package_dependency_resolves_from_route_source_directory() {
-        let Ok(bin) = resolve_bun_bin() else {
-            return;
-        };
-        let dir = std::env::temp_dir().join(format!("tsp-v2-package-dep-{}", std::process::id()));
-        let package = dir.join("node_modules/tsp-v2-fixture");
-        std::fs::create_dir_all(&package).unwrap();
-        std::fs::write(
-            package.join("package.json"),
-            r#"{"name":"tsp-v2-fixture","module":"index.ts"}"#,
-        )
-        .unwrap();
-        std::fs::write(package.join("index.ts"), "export const answer = 42;\n").unwrap();
-        let result = execute_from_dir(
-            &BunRuntime {
-                bin,
-                persistent_worker: None,
-                embedded_worker: None,
-                embedded_pool: None,
-            },
-            r#"
-import { answer } from "tsp-v2-fixture";
-export function GET() { return <p>{answer}</p>; }
-"#,
-            HttpMethod::Get,
-            None,
-            5_000,
-            &CancellationToken::new(),
-            &dir,
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-        let stdout = result.expect("package dependency should resolve");
-        assert!(stdout.contains("<p>42</p>"), "stdout={stdout}");
-    }
-
-    #[test]
-    fn client_cancellation_stops_hanging_page() {
-        let Ok(bin) = resolve_bun_bin() else {
-            return;
-        };
-        let cancellation = CancellationToken::new();
-        let cancel_later = cancellation.clone();
-        let cancel_thread = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(250));
-            cancel_later.cancel();
-        });
-        let result = execute(
-            &BunRuntime {
-                bin,
-                persistent_worker: None,
-                embedded_worker: None,
-                embedded_pool: None,
-            },
-            "export async function GET(ctx) { await new Promise(() => {}); return 'never'; }\n",
-            HttpMethod::Get,
-            Some(
-                r#"{"method":"GET","path":"/slow","query":"","params":{},"body_b64":"","headers":{}}"#,
-            ),
-            5_000,
-            &cancellation,
-        );
-        cancel_thread.join().expect("cancellation thread");
-        assert!(
-            matches!(result, Err(JscError::Cancelled)),
-            "result={result:?}"
-        );
     }
 }

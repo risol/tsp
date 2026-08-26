@@ -1,0 +1,29 @@
+ARG BUILDER_IMAGE=tspserver-v2-build-env:latest
+ARG GIT_SHA=unknown
+FROM ${BUILDER_IMAGE} AS builder
+
+WORKDIR /src
+ARG GIT_SHA
+ENV GIT_SHA=${GIT_SHA}
+COPY . .
+
+# These are the two Cargo path dependencies explicitly fetched by CI before
+# installing the Rust toolchain and building the release binary.
+RUN bun scripts/build/fetch-cli.ts dep \
+      lolhtml oven-sh/lol-html \
+      725ce499aa9b71e38b7a2d0a9fbb6d7294a4079e \
+      vendor/lolhtml build/cache/tarballs \
+    && bun scripts/build/fetch-cli.ts dep \
+      rust-argon2 sru-systems/rust-argon2 \
+      ed81866f163f0c7026aa6fd8388adf37242eb32a \
+      vendor/rust-argon2 build/cache/tarballs \
+      patches/rust-argon2/legacy-low-memory.patch
+
+RUN bun install --frozen-lockfile
+
+RUN bun run build:release \
+    && install -D -m 0755 build/release/bun /out/tspserver_v2
+
+# Export only the Linux executable with `--output type=local`.
+FROM scratch AS artifact
+COPY --from=builder /out/tspserver_v2 /tspserver_v2
