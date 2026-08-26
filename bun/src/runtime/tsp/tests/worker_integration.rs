@@ -29,6 +29,14 @@ fn stub_binary() -> PathBuf {
 }
 
 fn socket_path(name: &str) -> PathBuf {
+    unique_socket_location(name, ".sock")
+}
+
+fn socket_dir(name: &str) -> PathBuf {
+    unique_socket_location(name, "")
+}
+
+fn unique_socket_location(name: &str, suffix: &str) -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be after epoch")
@@ -40,7 +48,7 @@ fn socket_path(name: &str) -> PathBuf {
     let root = PathBuf::from("/tmp");
     #[cfg(not(unix))]
     let root = std::env::temp_dir();
-    root.join(format!("tsp-{name}-{}-{nonce}.sock", std::process::id()))
+    root.join(format!("tsp-{name}-{}-{nonce}{suffix}", std::process::id()))
 }
 
 fn request(path: &str, script: &[u8]) -> ExecuteRequest {
@@ -118,7 +126,9 @@ fn timeout_restarts_a_stuck_worker() {
 #[test]
 fn pool_applies_admission_backpressure() {
     install_github_failure_reporter();
-    let pool = Arc::new(WorkerPool::new(stub_binary(), socket_path("pool"), 1, 1));
+    let socket_dir = socket_dir("pool");
+    std::fs::create_dir_all(&socket_dir).expect("pool socket directory should be created");
+    let pool = Arc::new(WorkerPool::new(stub_binary(), &socket_dir, 1, 1));
     pool.start().expect("pool worker should start");
     let running = Arc::clone(&pool);
     let thread =
@@ -140,4 +150,6 @@ fn pool_applies_admission_backpressure() {
         .expect("worker thread should join")
         .expect("slow request should finish");
     pool.restart_all().expect("pool should remain restartable");
+    drop(pool);
+    std::fs::remove_dir_all(socket_dir).expect("pool socket directory should be removed");
 }
