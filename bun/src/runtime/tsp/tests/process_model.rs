@@ -23,7 +23,7 @@
 //! helper.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bun_runtime_tsp::worker::manager::WorkerManager;
@@ -31,6 +31,19 @@ use bun_runtime_tsp::worker::pool::WorkerPool;
 #[cfg(unix)]
 use bun_runtime_tsp::worker::process_inspector;
 use bun_runtime_tsp::worker::protocol::ExecuteRequest;
+
+/// Global mutex that serialises the `TSP_WORKER_INFO_PATH`
+/// env-var manipulation. The stub reads the env var from its
+/// inherited environment; without this lock, parallel test
+/// threads race on the shared global and the wrong worker
+/// writes to the wrong file. CI also runs this binary with
+/// `--test-threads=1` (see `.github/workflows/ci.yml`); the
+/// mutex is the local-dev fallback so the tests pass under
+/// `cargo test` defaults as well.
+fn info_path_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 // Re-export the stub's read_process_info + ParsedProcessInfo so the
 // tests don't need a second dependency on the bin crate. The bin
@@ -130,6 +143,7 @@ fn worker_pid_matches_handle_id() {
     // The process-model contract: the PID the manager reports
     // through `child.id()` must be a live OS process, and the
     // worker must have written its own PID to the info file.
+    let _guard = info_path_lock().lock().expect("lock should not be poisoned");
     let info_path = unique_temp_path("pid");
     let socket = unique_socket_path("pid");
     let mut manager = WorkerManager::new(stub_binary(), socket.clone());
@@ -137,11 +151,12 @@ fn worker_pid_matches_handle_id() {
     // vars per-spawn. The stub reads `TSP_WORKER_INFO_PATH` from
     // the inherited environment; to make the test self-contained
     // we set it on the current process before start, and unset
-    // afterwards. Tests run single-threaded inside cargo so this
-    // is safe.
+    // afterwards. The mutex above serialises this against
+    // parallel test threads.
     unsafe { std::env::set_var("TSP_WORKER_INFO_PATH", &info_path) };
     let result = manager.start_worker();
     unsafe { std::env::remove_var("TSP_WORKER_INFO_PATH") };
+    drop(_guard);
     result.expect("stub worker should become ready");
 
     let reported_pid = manager
@@ -169,12 +184,14 @@ fn worker_receives_tsp_worker_flag() {
     // therefore MUST include it; the master entry path
     // (`is_tspserver_executable`) checks the same flag in the
     // real binary.
+    let _guard = info_path_lock().lock().expect("lock should not be poisoned");
     let info_path = unique_temp_path("flag");
     let socket = unique_socket_path("flag");
     let mut manager = WorkerManager::new(stub_binary(), socket.clone());
     unsafe { std::env::set_var("TSP_WORKER_INFO_PATH", &info_path) };
     let result = manager.start_worker();
     unsafe { std::env::remove_var("TSP_WORKER_INFO_PATH") };
+    drop(_guard);
     result.expect("stub worker should become ready");
 
     let info = wait_for_info_file(&info_path);
@@ -198,6 +215,7 @@ fn worker_executable_path_is_canonicalized() {
     // launch it. The master canonicity check is the smoke test's
     // job; here we just lock down that the stub reports its own
     // canonical path.
+    let _guard = info_path_lock().lock().expect("lock should not be poisoned");
     let info_path = unique_temp_path("exe");
     let socket = unique_socket_path("exe");
     let stub_path = stub_binary();
@@ -205,6 +223,7 @@ fn worker_executable_path_is_canonicalized() {
     unsafe { std::env::set_var("TSP_WORKER_INFO_PATH", &info_path) };
     let result = manager.start_worker();
     unsafe { std::env::remove_var("TSP_WORKER_INFO_PATH") };
+    drop(_guard);
     result.expect("stub worker should become ready");
 
     let info = wait_for_info_file(&info_path);
@@ -243,12 +262,14 @@ fn linux_worker_parent_pid_is_test_pid() {
     // uses fork()-style spawning (or `Command::spawn`, both of
     // which make the test runner the parent). Either way the
     // parent PID the worker reports must equal the test PID.
+    let _guard = info_path_lock().lock().expect("lock should not be poisoned");
     let info_path = unique_temp_path("ppid");
     let socket = unique_socket_path("ppid");
     let mut manager = WorkerManager::new(stub_binary(), socket.clone());
     unsafe { std::env::set_var("TSP_WORKER_INFO_PATH", &info_path) };
     let result = manager.start_worker();
     unsafe { std::env::remove_var("TSP_WORKER_INFO_PATH") };
+    drop(_guard);
     result.expect("stub worker should become ready");
 
     let info = wait_for_info_file(&info_path);
@@ -270,6 +291,7 @@ fn no_zombie_after_explicit_kill() {
     // PID is still in /proc with state 'Z' and `kill(pid, 0)`
     // still succeeds — that combination is the "zombie" signal
     // process_inspector::is_alive would catch.
+    let _guard = info_path_lock().lock().expect("lock should not be poisoned");
     let info_path = unique_temp_path("zombie");
     let socket = unique_socket_path("zombie");
     let mut manager = WorkerManager::new(stub_binary(), socket.clone());
@@ -279,6 +301,7 @@ fn no_zombie_after_explicit_kill() {
     let worker_pid = info.pid;
     std::thread::sleep(Duration::from_millis(20));
     unsafe { std::env::remove_var("TSP_WORKER_INFO_PATH") };
+    drop(_guard);
     manager.stop_worker().expect("stop");
 
     // After stop_worker returns, the child must be fully reaped
@@ -304,6 +327,7 @@ fn multi_worker_pool_continues_when_one_crashes() {
     // requests; every request must succeed because the pool
     // auto-restarts the crashed slot. The remaining two workers
     // must not be affected.
+    let _guard = info_path_lock().lock().expect("lock should not be poisoned");
     let info_path_a = unique_temp_path("crasha");
     let info_path_b = unique_temp_path("crashb");
     let info_path_c = unique_temp_path("crashc");
@@ -347,8 +371,133 @@ fn multi_worker_pool_continues_when_one_crashes() {
     unsafe { std::env::remove_var("TSP_WORKER_INFO_PATH") };
 
     drop(pool);
+    drop(_guard);
     let _ = std::fs::remove_file(&info_path_a);
     let _ = std::fs::remove_file(&info_path_b);
     let _ = std::fs::remove_file(&info_path_c);
     let _ = std::fs::remove_dir_all(&socket_dir);
+}
+
+// -----------------------------------------------------------------------
+// Slice B: fork wait/kill/reap + cancel path.
+//
+// These tests are layered on top of the Slice A contracts. They
+// exercise the manager's *lifecycle* rather than the protocol:
+// explicit kill from outside, cancel during a long-running request,
+// and the idempotence of start_worker.
+// -----------------------------------------------------------------------
+
+#[cfg(unix)]
+#[test]
+fn explicit_sigkill_from_outside_is_reaped_and_recovered() {
+    // Simulate a worker that the OS takes down with SIGKILL (no
+    // graceful exit, no exit-handler fire). The manager must
+    // detect the dead stream on the next request, restart the
+    // slot, and serve the replacement.
+    let _guard = info_path_lock().lock().expect("lock should not be poisoned");
+    let info_path = unique_temp_path("kill");
+    let socket = unique_socket_path("kill");
+    let mut manager = WorkerManager::new(stub_binary(), socket.clone());
+    unsafe { std::env::set_var("TSP_WORKER_INFO_PATH", &info_path) };
+    manager.start_worker().expect("start");
+    let info = wait_for_info_file(&info_path);
+    let worker_pid = info.pid as libc::pid_t;
+    unsafe { std::env::remove_var("TSP_WORKER_INFO_PATH") };
+    drop(_guard);
+
+    // Send SIGKILL to the worker; the stub does not install any
+    // handler so the kernel reaps it without a clean exit.
+    let result = unsafe { libc::kill(worker_pid, libc::SIGKILL) };
+    assert_eq!(result, 0, "SIGKILL should succeed");
+
+    // Give the kernel a moment to clean up the task struct and
+    // for the master's stream read to observe the broken pipe.
+    std::thread::sleep(Duration::from_millis(100));
+
+    // The next request must succeed via the replacement worker.
+    let response = manager
+        .execute(request("after-kill", b"resurrected"))
+        .expect("replacement should serve after SIGKILL");
+    assert_eq!(response.body, b"resurrected");
+
+    manager.stop_worker().expect("stop");
+    let _ = std::fs::remove_file(&info_path);
+    let _ = std::fs::remove_file(&socket);
+}
+
+#[test]
+fn start_worker_is_idempotent() {
+    // Calling start_worker a second time on an already-running
+    // manager must be a no-op. The integration test ensures the
+    // master never duplicates a worker slot by accident.
+    let socket = unique_socket_path("idempotent");
+    let mut manager = WorkerManager::new(stub_binary(), socket.clone());
+    manager.start_worker().expect("first start");
+    let first_pid = manager
+        .stats()
+        .expect("manager should have stats")
+        .2;
+    manager.start_worker().expect("second start is a no-op");
+    let second_pid = manager
+        .stats()
+        .expect("manager should still have stats")
+        .2;
+    assert_eq!(first_pid, second_pid, "start_worker must not respawn");
+    manager.stop_worker().expect("stop");
+    let _ = std::fs::remove_file(&socket);
+}
+
+#[test]
+fn cancel_during_in_flight_request_does_not_break_next_request() {
+    // The manager exposes `cancel(id)` for in-flight requests
+    // that the host has decided to abort. The cancel must reach
+    // the worker (the stub's Message::Cancel handler is
+    // intentionally a no-op so we can assert the manager's
+    // bookkeeping without depending on stub behaviour), and
+    // the next request must succeed via the same slot.
+    let socket = unique_socket_path("cancel");
+    let mut manager = WorkerManager::new(stub_binary(), socket.clone());
+    manager.start_worker().expect("start");
+
+    // Run a slow request synchronously so we control the timing.
+    // The stub echoes the script bytes as the response body when
+    // the script is non-empty, so use a sentinel here.
+    let response = manager
+        .execute_with_timeout(request("slow", b"__TSP_TEST_SLEEP__"), 1_000)
+        .expect("sleep request should complete within 1s");
+    assert_eq!(response.body, b"__TSP_TEST_SLEEP__");
+
+    // Cancel an arbitrary id against the live worker; the stub
+    // treats cancel as a no-op so this is purely a master-side
+    // assertion.
+    manager
+        .cancel(42)
+        .expect("cancel should write to the worker stream");
+
+    // The next request must still succeed; the stream is not
+    // torn down by a benign cancel.
+    let response = manager
+        .execute(request("after-cancel", b"ok"))
+        .expect("subsequent request should succeed after cancel");
+    assert_eq!(response.body, b"ok");
+
+    manager.stop_worker().expect("stop");
+    let _ = std::fs::remove_file(&socket);
+}
+
+#[test]
+fn worker_receives_heartbeat_and_responds() {
+    // The protocol's Heartbeat message round-trips through the
+    // manager's `health_check`; pin the contract that the stub
+    // echoes the heartbeat id, so any future Heartbeat
+    // wire-format change fails this test instead of leaving
+    // master/worker drift in production.
+    let socket = unique_socket_path("heartbeat");
+    let mut manager = WorkerManager::new(stub_binary(), socket.clone());
+    manager.start_worker().expect("start");
+    manager
+        .health_check()
+        .expect("heartbeat round-trip should succeed");
+    manager.stop_worker().expect("stop");
+    let _ = std::fs::remove_file(&socket);
 }

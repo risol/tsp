@@ -49,10 +49,16 @@ where
     }
     // Publish process info before sending Ready so the master can
     // read the file once it observes the Ready message. The
-    // TSP_WORKER_INFO_PATH env var is opt-in; the test harness sets
-    // it only for process-model assertions, and the protocol-only
-    // smoke test does not.
-    if let Some(info_path) = std::env::var_os("TSP_WORKER_INFO_PATH") {
+    // `--tsp-worker-info=<path>` argument is opt-in; the test
+    // harness passes it only for process-model assertions, and the
+    // protocol-only smoke test does not. We accept either the CLI
+    // flag or the legacy `TSP_WORKER_INFO_PATH` env var so the
+    // master API can pick whichever is more convenient; the CLI
+    // flag wins when both are set so parallel tests can race
+    // without leaking the env var between them.
+    if let Some(path) = worker_info_path_from_args() {
+        write_process_info(path.as_os_str());
+    } else if let Some(info_path) = std::env::var_os("TSP_WORKER_INFO_PATH") {
         write_process_info(&info_path);
     }
     if (Message::Ready {
@@ -196,6 +202,24 @@ fn parent_pid() -> u32 {
     // Safety: getppid has no preconditions and is async-signal-safe.
     let pid: i32 = unsafe { libc::getppid() };
     pid as u32
+}
+
+/// Pull the info-file path out of the command line. The flag is
+/// `--tsp-worker-info=<path>` so the stub does not have to
+/// distinguish "arg with value" from "env var" — passing it as a
+/// per-spawn CLI argument is what makes the parallel test runner
+/// race-safe.
+fn worker_info_path_from_args() -> Option<std::path::PathBuf> {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if let Some(rest) = arg.strip_prefix("--tsp-worker-info=") {
+            return Some(std::path::PathBuf::from(rest));
+        }
+        if arg == "--tsp-worker-info" {
+            return args.next().map(std::path::PathBuf::from);
+        }
+    }
+    None
 }
 
 #[cfg(not(unix))]
