@@ -53,7 +53,7 @@ jobs:
         run: cargo test -p bun_runtime_tsp --test worker_integration --no-fail-fast --locked -- --test-threads=1
 
       - name: Run process-model integration tests
-        run: cargo test -p bun_runtime_tsp --test process_model --no-fail-fast --locked
+        run: cargo test -p bun_runtime_tsp --test process_model --no-fail-fast --locked -- --test-threads=1
 
       - name: Run start-order contract test
         run: cargo test -p bun_runtime_tsp --test start_order --no-fail-fast --locked
@@ -94,7 +94,7 @@ jobs:
         run: cargo test -p bun_runtime_tsp --test worker_integration --no-fail-fast --locked -- --test-threads=1
 
       - name: Run process-model integration tests
-        run: cargo test -p bun_runtime_tsp --test process_model --no-fail-fast --locked
+        run: cargo test -p bun_runtime_tsp --test process_model --no-fail-fast --locked -- --test-threads=1
 
       - name: Run start-order contract test
         run: cargo test -p bun_runtime_tsp --test start_order --no-fail-fast --locked
@@ -132,7 +132,7 @@ jobs:
         run: cargo test -p bun_runtime_tsp --test worker_integration --no-fail-fast --locked -- --test-threads=1
 
       - name: Run process-model integration tests
-        run: cargo test -p bun_runtime_tsp --test process_model --no-fail-fast --locked
+        run: cargo test -p bun_runtime_tsp --test process_model --no-fail-fast --locked -- --test-threads=1
 
       - name: Run start-order contract test
         run: cargo test -p bun_runtime_tsp --test start_order --no-fail-fast --locked

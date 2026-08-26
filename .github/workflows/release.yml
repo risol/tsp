@@ -94,7 +94,7 @@ jobs:
       - name: Run native process-model + start-order tests
         working-directory: bun
         run: |
-          cargo test -p bun_runtime_tsp --test process_model --no-fail-fast --locked
+          cargo test -p bun_runtime_tsp --test process_model --no-fail-fast --locked -- --test-threads=1
           cargo test -p bun_runtime_tsp --test start_order --no-fail-fast --locked
 
       - name: Run v2 smoke test
