@@ -29,7 +29,7 @@ export async function POST(ctx) {
       "x-method": ctx.request.method,
     },
   });
-  ctx.cookies.set('a', 'v1', { path: '/' });
+  ctx.cookies.set('a', 'v2', { path: '/' });
   ctx.cookies.set('b', 'v2', { path: '/' });
   return resp;
 }

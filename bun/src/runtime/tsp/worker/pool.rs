@@ -9,9 +9,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+use super::lifecycle::RecyclePolicy;
 use super::manager::{ManagerError, WorkerManager};
 use super::protocol::{ExecuteRequest, ExecuteResponse};
-use super::lifecycle::RecyclePolicy;
 use super::sandbox::ResourceLimits;
 
 #[derive(Debug)]
@@ -149,7 +149,10 @@ impl WorkerPool {
 
     pub fn start(&self) -> Result<(), PoolError> {
         for slot in &self.slots {
-            slot.manager.lock().map_err(|_| PoolError::Poisoned)?.start_worker()?;
+            slot.manager
+                .lock()
+                .map_err(|_| PoolError::Poisoned)?
+                .start_worker()?;
         }
         Ok(())
     }
@@ -172,9 +175,8 @@ impl WorkerPool {
             .clone();
         slot.active.fetch_add(1, Ordering::AcqRel);
         let dispatch_started = Instant::now();
-        let remaining_timeout_ms = || {
-            timeout_ms.saturating_sub(dispatch_started.elapsed().as_millis() as u64)
-        };
+        let remaining_timeout_ms =
+            || timeout_ms.saturating_sub(dispatch_started.elapsed().as_millis() as u64);
         let result = match slot.manager.lock() {
             Ok(mut manager) => {
                 if manager.should_recycle(&self.recycle_policy) {
@@ -199,14 +201,20 @@ impl WorkerPool {
 
     pub fn health_check(&self) -> Result<(), PoolError> {
         for slot in &self.slots {
-            slot.manager.lock().map_err(|_| PoolError::Poisoned)?.health_check()?;
+            slot.manager
+                .lock()
+                .map_err(|_| PoolError::Poisoned)?
+                .health_check()?;
         }
         Ok(())
     }
 
     pub fn restart_all(&self) -> Result<(), PoolError> {
         for slot in &self.slots {
-            slot.manager.lock().map_err(|_| PoolError::Poisoned)?.restart_worker()?;
+            slot.manager
+                .lock()
+                .map_err(|_| PoolError::Poisoned)?
+                .restart_worker()?;
         }
         Ok(())
     }
@@ -217,8 +225,7 @@ impl WorkerPool {
             .in_flight
             .lock()
             .map_err(|_| PoolError::Poisoned)?;
-        let deadline = (timeout_ms > 0)
-            .then(|| Instant::now() + Duration::from_millis(timeout_ms));
+        let deadline = (timeout_ms > 0).then(|| Instant::now() + Duration::from_millis(timeout_ms));
         while *in_flight >= self.admission.limit {
             if let Some(deadline) = deadline {
                 let remaining = deadline.saturating_duration_since(Instant::now());
@@ -247,5 +254,4 @@ impl WorkerPool {
             admission: Arc::clone(&self.admission),
         })
     }
-
 }

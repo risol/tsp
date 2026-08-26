@@ -1,8 +1,5 @@
 {
   "recommendations": [
-    "denoland.vscode-deno"
-  ],
-  "unwantedRecommendations": [
-    "ms-vscode.vscode-typescript-next"
+    "rust-lang.rust-analyzer"
   ]
 }

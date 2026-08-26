@@ -12,8 +12,8 @@
 //! `bun_watcher` crate integration from slice 7's spike -- bun's
 //! watcher is platform-native (inotify / ReadDirectoryChangesW)
 //! and its `WatcherContext` callback API requires the full Bun
-//! event-loop + FD lifecycle that the side-by-side v2 host does
-//! not have wired yet. Polling with a real-time source-hash diff
+//! event-loop + FD lifecycle that the native host does not have wired yet.
+//! Polling with a real-time source-hash diff
 //! is the smallest implementation that satisfies the lazy-reload
 //! contract; swapping the backend later (watcher.rs is a single
 //! module) is a localized change.
@@ -88,11 +88,7 @@ impl WatcherHandle {
         }
         self.thread
             .lock()
-            .map(|guard| {
-                guard
-                    .as_ref()
-                    .is_some_and(|thread| !thread.is_finished())
-            })
+            .map(|guard| guard.as_ref().is_some_and(|thread| !thread.is_finished()))
             .unwrap_or(false)
     }
 
@@ -190,13 +186,8 @@ impl DependencyIndex {
             };
             let mut files = HashSet::new();
             let mut visiting = HashSet::new();
-            if collect_dependency_files(
-                &canonical_root,
-                &route.source,
-                &mut files,
-                &mut visiting,
-            )
-            .is_err()
+            if collect_dependency_files(&canonical_root, &route.source, &mut files, &mut visiting)
+                .is_err()
             {
                 index.complete = false;
                 // Keep the root source in the index even when an import is
@@ -205,7 +196,11 @@ impl DependencyIndex {
                 files.insert(canonical_watch_path(&route.source));
             }
             for file in files {
-                index.pages_by_file.entry(file).or_default().insert(page.clone());
+                index
+                    .pages_by_file
+                    .entry(file)
+                    .or_default()
+                    .insert(page.clone());
             }
         }
         index
@@ -221,7 +216,15 @@ impl DependencyIndex {
                 pages.extend(affected.iter().cloned());
             }
         }
-        Some(pages)
+        // A route source must always map to its own page. If filesystem
+        // canonicalization or a transient route-table race leaves the index
+        // without that mapping, invalidate every page rather than silently
+        // serving stale output.
+        if pages.is_empty() && !changed_files.is_empty() {
+            None
+        } else {
+            Some(pages)
+        }
     }
 }
 
@@ -375,7 +378,10 @@ fn reconcile_routes(
             let _ = registry.mark_dirty(&page_ref);
         }
         if !table.replace_by_path(route.clone()) {
-            return Err(format!("replace route {} failed: route disappeared", route.path));
+            return Err(format!(
+                "replace route {} failed: route disappeared",
+                route.path
+            ));
         }
         for method in old.methods {
             if !route.methods.contains(&method) {
@@ -396,9 +402,7 @@ fn reconcile_routes(
     for path in &removed {
         table.remove_by_path(path);
         let n = registry.unregister_path(path);
-        eprintln!(
-            "TSPv2PoC1: watch: removed route {path} (dropped {n} slot(s))"
-        );
+        eprintln!("TSPv2PoC1: watch: removed route {path} (dropped {n} slot(s))");
     }
 
     Ok((added.len(), removed.len()))
@@ -432,12 +436,8 @@ fn poll_once_with_index(
     let mut stats = PollStats::default();
     let mut current: HashMap<PathBuf, FileSnapshot> = HashMap::new();
 
-    stats.snapshot_complete = collect_sources_with_previous(
-        root,
-        &mut current,
-        last_seen,
-        &mut stats,
-    );
+    stats.snapshot_complete =
+        collect_sources_with_previous(root, &mut current, last_seen, &mut stats);
 
     // Find files whose hash changed (new file or content change).
     for (path, snapshot) in &current {
@@ -544,9 +544,10 @@ fn collect_sources_with_previous(
             continue;
         };
         if file_type.is_dir() {
-            if matches!(path.file_name().and_then(|n| n.to_str()),
-                Some(".git" | "node_modules" | "target" | ".cache"))
-            {
+            if matches!(
+                path.file_name().and_then(|n| n.to_str()),
+                Some(".git" | "node_modules" | "target" | ".cache")
+            ) {
                 continue;
             }
             if !collect_sources_with_previous(&path, current, previous, stats) {
@@ -581,11 +582,14 @@ fn collect_sources_with_previous(
             continue;
         };
         if let Ok(text) = String::from_utf8(bytes) {
-            current.insert(path.clone(), FileSnapshot {
-                modified,
-                len: metadata.len(),
-                hash: SourceHash::compute(&text),
-            });
+            current.insert(
+                path.clone(),
+                FileSnapshot {
+                    modified,
+                    len: metadata.len(),
+                    hash: SourceHash::compute(&text),
+                },
+            );
         } else {
             stats.snapshot_errors += 1;
             complete = false;
@@ -593,7 +597,6 @@ fn collect_sources_with_previous(
     }
     complete
 }
-
 
 /// Spawn the watcher thread. Returns a handle the host can use
 /// to stop it (and that joins on drop).
@@ -746,17 +749,43 @@ mod tests {
         collect_sources(&dir, &mut last_seen, &mut PollStats::default());
 
         // First poll (unchanged): no changes.
-        let s1 = poll_once(&dir, &ModuleGraph::new(), &RouteTable::empty(), &registry, &mut last_seen);
-        assert!(s1.changed_files.is_empty(), "unchanged poll should report nothing, got {:?}", s1.changed_files);
+        let s1 = poll_once(
+            &dir,
+            &ModuleGraph::new(),
+            &RouteTable::empty(),
+            &registry,
+            &mut last_seen,
+        );
+        assert!(
+            s1.changed_files.is_empty(),
+            "unchanged poll should report nothing, got {:?}",
+            s1.changed_files
+        );
 
         // Second poll (unchanged): still no changes.
-        let s2 = poll_once(&dir, &ModuleGraph::new(), &RouteTable::empty(), &registry, &mut last_seen);
+        let s2 = poll_once(
+            &dir,
+            &ModuleGraph::new(),
+            &RouteTable::empty(),
+            &registry,
+            &mut last_seen,
+        );
         assert!(s2.changed_files.is_empty());
 
         // Change the file.
         fs::write(&idx, "<h1>two</h1>").unwrap();
-        let s3 = poll_once(&dir, &ModuleGraph::new(), &RouteTable::empty(), &registry, &mut last_seen);
-        assert_eq!(s3.changed_files, vec![idx.clone()], "changed file should be detected");
+        let s3 = poll_once(
+            &dir,
+            &ModuleGraph::new(),
+            &RouteTable::empty(),
+            &registry,
+            &mut last_seen,
+        );
+        assert_eq!(
+            s3.changed_files,
+            vec![idx.clone()],
+            "changed file should be detected"
+        );
 
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -766,11 +795,23 @@ mod tests {
         let dir = temp_dir();
         let mut last_seen = HashMap::new();
         let registry = PageRegistry::new();
-        poll_once(&dir, &ModuleGraph::new(), &RouteTable::empty(), &registry, &mut last_seen);
+        poll_once(
+            &dir,
+            &ModuleGraph::new(),
+            &RouteTable::empty(),
+            &registry,
+            &mut last_seen,
+        );
 
         let new_file = dir.join("new.tsp");
         fs::write(&new_file, "<p>hello</p>").unwrap();
-        let s = poll_once(&dir, &ModuleGraph::new(), &RouteTable::empty(), &registry, &mut last_seen);
+        let s = poll_once(
+            &dir,
+            &ModuleGraph::new(),
+            &RouteTable::empty(),
+            &registry,
+            &mut last_seen,
+        );
         assert!(s.changed_files.contains(&new_file));
 
         fs::remove_dir_all(&dir).unwrap();
@@ -783,11 +824,26 @@ mod tests {
         fs::write(&idx, "<h1>x</h1>").unwrap();
         let mut last_seen = HashMap::new();
         let registry = PageRegistry::new();
-        poll_once(&dir, &ModuleGraph::new(), &RouteTable::empty(), &registry, &mut last_seen);
+        poll_once(
+            &dir,
+            &ModuleGraph::new(),
+            &RouteTable::empty(),
+            &registry,
+            &mut last_seen,
+        );
 
         fs::remove_file(&idx).unwrap();
-        let s = poll_once(&dir, &ModuleGraph::new(), &RouteTable::empty(), &registry, &mut last_seen);
-        assert!(s.changed_files.contains(&idx), "deleted file should be reported as changed");
+        let s = poll_once(
+            &dir,
+            &ModuleGraph::new(),
+            &RouteTable::empty(),
+            &registry,
+            &mut last_seen,
+        );
+        assert!(
+            s.changed_files.contains(&idx),
+            "deleted file should be reported as changed"
+        );
 
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -815,40 +871,32 @@ mod tests {
             "export function GET() { return 'get'; }\nexport function POST() { return 'post'; }\n",
         )
         .unwrap();
-        let changed = poll_once(
-            &dir,
-            &ModuleGraph::new(),
-            &table,
-            &registry,
-            &mut last_seen,
-        );
+        let changed = poll_once(&dir, &ModuleGraph::new(), &table, &registry, &mut last_seen);
         assert_eq!(changed.routes_added, 0);
         assert_eq!(changed.routes_removed, 0);
-        assert!(registry
-            .snapshot(&crate::generation::PageRef {
-                route: "/".to_string(),
-                method: crate::router::HttpMethod::Post,
-            })
-            .is_some());
+        assert!(
+            registry
+                .snapshot(&crate::generation::PageRef {
+                    route: "/".to_string(),
+                    method: crate::router::HttpMethod::Post,
+                })
+                .is_some()
+        );
         assert!(matches!(
             table.lookup("/", crate::router::HttpMethod::Post),
             crate::router::MatchResult::Found { .. }
         ));
 
         fs::write(&route_file, "export function GET() { return 'get'; }\n").unwrap();
-        poll_once(
-            &dir,
-            &ModuleGraph::new(),
-            &table,
-            &registry,
-            &mut last_seen,
+        poll_once(&dir, &ModuleGraph::new(), &table, &registry, &mut last_seen);
+        assert!(
+            registry
+                .snapshot(&crate::generation::PageRef {
+                    route: "/".to_string(),
+                    method: crate::router::HttpMethod::Post,
+                })
+                .is_none()
         );
-        assert!(registry
-            .snapshot(&crate::generation::PageRef {
-                route: "/".to_string(),
-                method: crate::router::HttpMethod::Post,
-            })
-            .is_none());
         assert!(matches!(
             table.lookup("/", crate::router::HttpMethod::Post),
             crate::router::MatchResult::MethodNotAllowed { .. }
@@ -919,16 +967,16 @@ mod tests {
         collect_sources(&dir, &mut last_seen, &mut PollStats::default());
         fs::write(&shared_file, "export const value = 'two';\n").unwrap();
 
-        let stats = poll_once(
-            &dir,
-            &ModuleGraph::new(),
-            &table,
-            &registry,
-            &mut last_seen,
-        );
+        let stats = poll_once(&dir, &ModuleGraph::new(), &table, &registry, &mut last_seen);
         assert_eq!(stats.marked, 1);
-        assert_eq!(registry.snapshot(&index_page).unwrap().state, crate::generation::PageState::Dirty);
-        assert_eq!(registry.snapshot(&about_page).unwrap().state, crate::generation::PageState::Clean);
+        assert_eq!(
+            registry.snapshot(&index_page).unwrap().state,
+            crate::generation::PageState::Dirty
+        );
+        assert_eq!(
+            registry.snapshot(&about_page).unwrap().state,
+            crate::generation::PageState::Clean
+        );
 
         fs::remove_dir_all(&dir).unwrap();
     }

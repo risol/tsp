@@ -41,7 +41,7 @@ use bun_runtime_tsp::worker::lifecycle::RecyclePolicy;
 use bun_runtime_tsp::worker::sandbox::ResourceLimits;
 use bun_runtime_tsp::worker::application::{Application, ApplicationRegistry, WorkerGroup};
 
-fn main() -> ExitCode {
+pub fn run() -> ExitCode {
     match std::env::args().nth(1).as_deref() {
         Some("check") => run_check(),
         Some("routes") => run_routes(),
@@ -52,6 +52,11 @@ fn main() -> ExitCode {
         }
         _ => serve_main(),
     }
+}
+
+#[allow(dead_code)]
+fn main() -> ExitCode {
+    run()
 }
 
 fn serve_main() -> ExitCode {

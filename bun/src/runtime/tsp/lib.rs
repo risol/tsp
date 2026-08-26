@@ -1,9 +1,8 @@
 //! TSP v2 native host library (see `tsp-v2-plan.md`).
 //!
-//! This crate is the side-by-side v2 runtime; v1 (`src/main.ts`) is
-//! unchanged. The binary entry point in `bin/tspserver_v2.rs` links the
-//! same library code so future tests and embedded callers can drive the
-//! host without spawning a process.
+//! This crate is the native TSP v2 runtime. The binary entry point in
+//! `bin/tspserver_v2.rs` links the same library code so tests and embedded
+//! callers can drive the host without spawning a process.
 //!
 //! Module layout (from plan sect.26):
 //! ```text
@@ -27,14 +26,19 @@
 
 #![doc = "Slice 11: filesystem watcher (polling backend) + lazy reload."]
 
+// Allow the binary entry source to be reused by the bundled Bun executable.
+// The standalone `tspserver_v2` binary imports this crate by name, while the
+// bundled entry compiles the same source as a module of this crate.
+extern crate self as bun_runtime_tsp;
+
 pub mod generation;
 pub mod host;
-pub mod invalidation_bus;
 pub mod in_process_jsc;
+pub mod invalidation_bus;
 pub mod jsc_bridge;
 pub mod jsx;
-pub mod module_graph;
 pub mod metrics;
+pub mod module_graph;
 pub mod page;
 pub mod pipeline;
 pub mod router;
@@ -43,3 +47,6 @@ pub mod session_backend;
 pub mod static_files;
 pub mod watcher;
 pub mod worker;
+
+#[path = "bin/tspserver_v2.rs"]
+pub mod entry;

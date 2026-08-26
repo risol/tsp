@@ -748,7 +748,11 @@ fn format_iso8601_utc(t: std::time::SystemTime) -> String {
     let y = if m <= 2 { y + 1 } else { y };
     use std::fmt::Write as _;
     let mut out = String::with_capacity(24);
-    let _ = write!(&mut out, "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z", y, m, d, hour, minute, second, ms);
+    let _ = write!(
+        &mut out,
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        y, m, d, hour, minute, second, ms
+    );
     out
 }
 

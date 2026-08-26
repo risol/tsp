@@ -1,19 +1,15 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)] [string]$ServerBinary,
-  [Parameter(Mandatory = $true)] [string]$BunBinary,
   [string]$RoutesDirectory = "routes",
   [int]$Port = 9140,
   [int]$Requests = 50,
-  [string]$OutputJson = "",
-  [switch]$EmbeddedWorker
+  [string]$OutputJson = ""
 )
 
 $server = [System.IO.Path]::GetFullPath($ServerBinary)
-$bun = [System.IO.Path]::GetFullPath($BunBinary)
 $routes = [System.IO.Path]::GetFullPath($RoutesDirectory)
 if (!(Test-Path -LiteralPath $server -PathType Leaf)) { throw "server binary not found: $server" }
-if (!(Test-Path -LiteralPath $bun -PathType Leaf)) { throw "Bun runtime not found: $bun" }
 if (!(Test-Path -LiteralPath $routes -PathType Container)) { throw "routes directory not found: $routes" }
 if ($Requests -lt 1) { throw "Requests must be positive" }
 
@@ -24,11 +20,7 @@ $info.UseShellExecute = $false
 $info.CreateNoWindow = $true
 $info.Environment["TSP_PORT"] = "$Port"
 $info.Environment["TSP_ROUTES_DIR"] = $routes
-$info.Environment["TSP_BUN_BIN"] = $bun
-if ($EmbeddedWorker) {
-  $info.Environment["TSP_EMBEDDED_WORKER"] = "1"
-  $info.Environment["TSP_WORKER_BIN"] = $bun
-}
+$info.Environment["TSP_EMBEDDED_WORKER"] = "1"
 $process = [System.Diagnostics.Process]::new()
 $process.StartInfo = $info
 $null = $process.Start()

@@ -20,17 +20,17 @@ use std::io::Read as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use crate::jsx;
 use crate::router::HttpMethod;
+use crate::worker::application::ApplicationRegistry;
 use crate::worker::manager::{ManagerError, WorkerManager};
 use crate::worker::pool::{PoolError, WorkerPool};
 use crate::worker::protocol::ExecuteRequest;
-use crate::worker::application::ApplicationRegistry;
 
 /// Where `bun.exe` lives. Resolved once at boot via
 /// [`resolve_bun_bin`]; the host can override via `TSP_BUN_BIN`.
@@ -50,13 +50,32 @@ const WORKER_PROTOCOL_PREFIX: &str = "__TSP_WORKER_V1__";
 const WORKER_SCRIPT: &str = include_str!("worker_runtime.ts");
 const WORKER_MAX_LINE_BYTES: usize = 64 * 1024 * 1024;
 static EXECUTION_GENERATION: AtomicU64 = AtomicU64::new(1);
+static LAST_WORKER_RESTART_GENERATION: AtomicU64 = AtomicU64::new(0);
+static WORKER_RESTART_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn bump_execution_generation() -> u64 {
-    EXECUTION_GENERATION.fetch_add(1, Ordering::AcqRel).saturating_add(1)
+    EXECUTION_GENERATION
+        .fetch_add(1, Ordering::AcqRel)
+        .saturating_add(1)
 }
 
 fn execution_generation() -> u64 {
     EXECUTION_GENERATION.load(Ordering::Acquire)
+}
+
+fn restart_workers_after_reload(pool: &WorkerPool) -> Result<(), JscError> {
+    let generation = execution_generation();
+    if LAST_WORKER_RESTART_GENERATION.load(Ordering::Acquire) == generation {
+        return Ok(());
+    }
+    let _guard = WORKER_RESTART_LOCK
+        .lock()
+        .map_err(|_| JscError::WorkerProtocol("worker restart lock poisoned".into()))?;
+    if LAST_WORKER_RESTART_GENERATION.load(Ordering::Acquire) != generation {
+        pool.restart_all().map_err(map_pool_error)?;
+        LAST_WORKER_RESTART_GENERATION.store(generation, Ordering::Release);
+    }
+    Ok(())
 }
 
 /// A single persistent Bun process used by the first worker vertical slice.
@@ -182,7 +201,9 @@ impl WorkerSession {
                 return Err(JscError::WorkerExited);
             }
             if line.len() > WORKER_MAX_LINE_BYTES {
-                return Err(JscError::WorkerProtocol("worker response exceeded size limit".into()));
+                return Err(JscError::WorkerProtocol(
+                    "worker response exceeded size limit".into(),
+                ));
             }
             let payload = line
                 .strip_prefix(WORKER_PROTOCOL_PREFIX)
@@ -195,7 +216,10 @@ impl WorkerSession {
                 }
                 Some("error") if fields.next() == Some(expected_id.as_str()) => {
                     return Err(JscError::WorkerProtocol(
-                        fields.next().unwrap_or("worker execution failed").to_string(),
+                        fields
+                            .next()
+                            .unwrap_or("worker execution failed")
+                            .to_string(),
                     ));
                 }
                 // Ignore non-protocol Bun output. User console output is not
@@ -333,8 +357,7 @@ impl PersistentBunWorker {
     }
 }
 
-static WORKER_REQUEST_ID: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(1);
+static WORKER_REQUEST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 fn percent_encode(bytes: &[u8]) -> String {
     let mut output = String::with_capacity(bytes.len());
@@ -382,7 +405,10 @@ pub enum JscError {
     /// bun exited non-zero. We surface the stderr tail (truncated to
     /// 1 KiB) so a JS error from `routes/index.tsp` shows up in the
     /// 500 page without overflowing the response body.
-    BunFailed { code: Option<i32>, stderr_tail: String },
+    BunFailed {
+        code: Option<i32>,
+        stderr_tail: String,
+    },
     /// The client disconnected while the page was executing.
     Cancelled,
     /// The request deadline expired. The stderr tail preserves the
@@ -409,11 +435,17 @@ impl std::fmt::Display for JscError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::BunNotFound { tried } => {
-                write!(f, "bun.exe not found at {} (set TSP_BUN_BIN to override)", tried.display())
+                write!(
+                    f,
+                    "bun.exe not found at {} (set TSP_BUN_BIN to override)",
+                    tried.display()
+                )
             }
             Self::Spawn(e) => write!(f, "spawn bun failed: {e}"),
             Self::BunFailed { code, stderr_tail } => {
-                let code = code.map(|c| c.to_string()).unwrap_or_else(|| "<signal>".into());
+                let code = code
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "<signal>".into());
                 write!(f, "bun exited {code}: {stderr_tail}")
             }
             Self::Cancelled => write!(f, "request cancelled after client disconnect"),
@@ -500,7 +532,9 @@ pub fn resolve_bun_bin() -> Result<PathBuf, JscError> {
         }
     }
     candidates.push(PathBuf::from(format!(".tsp-runtime/{bun_name}")));
-    candidates.push(PathBuf::from(format!(".bun-bootstrap/node_modules/bun/bin/{bun_name}")));
+    candidates.push(PathBuf::from(format!(
+        ".bun-bootstrap/node_modules/bun/bin/{bun_name}"
+    )));
     for candidate in candidates {
         if candidate.is_file() {
             return Ok(candidate);
@@ -659,12 +693,10 @@ fn execute_inner(
 ) -> Result<String, JscError> {
     let use_embedded_worker = bun.embedded_worker.is_some() || bun.embedded_pool.is_some();
     let source = match source_dir {
-        Some(dir) if use_embedded_worker => jsx::rewrite_local_imports_for_generation(
-            source,
-            dir,
-            execution_generation(),
-        )
-        .map_err(JscError::Jsx)?,
+        Some(dir) if use_embedded_worker => {
+            jsx::rewrite_local_imports_for_generation(source, dir, execution_generation())
+                .map_err(JscError::Jsx)?
+        }
         Some(dir) => jsx::rewrite_local_imports(source, dir).map_err(JscError::Jsx)?,
         None => source.to_string(),
     };
@@ -675,7 +707,15 @@ fn execute_inner(
         jsx::wrap_for_bun_cli(&js_body, method.as_str(), ctx_json)
     };
     if let Some(path) = source_path {
-        let source_url = format!("tsp://{}", path.to_string_lossy().replace('\\', "/"));
+        let source_url = if use_embedded_worker {
+            format!(
+                "tsp://{}?generation={}",
+                path.to_string_lossy().replace('\\', "/"),
+                execution_generation()
+            )
+        } else {
+            format!("tsp://{}", path.to_string_lossy().replace('\\', "/"))
+        };
         wrapped.push_str(&format!("\n//# sourceURL={}\n", source_url));
     }
     let script = wrapped.into_bytes();
@@ -699,6 +739,7 @@ fn execute_inner(
         .as_ref()
         .map(|application| application.workers().pool());
     if let Some(pool) = registered_pool.or(bun.embedded_pool.as_ref()) {
+        restart_workers_after_reload(pool)?;
         let request = ExecuteRequest {
             application: application_name.clone(),
             method: method.as_str().to_string(),
@@ -711,15 +752,14 @@ fn execute_inner(
             script: script.clone(),
             context_json: ctx_json.unwrap_or_default().to_string(),
         };
-        let result = pool
-            .execute(request, timeout_ms)
-            .map_err(map_pool_error)?;
+        let result = pool.execute(request, timeout_ms).map_err(map_pool_error)?;
         let _ = fs::remove_file(&tempfile);
         if cancellation.is_cancelled() {
             return Err(JscError::Cancelled);
         }
-        let envelope = String::from_utf8(result.body)
-            .map_err(|_| JscError::WorkerProtocol("embedded worker response was not UTF-8".into()))?;
+        let envelope = String::from_utf8(result.body).map_err(|_| {
+            JscError::WorkerProtocol("embedded worker response was not UTF-8".into())
+        })?;
         return Ok(format!("__TSP_OUT_V1__\n{envelope}"));
     }
 
@@ -751,8 +791,9 @@ fn execute_inner(
                 result.status
             )));
         }
-        let envelope = String::from_utf8(result.body)
-            .map_err(|_| JscError::WorkerProtocol("embedded worker response was not UTF-8".into()))?;
+        let envelope = String::from_utf8(result.body).map_err(|_| {
+            JscError::WorkerProtocol("embedded worker response was not UTF-8".into())
+        })?;
         return Ok(format!("__TSP_OUT_V1__\n{envelope}"));
     }
 
@@ -921,7 +962,10 @@ fn execute_inner(
                             // Best effort -- the kill may fail on Windows
                             // if the process exited but try_wait missed it.
                             killed = true;
-                            eprintln!("TSPv2PoC1: timeout grace expired, killing bun subprocess pid={:?}", child.id());
+                            eprintln!(
+                                "TSPv2PoC1: timeout grace expired, killing bun subprocess pid={:?}",
+                                child.id()
+                            );
                             let kill_result = child.kill();
                             eprintln!("TSPv2PoC1: child.kill() result = {:?}", kill_result);
                             let _ = child.wait();
@@ -943,16 +987,24 @@ fn execute_inner(
     // the remaining bytes (Bun's stdout is line-buffered
     // so any `__TSP_OUT_V1__\n` line emitted before the
     // abort has been flushed).
-    let stdout = child.stdout.take().map(|mut s| {
-        let mut buf = Vec::new();
-        let _ = s.read_to_end(&mut buf);
-        buf
-    }).unwrap_or_default();
-    let stderr = child.stderr.take().map(|mut s| {
-        let mut buf = Vec::new();
-        let _ = s.read_to_end(&mut buf);
-        buf
-    }).unwrap_or_default();
+    let stdout = child
+        .stdout
+        .take()
+        .map(|mut s| {
+            let mut buf = Vec::new();
+            let _ = s.read_to_end(&mut buf);
+            buf
+        })
+        .unwrap_or_default();
+    let stderr = child
+        .stderr
+        .take()
+        .map(|mut s| {
+            let mut buf = Vec::new();
+            let _ = s.read_to_end(&mut buf);
+            buf
+        })
+        .unwrap_or_default();
     let _ = pid; // child id reserved for future diagnostics
 
     // Best-effort cleanup. Don't propagate a cleanup failure -- the
@@ -962,7 +1014,10 @@ fn execute_inner(
     }
     // 16n' diagnosis: keep the generated tempfile for inspection
     // when TSP_KEEP_TEMP=1 (mirrors 16n tracing; not a hot path).
-    if std::env::var("TSP_KEEP_TEMP").map(|v| v == "1").unwrap_or(false) {
+    if std::env::var("TSP_KEEP_TEMP")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+    {
         eprintln!("TSPv2PoC1: kept tempfile {}", tempfile.display());
     } else {
         let _ = fs::remove_file(&tempfile);
@@ -1047,9 +1102,9 @@ fn map_manager_error(error: ManagerError) -> JscError {
             stderr_tail: "embedded worker deadline expired; worker was restarted".into(),
         },
         ManagerError::ResourceIsolation(error) => JscError::WorkerProtocol(error),
-        ManagerError::UnsupportedPlatform => {
-            JscError::WorkerProtocol("embedded worker transport is unsupported on this platform".into())
-        }
+        ManagerError::UnsupportedPlatform => JscError::WorkerProtocol(
+            "embedded worker transport is unsupported on this platform".into(),
+        ),
     }
 }
 
@@ -1096,12 +1151,25 @@ mod tests {
         // renumber the prefix (e.g. accidentally reusing
         // the timeout code `TSP3009` for JSX).
         let pairs: &[(JscError, &str)] = &[
-            (JscError::BunNotFound { tried: PathBuf::from("x") }, "TSP3010"),
             (
-                JscError::BunFailed { code: Some(1), stderr_tail: String::new() },
+                JscError::BunNotFound {
+                    tried: PathBuf::from("x"),
+                },
+                "TSP3010",
+            ),
+            (
+                JscError::BunFailed {
+                    code: Some(1),
+                    stderr_tail: String::new(),
+                },
                 "TSP3012",
             ),
-            (JscError::TimedOut { stderr_tail: String::new() }, "TSP3009"),
+            (
+                JscError::TimedOut {
+                    stderr_tail: String::new(),
+                },
+                "TSP3009",
+            ),
             (JscError::Cancelled, "TSP3015"),
             (JscError::EmptyStdout, "TSP3013"),
             (
@@ -1109,7 +1177,10 @@ mod tests {
                 "TSP3014",
             ),
             (
-                JscError::Jsx(jsx::JsxError::UnsupportedShape { line: 1, reason: "x" }),
+                JscError::Jsx(jsx::JsxError::UnsupportedShape {
+                    line: 1,
+                    reason: "x",
+                }),
                 "TSP3002",
             ),
         ];
@@ -1142,14 +1213,24 @@ mod tests {
             return;
         };
         let result = execute(
-            &BunRuntime { bin, persistent_worker: None, embedded_worker: None, embedded_pool: None },
+            &BunRuntime {
+                bin,
+                persistent_worker: None,
+                embedded_worker: None,
+                embedded_pool: None,
+            },
             "export function GET(ctx) { return 'ok'; }\n",
-        HttpMethod::Get,
-        Some(r#"{"method":"GET","path":"/","query":"","params":{},"body_b64":"","headers":{}}"#),
-        5_000,
-        &CancellationToken::new(),
+            HttpMethod::Get,
+            Some(
+                r#"{"method":"GET","path":"/","query":"","params":{},"body_b64":"","headers":{}}"#,
+            ),
+            5_000,
+            &CancellationToken::new(),
         );
-        assert!(result.is_ok(), "normal page must not wait for timeout: {result:?}");
+        assert!(
+            result.is_ok(),
+            "normal page must not wait for timeout: {result:?}"
+        );
     }
 
     #[test]
@@ -1187,7 +1268,12 @@ mod tests {
             return;
         };
         let result = execute(
-            &BunRuntime { bin, persistent_worker: None, embedded_worker: None, embedded_pool: None },
+            &BunRuntime {
+                bin,
+                persistent_worker: None,
+                embedded_worker: None,
+                embedded_pool: None,
+            },
             r#"
 import { type Context, json } from "tsp:server";
 export async function GET(ctx: Context) {
@@ -1195,13 +1281,18 @@ export async function GET(ctx: Context) {
 }
 "#,
             HttpMethod::Get,
-            Some(r#"{"method":"GET","path":"/","query":"","params":{},"body_b64":"","headers":{}}"#),
+            Some(
+                r#"{"method":"GET","path":"/","query":"","params":{},"body_b64":"","headers":{}}"#,
+            ),
             5_000,
             &CancellationToken::new(),
         );
         let stdout = result.expect("tsp:server json helper should execute");
         assert!(stdout.contains("\"status\":200"), "stdout={stdout}");
-        assert!(stdout.contains("\"content-type\",\"application/json; charset=utf-8\""), "stdout={stdout}");
+        assert!(
+            stdout.contains("\"content-type\",\"application/json; charset=utf-8\""),
+            "stdout={stdout}"
+        );
         assert!(stdout.contains("\"ok\":true"), "stdout={stdout}");
         assert!(stdout.contains("\"method\":\"GET\""), "stdout={stdout}");
     }
@@ -1212,7 +1303,12 @@ export async function GET(ctx: Context) {
             return;
         };
         let result = execute(
-            &BunRuntime { bin, persistent_worker: None, embedded_worker: None, embedded_pool: None },
+            &BunRuntime {
+                bin,
+                persistent_worker: None,
+                embedded_worker: None,
+                embedded_pool: None,
+            },
             r#"
 import { HttpError } from "tsp:server";
 export function GET() {
@@ -1235,7 +1331,12 @@ export function GET() {
             return;
         };
         let result = execute(
-            &BunRuntime { bin, persistent_worker: None, embedded_worker: None, embedded_pool: None },
+            &BunRuntime {
+                bin,
+                persistent_worker: None,
+                embedded_worker: None,
+                embedded_pool: None,
+            },
             r#"
 function Item({ value }: { value: string }) {
   return <li data-value={value}><span>{value}</span></li>;
@@ -1245,7 +1346,9 @@ export async function GET(ctx: Context) {
 }
 "#,
             HttpMethod::Get,
-            Some(r#"{"method":"GET","path":"/","query":"","params":{},"body_b64":"","headers":{}}"#),
+            Some(
+                r#"{"method":"GET","path":"/","query":"","params":{},"body_b64":"","headers":{}}"#,
+            ),
             5_000,
             &CancellationToken::new(),
         );
@@ -1259,18 +1362,28 @@ export async function GET(ctx: Context) {
             return;
         };
         let result = execute(
-            &BunRuntime { bin, persistent_worker: None, embedded_worker: None, embedded_pool: None },
+            &BunRuntime {
+                bin,
+                persistent_worker: None,
+                embedded_worker: None,
+                embedded_pool: None,
+            },
             r#"
 import { type Context, fragment } from "tsp:server";
 export const list = fragment(async (ctx: Context) => <ul><li>one</li><li>two</li></ul>);
 "#,
             HttpMethod::Get,
-            Some(r#"{"method":"GET","path":"/users","query":"","params":{},"body_b64":"","headers":{},"__tsp_fragment":"list"}"#),
+            Some(
+                r#"{"method":"GET","path":"/users","query":"","params":{},"body_b64":"","headers":{},"__tsp_fragment":"list"}"#,
+            ),
             5_000,
             &CancellationToken::new(),
         );
         let stdout = result.expect("selected fragment should render");
-        assert!(stdout.contains("<ul><li>one</li><li>two</li></ul>"), "stdout={stdout}");
+        assert!(
+            stdout.contains("<ul><li>one</li><li>two</li></ul>"),
+            "stdout={stdout}"
+        );
     }
 
     #[test]
@@ -1286,7 +1399,12 @@ export const list = fragment(async (ctx: Context) => <ul><li>one</li><li>two</li
         )
         .unwrap();
         let result = execute_from_dir(
-            &BunRuntime { bin, persistent_worker: None, embedded_worker: None, embedded_pool: None },
+            &BunRuntime {
+                bin,
+                persistent_worker: None,
+                embedded_worker: None,
+                embedded_pool: None,
+            },
             r#"
 import { Shared } from "./shared";
 export function GET() { return <p><Shared /></p>; }
@@ -1299,7 +1417,10 @@ export function GET() { return <p><Shared /></p>; }
         );
         let _ = std::fs::remove_dir_all(&dir);
         let stdout = result.expect("relative TypeScript dependency should execute");
-        assert!(stdout.contains("<p><em>from-dep</em></p>"), "stdout={stdout}");
+        assert!(
+            stdout.contains("<p><em>from-dep</em></p>"),
+            "stdout={stdout}"
+        );
     }
 
     #[test]
@@ -1310,10 +1431,19 @@ export function GET() { return <p><Shared /></p>; }
         let dir = std::env::temp_dir().join(format!("tsp-v2-package-dep-{}", std::process::id()));
         let package = dir.join("node_modules/tsp-v2-fixture");
         std::fs::create_dir_all(&package).unwrap();
-        std::fs::write(package.join("package.json"), r#"{"name":"tsp-v2-fixture","module":"index.ts"}"#).unwrap();
+        std::fs::write(
+            package.join("package.json"),
+            r#"{"name":"tsp-v2-fixture","module":"index.ts"}"#,
+        )
+        .unwrap();
         std::fs::write(package.join("index.ts"), "export const answer = 42;\n").unwrap();
         let result = execute_from_dir(
-            &BunRuntime { bin, persistent_worker: None, embedded_worker: None, embedded_pool: None },
+            &BunRuntime {
+                bin,
+                persistent_worker: None,
+                embedded_worker: None,
+                embedded_pool: None,
+            },
             r#"
 import { answer } from "tsp-v2-fixture";
 export function GET() { return <p>{answer}</p>; }
@@ -1341,14 +1471,24 @@ export function GET() { return <p>{answer}</p>; }
             cancel_later.cancel();
         });
         let result = execute(
-            &BunRuntime { bin, persistent_worker: None, embedded_worker: None, embedded_pool: None },
+            &BunRuntime {
+                bin,
+                persistent_worker: None,
+                embedded_worker: None,
+                embedded_pool: None,
+            },
             "export async function GET(ctx) { await new Promise(() => {}); return 'never'; }\n",
             HttpMethod::Get,
-            Some(r#"{"method":"GET","path":"/slow","query":"","params":{},"body_b64":"","headers":{}}"#),
+            Some(
+                r#"{"method":"GET","path":"/slow","query":"","params":{},"body_b64":"","headers":{}}"#,
+            ),
             5_000,
             &cancellation,
         );
         cancel_thread.join().expect("cancellation thread");
-        assert!(matches!(result, Err(JscError::Cancelled)), "result={result:?}");
+        assert!(
+            matches!(result, Err(JscError::Cancelled)),
+            "result={result:?}"
+        );
     }
 }

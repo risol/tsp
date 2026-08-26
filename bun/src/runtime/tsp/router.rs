@@ -97,13 +97,7 @@ impl HttpMethod {
     /// when the request verb is one of those two and the
     /// corresponding real method is present (HEAD -> GET,
     /// OPTIONS -> auto-Allow response).
-    pub const REAL: [Self; 5] = [
-        Self::Get,
-        Self::Post,
-        Self::Put,
-        Self::Patch,
-        Self::Delete,
-    ];
+    pub const REAL: [Self; 5] = [Self::Get, Self::Post, Self::Put, Self::Patch, Self::Delete];
 }
 
 /// One segment of a route pattern. The URL template uses
@@ -192,18 +186,28 @@ pub struct Route {
 /// of `assert_eq!` to sidestep the derive constraint.
 #[derive(Debug, Clone)]
 pub enum MatchResult {
-    Found { route: Route, method: HttpMethod },
+    Found {
+        route: Route,
+        method: HttpMethod,
+    },
     /// The request verb was `HEAD` and the route exports `GET` but no
     /// explicit `HEAD`. Per spec sect.6.5, the host must run the GET
     /// handler and emit a body-less 200 with the GET response's
     /// Content-Length (and any headers, but no body). The host treats
     /// this the same as a `Found { method: Get }` except the response
     /// writer drops the body.
-    FoundHeadOverGet { route: Route },
-    MethodNotAllowed { route: Route, requested: HttpMethod },
+    FoundHeadOverGet {
+        route: Route,
+    },
+    MethodNotAllowed {
+        route: Route,
+        requested: HttpMethod,
+    },
     /// The request path contained an invalid percent escape or invalid
     /// UTF-8 after decoding. The host returns a typed 400 response.
-    MalformedPath { error: PathDecodeError },
+    MalformedPath {
+        error: PathDecodeError,
+    },
     NotFound,
 }
 
@@ -218,7 +222,11 @@ pub struct PathDecodeError {
 
 impl std::fmt::Display for PathDecodeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "invalid percent-encoded path at byte {}: {}", self.offset, self.reason)
+        write!(
+            f,
+            "invalid percent-encoded path at byte {}: {}",
+            self.offset, self.reason
+        )
     }
 }
 
@@ -245,13 +253,22 @@ fn decode_path_segment(segment: &str) -> Result<String, PathDecodeError> {
             continue;
         }
         if i + 2 >= bytes.len() {
-            return Err(PathDecodeError { offset: i, reason: "truncated escape" });
+            return Err(PathDecodeError {
+                offset: i,
+                reason: "truncated escape",
+            });
         }
         let Some(hi) = hex_value(bytes[i + 1]) else {
-            return Err(PathDecodeError { offset: i, reason: "non-hex escape" });
+            return Err(PathDecodeError {
+                offset: i,
+                reason: "non-hex escape",
+            });
         };
         let Some(lo) = hex_value(bytes[i + 2]) else {
-            return Err(PathDecodeError { offset: i + 1, reason: "non-hex escape" });
+            return Err(PathDecodeError {
+                offset: i + 1,
+                reason: "non-hex escape",
+            });
         };
         decoded.push((hi << 4) | lo);
         i += 3;
@@ -294,11 +311,9 @@ impl std::fmt::Display for RouterError {
             Self::Io { path, source } => {
                 write!(f, "stat {} failed: {source}", path.display())
             }
-            Self::UnsupportedShape { path, reason } => write!(
-                f,
-                "unsupported route shape at {}: {reason}",
-                path.display()
-            ),
+            Self::UnsupportedShape { path, reason } => {
+                write!(f, "unsupported route shape at {}: {reason}", path.display())
+            }
             Self::DuplicatePath { path } => {
                 write!(f, "duplicate route path: {path}")
             }
@@ -358,7 +373,10 @@ impl RouteTable {
     /// Whether the table is empty. Tests use this; production code does
     /// not because the table is populated once at boot.
     pub fn is_empty(&self) -> bool {
-        self.routes.lock().expect("route table lock poisoned").is_empty()
+        self.routes
+            .lock()
+            .expect("route table lock poisoned")
+            .is_empty()
     }
 
     /// Iterate over all routes. Used by the boot-time
@@ -373,7 +391,10 @@ impl RouteTable {
     /// builder, which wants to drop the lock before doing the
     /// I/O-heavy `page::prepare`).
     pub fn iter(&self) -> Vec<Route> {
-        self.routes.lock().expect("route table lock poisoned").clone()
+        self.routes
+            .lock()
+            .expect("route table lock poisoned")
+            .clone()
     }
 
     /// Walk `routes_dir` recursively, collect every `.tsp` file, and
@@ -500,10 +521,7 @@ impl RouteTable {
         } else {
             path.trim_end_matches('/').to_string()
         };
-        let raw_segs: Vec<&str> = normalized
-            .split('/')
-            .filter(|s| !s.is_empty())
-            .collect();
+        let raw_segs: Vec<&str> = normalized.split('/').filter(|s| !s.is_empty()).collect();
         let decoded_segs: Vec<String> = match raw_segs
             .iter()
             .map(|segment| decode_path_segment(segment))
@@ -520,11 +538,7 @@ impl RouteTable {
         let mut best: Option<(Route, u32)> = None;
         for r in guard.iter() {
             if let Some(params) = match_segments(&r.segments, &req_segs) {
-                let score: u32 = r
-                    .segments
-                    .iter()
-                    .map(|s| s.priority() as u32)
-                    .sum();
+                let score: u32 = r.segments.iter().map(|s| s.priority() as u32).sum();
                 let better = match &best {
                     None => true,
                     Some((_, s)) => score < *s,
@@ -541,9 +555,7 @@ impl RouteTable {
         };
         if route.methods.contains(&method) {
             MatchResult::Found { route, method }
-        } else if method == HttpMethod::Head
-            && route.methods.contains(&HttpMethod::Get)
-        {
+        } else if method == HttpMethod::Head && route.methods.contains(&HttpMethod::Get) {
             // Spec sect.6.5: HEAD with no explicit HEAD export -> use
             // GET, drop the body. We do not look at a separate "head
             // exports" set here; the slice 5 detector treats any page
@@ -576,8 +588,7 @@ fn match_segments(
     pattern: &[Segment],
     req: &[&str],
 ) -> Option<std::collections::HashMap<String, String>> {
-    let mut params: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
+    let mut params: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut pi = 0;
     let mut ri = 0;
     while pi < pattern.len() {
@@ -613,11 +624,7 @@ fn match_segments(
     Some(params)
 }
 
-fn scan_recursive(
-    root: &Path,
-    dir: &Path,
-    out: &mut Vec<Route>,
-) -> Result<(), RouterError> {
+fn scan_recursive(root: &Path, dir: &Path, out: &mut Vec<Route>) -> Result<(), RouterError> {
     let entries = fs::read_dir(dir).map_err(|e| RouterError::Io {
         path: dir.to_path_buf(),
         source: e,
@@ -684,19 +691,20 @@ fn url_path_for(
     // `relative` is the path under `routes/`, e.g. `users/index.tsp`
     // or just `index.tsp`. Strip the `.tsp` (already done by caller) so
     // we work in segments below.
-    let rel = abs.strip_prefix(root).map_err(|_| RouterError::UnsupportedShape {
-        path: abs.to_path_buf(),
-        reason: "file is not under the routes/ root",
-    })?;
+    let rel = abs
+        .strip_prefix(root)
+        .map_err(|_| RouterError::UnsupportedShape {
+            path: abs.to_path_buf(),
+            reason: "file is not under the routes/ root",
+        })?;
     let dir_segments: Vec<&str> = rel
         .components()
         .filter_map(|c| c.as_os_str().to_str())
         .collect();
     let (dir_segs, stem_segs) = dir_segments.split_at(dir_segments.len() - 1);
 
-    let parse_one = |s: &str, file: &Path| -> Result<Segment, RouterError> {
-        parse_segment(s, file)
-    };
+    let parse_one =
+        |s: &str, file: &Path| -> Result<Segment, RouterError> { parse_segment(s, file) };
 
     if stem == "index" {
         // `routes/index.tsp`         -> `/`
@@ -741,7 +749,10 @@ fn url_path_for(
 }
 
 fn segments_template(segs: &[Segment]) -> String {
-    segs.iter().map(|s| s.template()).collect::<Vec<_>>().join("/")
+    segs.iter()
+        .map(|s| s.template())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Parse a single segment token (from a directory name or the file
@@ -756,19 +767,23 @@ fn parse_segment(token: &str, file: &Path) -> Result<Segment, RouterError> {
     }
     // Catch-all: `[...name]`
     if let Some(rest) = token.strip_prefix("[...") {
-        let name = rest.strip_suffix(']').ok_or_else(|| RouterError::UnsupportedShape {
-            path: file.to_path_buf(),
-            reason: "malformed catch-all: missing `]`",
-        })?;
+        let name = rest
+            .strip_suffix(']')
+            .ok_or_else(|| RouterError::UnsupportedShape {
+                path: file.to_path_buf(),
+                reason: "malformed catch-all: missing `]`",
+            })?;
         validate_segment_name(name, file)?;
         return Ok(Segment::CatchAll(name.to_string()));
     }
     // One-segment dynamic: `[name]`
     if let Some(rest) = token.strip_prefix('[') {
-        let name = rest.strip_suffix(']').ok_or_else(|| RouterError::UnsupportedShape {
-            path: file.to_path_buf(),
-            reason: "malformed dynamic segment: missing `]`",
-        })?;
+        let name = rest
+            .strip_suffix(']')
+            .ok_or_else(|| RouterError::UnsupportedShape {
+                path: file.to_path_buf(),
+                reason: "malformed dynamic segment: missing `]`",
+            })?;
         validate_segment_name(name, file)?;
         return Ok(Segment::Param(name.to_string()));
     }
@@ -954,16 +969,14 @@ mod tests {
     }
 
     fn table_with(routes: Vec<Route>) -> RouteTable {
-        RouteTable { routes: Arc::new(Mutex::new(routes)) }
+        RouteTable {
+            routes: Arc::new(Mutex::new(routes)),
+        }
     }
 
     #[test]
     fn lookup_found() {
-        let table = table_with(vec![rt(
-            "/",
-            vec![],
-            HttpMethod::REAL.to_vec(),
-        )]);
+        let table = table_with(vec![rt("/", vec![], HttpMethod::REAL.to_vec())]);
         let m = table.lookup("/", HttpMethod::Get);
         assert!(matches!(m, MatchResult::Found { .. }));
     }
@@ -971,7 +984,10 @@ mod tests {
     #[test]
     fn lookup_not_found() {
         let table = table_with(vec![rt("/", vec![], HttpMethod::REAL.to_vec())]);
-        assert!(matches!(table.lookup("/nope", HttpMethod::Get), MatchResult::NotFound));
+        assert!(matches!(
+            table.lookup("/nope", HttpMethod::Get),
+            MatchResult::NotFound
+        ));
     }
 
     #[test]
@@ -985,7 +1001,10 @@ mod tests {
     fn lookup_dynamic_segment_binds_params() {
         let table = table_with(vec![rt(
             "/users/:id",
-            vec![Segment::Static("users".to_string()), Segment::Param("id".to_string())],
+            vec![
+                Segment::Static("users".to_string()),
+                Segment::Param("id".to_string()),
+            ],
             HttpMethod::REAL.to_vec(),
         )]);
         match table.lookup("/users/42", HttpMethod::Get) {
@@ -1000,12 +1019,18 @@ mod tests {
     fn lookup_decodes_dynamic_segment_utf8_and_spaces() {
         let table = table_with(vec![rt(
             "/users/:id",
-            vec![Segment::Static("users".to_string()), Segment::Param("id".to_string())],
+            vec![
+                Segment::Static("users".to_string()),
+                Segment::Param("id".to_string()),
+            ],
             HttpMethod::REAL.to_vec(),
         )]);
         match table.lookup("/users/hello%20%E4%B8%96%E7%95%8C", HttpMethod::Get) {
             MatchResult::Found { route, .. } => {
-                assert_eq!(route.params.get("id").map(String::as_str), Some("hello 世界"));
+                assert_eq!(
+                    route.params.get("id").map(String::as_str),
+                    Some("hello 世界")
+                );
             }
             other => panic!("expected Found, got {other:?}"),
         }
@@ -1015,7 +1040,10 @@ mod tests {
     fn lookup_keeps_encoded_slash_inside_one_dynamic_segment() {
         let table = table_with(vec![rt(
             "/users/:id",
-            vec![Segment::Static("users".to_string()), Segment::Param("id".to_string())],
+            vec![
+                Segment::Static("users".to_string()),
+                Segment::Param("id".to_string()),
+            ],
             HttpMethod::REAL.to_vec(),
         )]);
         match table.lookup("/users/a%2Fb", HttpMethod::Get) {
@@ -1030,7 +1058,10 @@ mod tests {
     fn lookup_rejects_malformed_percent_escape() {
         let table = table_with(vec![rt(
             "/users/:id",
-            vec![Segment::Static("users".to_string()), Segment::Param("id".to_string())],
+            vec![
+                Segment::Static("users".to_string()),
+                Segment::Param("id".to_string()),
+            ],
             HttpMethod::REAL.to_vec(),
         )]);
         assert!(matches!(
@@ -1045,7 +1076,10 @@ mod tests {
         // binds exactly one segment.
         let table = table_with(vec![rt(
             "/users/:id",
-            vec![Segment::Static("users".to_string()), Segment::Param("id".to_string())],
+            vec![
+                Segment::Static("users".to_string()),
+                Segment::Param("id".to_string()),
+            ],
             HttpMethod::REAL.to_vec(),
         )]);
         assert!(matches!(
@@ -1058,7 +1092,10 @@ mod tests {
     fn lookup_catch_all_binds_remaining() {
         let table = table_with(vec![rt(
             "/files/*path",
-            vec![Segment::Static("files".to_string()), Segment::CatchAll("path".to_string())],
+            vec![
+                Segment::Static("files".to_string()),
+                Segment::CatchAll("path".to_string()),
+            ],
             HttpMethod::REAL.to_vec(),
         )]);
         match table.lookup("/files/a/b/c.txt", HttpMethod::Get) {
@@ -1080,12 +1117,18 @@ mod tests {
         let table = table_with(vec![
             rt(
                 "/users/:name",
-                vec![Segment::Static("users".to_string()), Segment::Param("name".to_string())],
+                vec![
+                    Segment::Static("users".to_string()),
+                    Segment::Param("name".to_string()),
+                ],
                 HttpMethod::REAL.to_vec(),
             ),
             rt(
                 "/users/me",
-                vec![Segment::Static("users".to_string()), Segment::Static("me".to_string())],
+                vec![
+                    Segment::Static("users".to_string()),
+                    Segment::Static("me".to_string()),
+                ],
                 HttpMethod::REAL.to_vec(),
             ),
         ]);
@@ -1111,12 +1154,18 @@ mod tests {
         let table = table_with(vec![
             rt(
                 "/files/*path",
-                vec![Segment::Static("files".to_string()), Segment::CatchAll("path".to_string())],
+                vec![
+                    Segment::Static("files".to_string()),
+                    Segment::CatchAll("path".to_string()),
+                ],
                 HttpMethod::REAL.to_vec(),
             ),
             rt(
                 "/files/:id",
-                vec![Segment::Static("files".to_string()), Segment::Param("id".to_string())],
+                vec![
+                    Segment::Static("files".to_string()),
+                    Segment::Param("id".to_string()),
+                ],
                 HttpMethod::REAL.to_vec(),
             ),
         ]);
@@ -1158,7 +1207,11 @@ mod tests {
     fn add_and_remove_by_path_round_trip() {
         let table = RouteTable::empty();
         assert_eq!(table.len(), 0);
-        let r = rt("/x", vec![Segment::Static("x".to_string())], HttpMethod::REAL.to_vec());
+        let r = rt(
+            "/x",
+            vec![Segment::Static("x".to_string())],
+            HttpMethod::REAL.to_vec(),
+        );
         table.add(r.clone()).expect("first add");
         assert_eq!(table.len(), 1);
         assert_eq!(table.paths(), vec!["/x".to_string()]);
@@ -1183,7 +1236,9 @@ mod tests {
         // discoverable by name.
         let cases: &[(RouterError, &str)] = &[
             (
-                RouterError::RoutesDirMissing { path: PathBuf::from("/x") },
+                RouterError::RoutesDirMissing {
+                    path: PathBuf::from("/x"),
+                },
                 "TSP1001",
             ),
             (
@@ -1194,7 +1249,9 @@ mod tests {
                 "TSP1002",
             ),
             (
-                RouterError::DuplicatePath { path: "/x".to_string() },
+                RouterError::DuplicatePath {
+                    path: "/x".to_string(),
+                },
                 "TSP1003",
             ),
             (

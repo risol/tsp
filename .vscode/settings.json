@@ -1,17 +1,7 @@
 {
-  "deno.enable": true,
-  "deno.lint": true,
-  "deno.unstable": true,
-  "deno.config": "./deno.json",
-  "[typescript]": {
-    "editor.defaultFormatter": "denoland.vscode-deno"
-  },
-  "[typescriptreact]": {
-    "editor.defaultFormatter": "denoland.vscode-deno"
-  },
-  "typescript.tsdk": "deno",
-  "typescript.enablePromptUseWorkspaceTsdk": true,
   "files.associations": {
     "*.tsp": "typescriptreact"
-  }
+  },
+  "rust-analyzer.cargo.features": "all",
+  "rust-analyzer.check.command": "clippy"
 }

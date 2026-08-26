@@ -1,0 +1,118 @@
+{
+  // ============================================
+  // TSP text
+  // ============================================
+
+  // text
+  "root": "./www",
+  "port": 9000,
+  "dev": false,
+
+  // text（text，text true）
+  // text false text，text
+  // text：text，text
+  // text：text，text
+  // "hotReload": true,
+
+   "accessLog": {
+    // Log file path (optional)
+    // If not set, logs to stdout
+    "file": ".logs/access.log",
+
+    // Log rotation configuration (optional)
+    "rotation": {
+      // Maximum size of single log file in bytes (default: 10485760 = 10MB)
+      "maxSize": 10485760,
+
+      // Number of archived files to keep (default: 5)
+      "maxFiles": 5,
+
+      // Compress archived files with gzip (default: false)
+      "compress": false,
+
+      // Daily rotation: create new file each day (default: false)
+      "daily": false
+    }
+  },
+
+
+  // Session text
+  "session": {
+    // Cookie text（text：'tsp_session'）
+    // "cookieName": "tsp_session",
+    // Session text（text，text：86400 = 1 text）
+    // "maxAge": 86400,
+    // text Secure text（text：true，HTTPS text）
+    // HTTP text false，text Chrome text Cookie
+    "secure": false,
+    // text HttpOnly text（text：true，text JavaScript text）
+    // "httpOnly": true,
+    // SameSite text（text：'Strict'）
+    // text：'Strict'、'Lax'、'None'
+    // "sameSite": "Strict",
+    // Cookie text（text：'/'）
+    // "path": "/",
+    // text session（text：true，text）
+    // "rolling": true
+  },
+
+  // text
+  "logger": {
+    // text：DEBUG、INFO、WARN、ERROR
+    "level": "DEBUG",
+    // text
+    "file": ".logs/app.log",
+    // text
+    "colorize": true,
+    // text：text text json
+    "format": "text",
+    // text（text）
+    // "rotation": {
+    //   // text（text），text 10MB
+    //   "maxSize": 10485760,
+    //   // text，text 5
+    //   "maxFiles": 5,
+    //   // text，text false
+    //   "compress": false,
+    //   // text，text false
+    //   "daily": false
+    // }
+  },
+
+  // text
+  "fileManager": {
+    // text（text：false）
+    "enabled": true,
+    // text（text：'/__filemanager'）
+    "path": "/__filemanager",
+    // text（text，text 6 text）
+    "password": "Vsx@11223bb",
+    // text root text（text：false）
+    // "allowOutsideRoot": false,
+    // text
+    "deniedPaths": [".git", ".deno", "node_modules", ".cache"],
+    // text（text，text：100MB = 104857600）
+    "maxUploadSize": 104857600,
+    // text（text：true）
+    "allowDelete": true,
+    // text（text：true）
+    "allowRename": true,
+    // text（text：true）
+    "allowMkdir": true,
+    // text（text：true）
+    "allowMove": true,
+    // text（text：true）
+    "allowExtract": true,
+    // text（text：true）
+    "allowCompress": true,
+    // text（text：["zip", "tar", "tgz"]）
+    "allowedArchiveExtensions": ["zip", "tar", "tgz"],
+    // text（text，text：1GB = 1073741824）
+    "maxExtractSize": 1073741824,
+    // text（text，text：500MB = 524288000）
+    "maxCompressSize": 524288000,
+    // ZIP text：text（text：10000）
+    "maxExtractFileCount": 10000
+    // text：Cookie text Secure text session.secure text
+  }
+}

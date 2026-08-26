@@ -45,6 +45,24 @@ use bun_core::Global;
 use bun_core::StackCheck;
 use bun_core::output;
 
+fn is_tspserver_executable() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
+        .is_some_and(|name| matches!(name.as_str(), "tspserver" | "tspserver_v2"))
+}
+
+/// Unix TSP masters call this only in their freshly pre-forked child. Keeping
+/// the worker entry in the Bun-linked executable lets the master stay VM-free
+/// while the child initializes exactly one embedded Bun VM.
+#[unsafe(no_mangle)]
+pub extern "C" fn Bun__tsp_run_worker() -> c_int {
+    bun_runtime::tsp_worker::run()
+}
+
 /// mimalloc as the process allocator.
 #[cfg(not(bun_asan))]
 #[global_allocator]
@@ -197,6 +215,17 @@ pub(crate) unsafe extern "C" fn main(argc: c_int, argv: *const *const c_char) ->
 
     if bun_runtime::tsp_worker::requested() {
         return bun_runtime::tsp_worker::run();
+    }
+
+    // The packaged TSP runtime is this same executable renamed to
+    // `tspserver_v2`. Master mode never initializes a Bun VM; it only creates
+    // worker children. Worker mode above owns the VM initialization.
+    if is_tspserver_executable() {
+        return if bun_runtime_tsp::entry::run() == std::process::ExitCode::SUCCESS {
+            0
+        } else {
+            1
+        };
     }
 
     // 7. CLI dispatch.

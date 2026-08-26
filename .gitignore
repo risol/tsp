@@ -1,29 +1,27 @@
-tmpclaude-*-cwd
-tspserver.exe
-tspserver-test.exe
-*.exe.tmp*
-*.tmp-*/
-.cache
-dist
-dist-linux-*
-dist-windows-*
-dist-darwin-*
-release
-config.json
-config.jsonc
+# Local runtime and package output
+dist/
+public/*
+!public/.gitkeep
+.logs/
+.logs-*.txt
+.docker_build_info
+
+# Local configuration and secrets
 .env
 .env.*
 !.env.example
-nul
-*.log
-/uploads
-/output
-.claude/settings.local.json
-test_*.xlsx
-/dist
 
-.docker_build_info
-node_modules/
-.bun-bootstrap/
-.logs/
-.logs-16n-*.txt
+# Bun/Rust build output is also ignored by bun/.gitignore.
+bun/build/
+bun/target/
+bun/vendor/
+bun/node_modules/
+
+# Local test artifacts
+test_*.xlsx
+test-uploads/
+uploads/
+output/
+*.tmp
+.cache/
+.claude/settings.local.json

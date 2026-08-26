@@ -168,8 +168,18 @@ impl EmbeddedVm {
         crate::jsc::initialize(false);
         bun_ast::initialize_store();
         let log = Box::leak(Box::new(bun_ast::Log::init()));
+        let transform_options = bun_options_types::schema::api::TransformOptions {
+            jsx: Some(bun_options_types::schema::api::Jsx {
+                factory: b"React.createElement".as_slice().into(),
+                fragment: b"React.Fragment".as_slice().into(),
+                runtime: bun_options_types::schema::api::JsxRuntime::Classic,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
         let options = crate::jsc::VirtualMachineInitOptions {
             log: Some(std::ptr::NonNull::from(&mut *log)),
+            transform_options,
             is_main_thread: true,
             ..Default::default()
         };
@@ -199,6 +209,18 @@ impl EmbeddedVm {
     }
 
     fn execute_path(&mut self, path: &str) -> Result<String, String> {
+        // JSC requires its API lock to be held while loading modules and
+        // driving the event loop. This is especially strict on Windows,
+        // where the embedded worker uses TCP for the master connection.
+        let this = self as *mut Self;
+        unsafe {
+            (*this)
+                .vm
+                .run_with_api_lock(|| (*this).execute_path_with_api_lock(path))
+        }
+    }
+
+    fn execute_path_with_api_lock(&mut self, path: &str) -> Result<String, String> {
         let path = std::path::Path::new(path);
         let path = path
             .to_str()

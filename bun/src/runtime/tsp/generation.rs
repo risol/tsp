@@ -172,9 +172,15 @@ impl std::fmt::Debug for PageSlot {
             .field("page", &self.page)
             .field("source", &self.source)
             .field("current_id", &self.current.as_ref().map(|g| g.id))
-            .field("last_known_good_id", &self.last_known_good.as_ref().map(|g| g.id))
+            .field(
+                "last_known_good_id",
+                &self.last_known_good.as_ref().map(|g| g.id),
+            )
             .field("state", &self.state)
-            .field("in_flight", &self.in_flight.as_ref().map(|_| "Arc<InFlightBuild>"))
+            .field(
+                "in_flight",
+                &self.in_flight.as_ref().map(|_| "Arc<InFlightBuild>"),
+            )
             .field("invalidation_revision", &self.invalidation_revision)
             .field("building_revision", &self.building_revision)
             .finish()
@@ -200,8 +206,10 @@ impl PageSlot {
     /// True when the slot can serve requests from `current`
     /// without triggering a build.
     pub fn is_servable(&self) -> bool {
-        matches!(self.state, PageState::Clean | PageState::Failed | PageState::Building)
-            && self.current.is_some()
+        matches!(
+            self.state,
+            PageState::Clean | PageState::Failed | PageState::Building
+        ) && self.current.is_some()
     }
 }
 
@@ -297,7 +305,9 @@ impl PageRegistry {
     pub fn unregister_path(&self, route_path: &str) -> usize {
         let mut inner = self.inner.lock().expect("registry lock poisoned");
         let before = inner.slots.len();
-        inner.slots.retain(|page_ref, _| page_ref.route != route_path);
+        inner
+            .slots
+            .retain(|page_ref, _| page_ref.route != route_path);
         before - inner.slots.len()
     }
 
@@ -340,7 +350,9 @@ impl PageRegistry {
     pub fn read_current_payload(&self, page: &PageRef) -> Option<String> {
         let inner = self.inner.lock().expect("registry lock poisoned");
         let slot = inner.slots.get(page)?;
-        slot.current.as_ref().and_then(|g| g.payload.as_ref().map(|a| (**a).clone()))
+        slot.current
+            .as_ref()
+            .and_then(|g| g.payload.as_ref().map(|a| (**a).clone()))
     }
 
     /// Read the LKG generation's payload. Same shape as
@@ -348,7 +360,9 @@ impl PageRegistry {
     pub fn read_lkg_payload(&self, page: &PageRef) -> Option<String> {
         let inner = self.inner.lock().expect("registry lock poisoned");
         let slot = inner.slots.get(page)?;
-        slot.last_known_good.as_ref().and_then(|g| g.payload.as_ref().map(|a| (**a).clone()))
+        slot.last_known_good
+            .as_ref()
+            .and_then(|g| g.payload.as_ref().map(|a| (**a).clone()))
     }
 
     /// Mark a slot dirty. Used by the watcher (slice 11) and
@@ -480,7 +494,9 @@ impl PageRegistry {
     pub fn read_lkg_arc(&self, page: &PageRef) -> Option<Arc<String>> {
         let inner = self.inner.lock().expect("registry lock poisoned");
         let slot = inner.slots.get(page)?;
-        slot.last_known_good.as_ref().and_then(|g| g.payload.clone())
+        slot.last_known_good
+            .as_ref()
+            .and_then(|g| g.payload.clone())
     }
 }
 
@@ -589,7 +605,8 @@ impl PublishGuard {
         let mut inner = self.registry.inner.lock().expect("registry lock poisoned");
         if let Some(slot) = inner.slots.get_mut(&self.slot_page) {
             let prev = slot.current.take();
-            let prev_was_ok = matches!(prev, Some(ref p) if matches!(p.build_result, BuildResult::Ok));
+            let prev_was_ok =
+                matches!(prev, Some(ref p) if matches!(p.build_result, BuildResult::Ok));
             if prev_was_ok {
                 // Promote the previous successful current to
                 // LKG; the new candidate takes over `current`.
@@ -769,7 +786,10 @@ mod tests {
         let guard = r.begin_build(&p).unwrap();
         let snap = r.snapshot(&p).unwrap();
         assert_eq!(snap.state, PageState::Building);
-        guard.commit(vec![modid("routes/index.tsp")], "<h1>Hello</h1>".to_string());
+        guard.commit(
+            vec![modid("routes/index.tsp")],
+            "<h1>Hello</h1>".to_string(),
+        );
         let snap = r.snapshot(&p).unwrap();
         assert_eq!(snap.state, PageState::Clean);
         assert!(snap.current_id.is_some());
@@ -1125,8 +1145,14 @@ mod tests {
             params: std::collections::HashMap::new(),
         };
         r.register_route(&route);
-        let get_ref = PageRef { route: "/x".to_string(), method: HttpMethod::Get };
-        let post_ref = PageRef { route: "/x".to_string(), method: HttpMethod::Post };
+        let get_ref = PageRef {
+            route: "/x".to_string(),
+            method: HttpMethod::Get,
+        };
+        let post_ref = PageRef {
+            route: "/x".to_string(),
+            method: HttpMethod::Post,
+        };
         assert!(r.unregister(&get_ref));
         // The Post slot survives.
         assert_eq!(r.all_page_refs().len(), 1);

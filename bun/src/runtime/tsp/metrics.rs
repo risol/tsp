@@ -39,28 +39,85 @@ impl Metrics {
         target.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn record_timeout(&self) { self.timeouts_total.fetch_add(1, Ordering::Relaxed); }
-    pub fn record_cancellation(&self) { self.cancellations_total.fetch_add(1, Ordering::Relaxed); }
-    pub fn record_reload(&self) { self.reloads_total.fetch_add(1, Ordering::Relaxed); }
+    pub fn record_timeout(&self) {
+        self.timeouts_total.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn record_cancellation(&self) {
+        self.cancellations_total.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn record_reload(&self) {
+        self.reloads_total.fetch_add(1, Ordering::Relaxed);
+    }
 
     pub fn record_duration(&self, duration_ms: u64) {
         self.active_requests.fetch_sub(1, Ordering::Relaxed);
-        self.duration_ms_sum.fetch_add(duration_ms, Ordering::Relaxed);
+        self.duration_ms_sum
+            .fetch_add(duration_ms, Ordering::Relaxed);
         self.duration_samples.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn prometheus(&self) -> String {
         let mut out = String::new();
-        metric(&mut out, "tsp_requests_total", "Total HTTP requests", self.requests_total.load(Ordering::Relaxed));
-        gauge(&mut out, "tsp_active_requests", "Requests currently being dispatched", self.active_requests.load(Ordering::Relaxed));
-        metric(&mut out, "tsp_request_duration_ms_sum", "Sum of request durations in milliseconds", self.duration_ms_sum.load(Ordering::Relaxed));
-        metric(&mut out, "tsp_request_duration_ms_count", "Number of measured request durations", self.duration_samples.load(Ordering::Relaxed));
-        metric(&mut out, "tsp_responses_2xx_total", "Responses with a 2xx status", self.responses_2xx.load(Ordering::Relaxed));
-        metric(&mut out, "tsp_responses_4xx_total", "Responses with a 4xx status", self.responses_4xx.load(Ordering::Relaxed));
-        metric(&mut out, "tsp_responses_5xx_total", "Responses with a 5xx status", self.responses_5xx.load(Ordering::Relaxed));
-        metric(&mut out, "tsp_request_timeouts_total", "Requests terminated by the timeout watchdog", self.timeouts_total.load(Ordering::Relaxed));
-        metric(&mut out, "tsp_request_cancellations_total", "Requests cancelled by disconnect or shutdown", self.cancellations_total.load(Ordering::Relaxed));
-        metric(&mut out, "tsp_reload_total", "Published route generations after reload", self.reloads_total.load(Ordering::Relaxed));
+        metric(
+            &mut out,
+            "tsp_requests_total",
+            "Total HTTP requests",
+            self.requests_total.load(Ordering::Relaxed),
+        );
+        gauge(
+            &mut out,
+            "tsp_active_requests",
+            "Requests currently being dispatched",
+            self.active_requests.load(Ordering::Relaxed),
+        );
+        metric(
+            &mut out,
+            "tsp_request_duration_ms_sum",
+            "Sum of request durations in milliseconds",
+            self.duration_ms_sum.load(Ordering::Relaxed),
+        );
+        metric(
+            &mut out,
+            "tsp_request_duration_ms_count",
+            "Number of measured request durations",
+            self.duration_samples.load(Ordering::Relaxed),
+        );
+        metric(
+            &mut out,
+            "tsp_responses_2xx_total",
+            "Responses with a 2xx status",
+            self.responses_2xx.load(Ordering::Relaxed),
+        );
+        metric(
+            &mut out,
+            "tsp_responses_4xx_total",
+            "Responses with a 4xx status",
+            self.responses_4xx.load(Ordering::Relaxed),
+        );
+        metric(
+            &mut out,
+            "tsp_responses_5xx_total",
+            "Responses with a 5xx status",
+            self.responses_5xx.load(Ordering::Relaxed),
+        );
+        metric(
+            &mut out,
+            "tsp_request_timeouts_total",
+            "Requests terminated by the timeout watchdog",
+            self.timeouts_total.load(Ordering::Relaxed),
+        );
+        metric(
+            &mut out,
+            "tsp_request_cancellations_total",
+            "Requests cancelled by disconnect or shutdown",
+            self.cancellations_total.load(Ordering::Relaxed),
+        );
+        metric(
+            &mut out,
+            "tsp_reload_total",
+            "Published route generations after reload",
+            self.reloads_total.load(Ordering::Relaxed),
+        );
         out
     }
 }
@@ -106,7 +163,9 @@ static GLOBAL: Metrics = Metrics {
     reloads_total: AtomicU64::new(0),
 };
 
-pub fn global() -> &'static Metrics { &GLOBAL }
+pub fn global() -> &'static Metrics {
+    &GLOBAL
+}
 
 #[cfg(test)]
 mod tests {

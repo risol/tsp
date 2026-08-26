@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -lt 2 || $# -gt 4 ]]; then
-  echo "usage: $0 <tspserver_v2> <bun-worker> [routes-dir] [port]" >&2
+if [[ $# -lt 1 || $# -gt 3 ]]; then
+  echo "usage: $0 <tspserver_v2> [routes-dir] [port]" >&2
   exit 2
 fi
 
 server=$(realpath "$1")
-worker=$(realpath "$2")
-source_routes=$(realpath "${3:-tests/v2_smoke/routes}")
-port=${4:-9137}
+source_routes=$(realpath "${2:-tests/v2_smoke/routes}")
+port=${3:-9137}
 [[ -x "$server" ]] || { echo "server binary is not executable: $server" >&2; exit 1; }
-[[ -x "$worker" ]] || { echo "worker binary is not executable: $worker" >&2; exit 1; }
 [[ -d "$source_routes" ]] || { echo "routes directory not found: $source_routes" >&2; exit 1; }
 
 temp_root=$(mktemp -d "${TMPDIR:-/tmp}/tsp-v2-smoke.XXXXXX")
@@ -31,7 +29,6 @@ trap cleanup EXIT
 TSP_PORT="$port" \
 TSP_ROUTES_DIR="$routes" \
 TSP_EMBEDDED_WORKER=1 \
-TSP_WORKER_BIN="$worker" \
 TSP_WORKER_COUNT=2 \
 "$server" >"$server_log" 2>&1 &
 pid=$!

@@ -35,8 +35,11 @@ use crate::generation::{
 use crate::jsc_bridge::{BunRuntime, CancellationToken};
 use crate::metrics;
 use crate::pipeline;
-use crate::services::{LogLine, ServiceRegistry, SessionService, SessionValue, SessionView, SessionWrite, BUILTIN_SESSION};
 use crate::router::{HttpMethod, MatchResult, RouteTable};
+use crate::services::{
+    BUILTIN_SESSION, LogLine, ServiceRegistry, SessionService, SessionValue, SessionView,
+    SessionWrite,
+};
 use std::sync::Arc;
 
 /// Stable error codes for development diagnostics
@@ -381,8 +384,7 @@ fn fragment_token() -> &'static str {
 /// the alphabet is short and the tests catch the
 /// obvious off-by-one / padding cases.
 fn base64_encode(out: &mut String, bytes: &[u8]) {
-    const ALPH: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPH: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut i = 0;
     while i + 3 <= bytes.len() {
         let b0 = bytes[i];
@@ -432,8 +434,8 @@ enum EnvelopeKind {
 
 #[derive(Debug)]
 #[allow(dead_code)] // kind / status_line: used by the dev-
-                   // inspector slice; parse_envelope produces
-                   // them for the request path.
+// inspector slice; parse_envelope produces
+// them for the request path.
 struct EnvelopeOutcome {
     kind: EnvelopeKind,
     content_type: String,
@@ -573,7 +575,10 @@ impl JsonValue {
 
 /// Parse a complete JSON document (no trailing input).
 fn parse_json(text: &str) -> Option<JsonValue> {
-    let mut p = JsonParser { bytes: text.as_bytes(), pos: 0 };
+    let mut p = JsonParser {
+        bytes: text.as_bytes(),
+        pos: 0,
+    };
     let v = p.parse_value()?;
     p.skip_ws();
     if p.pos == p.bytes.len() {
@@ -590,7 +595,9 @@ struct JsonParser<'a> {
 
 impl<'a> JsonParser<'a> {
     fn skip_ws(&mut self) {
-        while self.pos < self.bytes.len() && matches!(self.bytes[self.pos], b' ' | b'\t' | b'\n' | b'\r') {
+        while self.pos < self.bytes.len()
+            && matches!(self.bytes[self.pos], b' ' | b'\t' | b'\n' | b'\r')
+        {
             self.pos += 1;
         }
     }
@@ -653,7 +660,8 @@ impl<'a> JsonParser<'a> {
                             if self.pos + 4 > self.bytes.len() {
                                 return None;
                             }
-                            let hex = std::str::from_utf8(&self.bytes[self.pos..self.pos + 4]).ok()?;
+                            let hex =
+                                std::str::from_utf8(&self.bytes[self.pos..self.pos + 4]).ok()?;
                             let code = u32::from_str_radix(hex, 16).ok()?;
                             out.push(char::from_u32(code)?);
                             self.pos += 4;
@@ -676,7 +684,10 @@ impl<'a> JsonParser<'a> {
     fn parse_number(&mut self) -> Option<JsonValue> {
         let start = self.pos;
         while self.pos < self.bytes.len()
-            && matches!(self.bytes[self.pos], b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9')
+            && matches!(
+                self.bytes[self.pos],
+                b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9'
+            )
         {
             self.pos += 1;
         }
@@ -764,10 +775,7 @@ fn resolve_session_view(svc: &SessionService, sid: Option<&str>) -> SessionResol
         Some(view) => view,
         None => svc.create(),
     };
-    SessionResolve {
-        original_sid,
-        view,
-    }
+    SessionResolve { original_sid, view }
 }
 
 /// Wire form for the `tsp_sid` cookie (spec sect.16). A
@@ -809,7 +817,9 @@ fn read_session_cookie(headers: &[(String, String)]) -> Option<String> {
         if k == "cookie" {
             for pair in v.split(';') {
                 let trimmed = pair.trim();
-                let Some(eq) = trimmed.find('=') else { continue };
+                let Some(eq) = trimmed.find('=') else {
+                    continue;
+                };
                 let name = trimmed[..eq].trim();
                 if name == SESSION_COOKIE_NAME {
                     let val = trimmed[eq + 1..].trim();
@@ -864,7 +874,11 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
                     "response" => EnvelopeKind::Response,
                     _ => EnvelopeKind::Legacy,
                 };
-                let body = obj.get("body").and_then(JsonValue::as_str).unwrap_or("").to_string();
+                let body = obj
+                    .get("body")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or("")
+                    .to_string();
                 let headers = parse_envelope_headers(obj.get("headers"));
                 let service_logs = parse_service_logs(obj.get("service_logs"));
                 let session_writes = parse_session_writes(obj.get("session_writes"));
@@ -926,7 +940,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
             body: stdout.to_string(),
             headers: Vec::new(),
             service_logs: Vec::new(),
-                session_writes: Vec::new(),
+            session_writes: Vec::new(),
         }
     };
 
@@ -991,10 +1005,14 @@ fn parse_envelope_headers(v: Option<&JsonValue>) -> Vec<(String, String)> {
 /// envelope stays valid.
 fn parse_session_writes(v: Option<&JsonValue>) -> Vec<SessionWrite> {
     let Some(v) = v else { return Vec::new() };
-    let JsonValue::Array(items) = v else { return Vec::new() };
+    let JsonValue::Array(items) = v else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     for item in items {
-        let JsonValue::Object(entries) = item else { continue };
+        let JsonValue::Object(entries) = item else {
+            continue;
+        };
         let obj = JsonValue::Object(entries.clone());
         let op = match obj.get("op").and_then(JsonValue::as_str) {
             Some(o) => o,
@@ -1002,15 +1020,21 @@ fn parse_session_writes(v: Option<&JsonValue>) -> Vec<SessionWrite> {
         };
         match op {
             "set" => {
-                let Some(k) = obj.get("k").and_then(JsonValue::as_str) else { continue };
+                let Some(k) = obj.get("k").and_then(JsonValue::as_str) else {
+                    continue;
+                };
                 let Some(v) = obj.get("v") else { continue };
                 match json_value_to_session(v) {
                     Some(sv) => out.push(SessionWrite::Set(k.to_string(), sv)),
-                    None => eprintln!("TSPv2PoC1: session write to '{k}' has non-portable value; dropped"),
+                    None => eprintln!(
+                        "TSPv2PoC1: session write to '{k}' has non-portable value; dropped"
+                    ),
                 }
             }
             "delete" => {
-                let Some(k) = obj.get("k").and_then(JsonValue::as_str) else { continue };
+                let Some(k) = obj.get("k").and_then(JsonValue::as_str) else {
+                    continue;
+                };
                 out.push(SessionWrite::Delete(k.to_string()));
             }
             "clear" => out.push(SessionWrite::Clear),
@@ -1250,9 +1274,7 @@ fn start_disconnect_monitor(
     Some((stop, handle))
 }
 
-fn stop_disconnect_monitor(
-    monitor: Option<(Arc<AtomicBool>, thread::JoinHandle<()>)>,
-) {
+fn stop_disconnect_monitor(monitor: Option<(Arc<AtomicBool>, thread::JoinHandle<()>)>) {
     if let Some((stop, handle)) = monitor {
         stop.store(true, Ordering::Release);
         let _ = handle.join();
@@ -1271,7 +1293,15 @@ pub fn serve(
     bun: &'static BunRuntime,
     services: &'static ServiceRegistry,
 ) -> Result<(), HostError> {
-    serve_with_public_root(host, port, routes, registry, bun, services, resolve_public_root())
+    serve_with_public_root(
+        host,
+        port,
+        routes,
+        registry,
+        bun,
+        services,
+        resolve_public_root(),
+    )
 }
 
 /// Bind and serve with an explicit public asset root. `None` disables native
@@ -1296,9 +1326,7 @@ pub fn serve_with_public_root(
         let (stream, peer) = match listener.accept() {
             Ok(pair) => pair,
             Err(e) => {
-                if e.kind() == io::ErrorKind::Interrupted
-                    || e.kind() == io::ErrorKind::WouldBlock
-                {
+                if e.kind() == io::ErrorKind::Interrupted || e.kind() == io::ErrorKind::WouldBlock {
                     continue;
                 }
                 return Err(HostError::Accept(e));
@@ -1365,8 +1393,12 @@ fn handle_connection(
                  Connection: close\r\n\r\n",
                 body_text.len()
             );
-            stream.write_all(head.as_bytes()).map_err(HostError::Connection)?;
-            stream.write_all(body_text.as_bytes()).map_err(HostError::Connection)?;
+            stream
+                .write_all(head.as_bytes())
+                .map_err(HostError::Connection)?;
+            stream
+                .write_all(body_text.as_bytes())
+                .map_err(HostError::Connection)?;
             let _ = stream.shutdown(Shutdown::Both);
             return Ok(());
         }
@@ -1381,8 +1413,12 @@ fn handle_connection(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
             );
-            stream.write_all(head.as_bytes()).map_err(HostError::Connection)?;
-            stream.write_all(body.as_bytes()).map_err(HostError::Connection)?;
+            stream
+                .write_all(head.as_bytes())
+                .map_err(HostError::Connection)?;
+            stream
+                .write_all(body.as_bytes())
+                .map_err(HostError::Connection)?;
             metrics::global().record_response("HTTP/1.1 200 OK");
             metrics::global().record_duration(request_started.elapsed().as_millis() as u64);
             let _ = stream.shutdown(Shutdown::Both);
@@ -1390,17 +1426,21 @@ fn handle_connection(
         }
         if matches!(*method, HttpMethod::Get | HttpMethod::Head) {
             if let Some(root) = public_root {
-                if let Some(asset) = crate::static_files::load(root, path)
-                    .map_err(HostError::Connection)?
+                if let Some(asset) =
+                    crate::static_files::load(root, path).map_err(HostError::Connection)?
                 {
                     let head = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: public, max-age=3600\r\nConnection: close\r\n\r\n",
                         asset.content_type,
                         asset.body.len()
                     );
-                    stream.write_all(head.as_bytes()).map_err(HostError::Connection)?;
+                    stream
+                        .write_all(head.as_bytes())
+                        .map_err(HostError::Connection)?;
                     if *method == HttpMethod::Get {
-                        stream.write_all(&asset.body).map_err(HostError::Connection)?;
+                        stream
+                            .write_all(&asset.body)
+                            .map_err(HostError::Connection)?;
                     }
                     metrics::global().record_response("HTTP/1.1 200 OK");
                     metrics::global().record_duration(request_started.elapsed().as_millis() as u64);
@@ -1427,7 +1467,12 @@ fn handle_connection(
         // SessionService; the 4xx / 5xx bodies do not carry
         // a session, so the host does not emit a
         // `Set-Cookie: tsp_sid=...` line for them.
-        ParsedRequest::Known { method, path, query, headers } => {
+        ParsedRequest::Known {
+            method,
+            path,
+            query,
+            headers,
+        } => {
             // Build the per-request Context the page handler
             // receives as its single argument. `params` is
             // empty for slice 16a (dynamic route segments
@@ -1444,8 +1489,8 @@ fn handle_connection(
             // once; the resulting MatchResult is used both to
             // seed `ctx.params` and to drive the dispatch
             // below.
-            let (dispatch_path, fragment_name, dispatch_query) =
-                fragment_target(&path, &query).unwrap_or_else(|| (path.clone(), None, query.clone()));
+            let (dispatch_path, fragment_name, dispatch_query) = fragment_target(&path, &query)
+                .unwrap_or_else(|| (path.clone(), None, query.clone()));
             let matched = routes.lookup(&dispatch_path, method);
             let params: std::collections::HashMap<String, String> = match &matched {
                 MatchResult::Found { route, .. } | MatchResult::FoundHeadOverGet { route } => {
@@ -1460,10 +1505,13 @@ fn handle_connection(
             // fresh (spec 16.4 makes the destroyed session
             // no longer usable).
             let session_resolve = services.get(BUILTIN_SESSION).and_then(|svc_arc| {
-                svc_arc.as_any().downcast_ref::<SessionService>().map(|svc| {
-                    let cookie_sid = read_session_cookie(&headers);
-                    resolve_session_view(svc, cookie_sid.as_deref())
-                })
+                svc_arc
+                    .as_any()
+                    .downcast_ref::<SessionService>()
+                    .map(|svc| {
+                        let cookie_sid = read_session_cookie(&headers);
+                        resolve_session_view(svc, cookie_sid.as_deref())
+                    })
             });
             // Track the cookie that came in so the
             // post-render Set-Cookie decision compares
@@ -1494,27 +1542,30 @@ fn handle_connection(
             let disconnect_monitor = start_disconnect_monitor(&stream, &cancellation);
             let ctx_json = ctx.to_json_with_fragment(fragment_name.as_deref());
             let rendered = match matched {
-            MatchResult::Found { route, method: req_method } => {
-                let page_ref = PageRef {
-                    route: route.path.clone(),
+                MatchResult::Found {
+                    route,
                     method: req_method,
-                };
-                // Slice 16d/16e: a request that carries a query
-                // string, a body, OR dynamic-route params is
-                // inherently per-request -- the page's output
-                // depends on those per-request inputs, which
-                // differ from request to request. The registry
-                // cache keys on (route, method), so a cached
-                // payload would replay the FIRST request's
-                // output (e.g. the first query string, the
-                // first body echo, the first captured params)
-                // to every later request on the same
-                // route+method. Such requests therefore bypass
-                // the generation cache and rebuild via the
-                // pipeline directly (spec sect.20-22 cache
-                // semantics only cover body-less, query-less,
-                // param-less GET-style rendering).
-                let per_request = !ctx.body.is_empty()
+                } => {
+                    let page_ref = PageRef {
+                        route: route.path.clone(),
+                        method: req_method,
+                    };
+                    // Slice 16d/16e: a request that carries a query
+                    // string, a body, OR dynamic-route params is
+                    // inherently per-request -- the page's output
+                    // depends on those per-request inputs, which
+                    // differ from request to request. The registry
+                    // cache keys on (route, method), so a cached
+                    // payload would replay the FIRST request's
+                    // output (e.g. the first query string, the
+                    // first body echo, the first captured params)
+                    // to every later request on the same
+                    // route+method. Such requests therefore bypass
+                    // the generation cache and rebuild via the
+                    // pipeline directly (spec sect.20-22 cache
+                    // semantics only cover body-less, query-less,
+                    // param-less GET-style rendering).
+                    let per_request = !ctx.body.is_empty()
                     || !ctx.query.is_empty()
                     || !ctx.params.is_empty()
                     // Slice 16j: a registered runtime service that
@@ -1523,20 +1574,125 @@ fn handle_connection(
                     // request-dependent -- the cache would replay a
                     // stale service-state snapshot.
                     || services.any_request_varying();
-                let (_status_line, _ct, allow_header, body) = if per_request {
-                    render_per_request(
-                        &route,
-                        req_method,
-                        bun,
-                        &ctx,
-                        &ctx_json,
-                        timeout_ms,
-                        &cancellation,
+                    let (_status_line, _ct, allow_header, body) = if per_request {
+                        render_per_request(
+                            &route,
+                            req_method,
+                            bun,
+                            &ctx,
+                            &ctx_json,
+                            timeout_ms,
+                            &cancellation,
+                        )
+                    } else {
+                        render_for_route(
+                            &route,
+                            req_method,
+                            &page_ref,
+                            registry,
+                            bun,
+                            &ctx,
+                            &ctx_json,
+                            timeout_ms,
+                            &cancellation,
+                        )
+                    };
+                    // Slice 16b: bun emits a `__TSP_OUT_V1__` envelope
+                    // with the page's return value classified as
+                    // either HtmlNode (string) or Web Response.
+                    // parse_envelope unpacks it and surfaces the
+                    // correct status / content-type / body / headers.
+                    let outcome = parse_envelope(&body);
+                    // Slice 16j: flush the page's `ctx.services.*`
+                    // log lines into the owning runtime service now
+                    // that the envelope is back (the page ran in a
+                    // throwaway subprocess; the envelope is the only
+                    // back-channel). The flush lands BEFORE this
+                    // response is written, so the next request's
+                    // snapshot observes it.
+                    services.flush_log_lines(&outcome.service_logs);
+                    // Slice 16k: apply the page's session writes
+                    // (spec sect.16). The new id may be empty
+                    // (destroyed) or different (regenerate /
+                    // fresh) from the cookie the request came in
+                    // with; either way the response needs a
+                    // `Set-Cookie: tsp_sid=...` line so the
+                    // browser keeps its view of the session in
+                    // sync with the host.
+                    let mut outcome = outcome;
+                    let mut new_session_sid: Option<String> = None;
+                    if let Some(current) = &ctx.session {
+                        if let Some(svc_arc) = services.get(BUILTIN_SESSION) {
+                            if let Some(svc) = svc_arc.as_any().downcast_ref::<SessionService>() {
+                                // Apply the page's writes against
+                                // the session's CURRENT id (the
+                                // resolved view, which may already
+                                // differ from the cookie if the
+                                // request's sid was unknown /
+                                // destroyed). After apply, the
+                                // returned sid is the new value
+                                // the browser must see.
+                                let next = svc.apply_writes(&current.id, &outcome.session_writes);
+                                new_session_sid = Some(next);
+                            }
+                        }
+                    }
+                    // The cookie line is determined by
+                    // `request_sid` (the cookie the request
+                    // carried) vs `new_sid` (the sid the host
+                    // committed after applying writes). They
+                    // match -> no Set-Cookie. They differ ->
+                    // plant the new sid (or Max-Age=0 on
+                    // destroy).
+                    if let Some(new_sid) = new_session_sid.as_deref() {
+                        let old_sid = request_sid.as_deref().unwrap_or("");
+                        if let Some(cookie_line) = build_session_cookie(new_sid, old_sid) {
+                            outcome
+                                .headers
+                                .push(("Set-Cookie".to_string(), cookie_line));
+                        }
+                    }
+                    // The envelope is the source of truth for the
+                    // page's actual status when the page ran. When
+                    // the envelope is absent (Legacy), the body is
+                    // an error page produced by the host (405 / 500)
+                    // and the host's own status line must win --
+                    // otherwise a method rejection would be served
+                    // as 200 OK.
+                    let use_envelope = outcome.kind != EnvelopeKind::Legacy;
+                    (
+                        if use_envelope {
+                            outcome.status_line
+                        } else {
+                            _status_line
+                        },
+                        if use_envelope {
+                            outcome.content_type
+                        } else {
+                            _ct.to_string()
+                        },
+                        allow_header,
+                        outcome.body,
+                        outcome.headers,
                     )
-                } else {
-                    render_for_route(
+                }
+                MatchResult::FoundHeadOverGet { route } => {
+                    // Spec sect.6.5: HEAD with no explicit HEAD export.
+                    // Run the GET handler, then strip the body. We
+                    // intentionally do NOT preserve Content-Length --
+                    // see the slice 14a note in progress.md for the
+                    // proper Content-Length-preserving refactor.
+                    // The body is dropped here; we do NOT call
+                    // parse_envelope on the GET result because the
+                    // head body must be empty regardless of the
+                    // page's response shape.
+                    let page_ref = PageRef {
+                        route: route.path.clone(),
+                        method: HttpMethod::Get,
+                    };
+                    let (_status, _ct, _allow, _body) = render_for_route(
                         &route,
-                        req_method,
+                        HttpMethod::Get,
                         &page_ref,
                         registry,
                         bun,
@@ -1544,174 +1700,69 @@ fn handle_connection(
                         &ctx_json,
                         timeout_ms,
                         &cancellation,
-                    )
-                };
-                // Slice 16b: bun emits a `__TSP_OUT_V1__` envelope
-                // with the page's return value classified as
-                // either HtmlNode (string) or Web Response.
-                // parse_envelope unpacks it and surfaces the
-                // correct status / content-type / body / headers.
-                let outcome = parse_envelope(&body);
-                // Slice 16j: flush the page's `ctx.services.*`
-                // log lines into the owning runtime service now
-                // that the envelope is back (the page ran in a
-                // throwaway subprocess; the envelope is the only
-                // back-channel). The flush lands BEFORE this
-                // response is written, so the next request's
-                // snapshot observes it.
-                services.flush_log_lines(&outcome.service_logs);
-                // Slice 16k: apply the page's session writes
-                // (spec sect.16). The new id may be empty
-                // (destroyed) or different (regenerate /
-                // fresh) from the cookie the request came in
-                // with; either way the response needs a
-                // `Set-Cookie: tsp_sid=...` line so the
-                // browser keeps its view of the session in
-                // sync with the host.
-                let mut outcome = outcome;
-                let mut new_session_sid: Option<String> = None;
-                if let Some(current) = &ctx.session {
-                    if let Some(svc_arc) = services.get(BUILTIN_SESSION) {
-                        if let Some(svc) = svc_arc.as_any().downcast_ref::<SessionService>() {
-                            // Apply the page's writes against
-                            // the session's CURRENT id (the
-                            // resolved view, which may already
-                            // differ from the cookie if the
-                            // request's sid was unknown /
-                            // destroyed). After apply, the
-                            // returned sid is the new value
-                            // the browser must see.
-                            let next = svc.apply_writes(&current.id, &outcome.session_writes);
-                            new_session_sid = Some(next);
-                        }
-                    }
-                }
-                // The cookie line is determined by
-                // `request_sid` (the cookie the request
-                // carried) vs `new_sid` (the sid the host
-                // committed after applying writes). They
-                // match -> no Set-Cookie. They differ ->
-                // plant the new sid (or Max-Age=0 on
-                // destroy).
-                if let Some(new_sid) = new_session_sid.as_deref() {
-                    let old_sid = request_sid.as_deref().unwrap_or("");
-                    if let Some(cookie_line) = build_session_cookie(new_sid, old_sid) {
-                        outcome.headers.push(("Set-Cookie".to_string(), cookie_line));
-                    }
-                }
-                // The envelope is the source of truth for the
-                // page's actual status when the page ran. When
-                // the envelope is absent (Legacy), the body is
-                // an error page produced by the host (405 / 500)
-                // and the host's own status line must win --
-                // otherwise a method rejection would be served
-                // as 200 OK.
-                let use_envelope = outcome.kind != EnvelopeKind::Legacy;
-                (
-                    if use_envelope {
-                        outcome.status_line
-                    } else {
-                        _status_line
-                    },
-                    if use_envelope {
-                        outcome.content_type
-                    } else {
-                        _ct.to_string()
-                    },
-                    allow_header,
-                    outcome.body,
-                    outcome.headers,
-                )
-            }
-            MatchResult::FoundHeadOverGet { route } => {
-                // Spec sect.6.5: HEAD with no explicit HEAD export.
-                // Run the GET handler, then strip the body. We
-                // intentionally do NOT preserve Content-Length --
-                // see the slice 14a note in progress.md for the
-                // proper Content-Length-preserving refactor.
-                // The body is dropped here; we do NOT call
-                // parse_envelope on the GET result because the
-                // head body must be empty regardless of the
-                // page's response shape.
-                let page_ref = PageRef {
-                    route: route.path.clone(),
-                    method: HttpMethod::Get,
-                };
-                let (_status, _ct, _allow, _body) = render_for_route(
-                    &route,
-                    HttpMethod::Get,
-                    &page_ref,
-                    registry,
-                    bun,
-                    &ctx,
-                    &ctx_json,
-                    timeout_ms,
-                    &cancellation,
-                );
-                (
-                    "HTTP/1.1 200 OK",
-                    "text/html; charset=utf-8".to_string(),
-                    None,
-                    String::new(),
-                    Vec::new(),
-                )
-            }
-            MatchResult::MethodNotAllowed { route, requested } => {
-                // Spec sect.6.6: OPTIONS with no explicit OPTIONS
-                // export -> automatic 204 with Allow. Only applies
-                // when the route exports other methods (so the
-                // Allow list is non-empty -- a route that exports
-                // only OPTIONS still 405s).
-                if requested == HttpMethod::Options
-                    && route.methods.iter().any(|m| *m != HttpMethod::Options)
-                {
-                    let allow = build_allow_header(&route.methods);
+                    );
                     (
-                        "HTTP/1.1 204 No Content",
-                        "text/plain; charset=utf-8".to_string(),
-                        Some(allow),
+                        "HTTP/1.1 200 OK",
+                        "text/html; charset=utf-8".to_string(),
+                        None,
                         String::new(),
                         Vec::new(),
                     )
-                } else {
-                // Slice-5 path: 405 with real Allow header from
-                // the static method detector (no registry needed).
-                let prepared = crate::page::prepare(&route);
-                let (allow, body) = render_405_body(&route, requested, prepared);
-                (
-                    "HTTP/1.1 405 Method Not Allowed",
-                    "text/plain; charset=utf-8".to_string(),
-                    Some(allow),
-                    body,
-                    Vec::new(),
-                )
                 }
-            }
-            MatchResult::MalformedPath { error } => (
-                "HTTP/1.1 400 Bad Request",
-                "text/plain; charset=utf-8".to_string(),
-                None,
-                format_error_body(
-                    TspError::MalformedUrl,
-                    &format!(
-                        "TSP v2 PoC 1 slice 16e: malformed URL path: {error}\n"
+                MatchResult::MethodNotAllowed { route, requested } => {
+                    // Spec sect.6.6: OPTIONS with no explicit OPTIONS
+                    // export -> automatic 204 with Allow. Only applies
+                    // when the route exports other methods (so the
+                    // Allow list is non-empty -- a route that exports
+                    // only OPTIONS still 405s).
+                    if requested == HttpMethod::Options
+                        && route.methods.iter().any(|m| *m != HttpMethod::Options)
+                    {
+                        let allow = build_allow_header(&route.methods);
+                        (
+                            "HTTP/1.1 204 No Content",
+                            "text/plain; charset=utf-8".to_string(),
+                            Some(allow),
+                            String::new(),
+                            Vec::new(),
+                        )
+                    } else {
+                        // Slice-5 path: 405 with real Allow header from
+                        // the static method detector (no registry needed).
+                        let prepared = crate::page::prepare(&route);
+                        let (allow, body) = render_405_body(&route, requested, prepared);
+                        (
+                            "HTTP/1.1 405 Method Not Allowed",
+                            "text/plain; charset=utf-8".to_string(),
+                            Some(allow),
+                            body,
+                            Vec::new(),
+                        )
+                    }
+                }
+                MatchResult::MalformedPath { error } => (
+                    "HTTP/1.1 400 Bad Request",
+                    "text/plain; charset=utf-8".to_string(),
+                    None,
+                    format_error_body(
+                        TspError::MalformedUrl,
+                        &format!("TSP v2 PoC 1 slice 16e: malformed URL path: {error}\n"),
                     ),
+                    Vec::new(),
                 ),
-                Vec::new(),
-            ),
-            MatchResult::NotFound => (
-                "HTTP/1.1 404 Not Found",
-                "text/plain; charset=utf-8".to_string(),
-                None,
-                format_error_body(
-                    TspError::NoRouteMatches,
-                    &format!(
-                        "TSP v2 PoC 1 slice 10b: no route matches path={path} (table has {} route(s))\n",
-                        routes.len()
+                MatchResult::NotFound => (
+                    "HTTP/1.1 404 Not Found",
+                    "text/plain; charset=utf-8".to_string(),
+                    None,
+                    format_error_body(
+                        TspError::NoRouteMatches,
+                        &format!(
+                            "TSP v2 PoC 1 slice 10b: no route matches path={path} (table has {} route(s))\n",
+                            routes.len()
+                        ),
                     ),
+                    Vec::new(),
                 ),
-                Vec::new(),
-            ),
             };
             stop_disconnect_monitor(disconnect_monitor);
             if cancellation.is_cancelled() {
@@ -1780,14 +1831,12 @@ fn handle_connection(
 /// subprocess, no `begin_build` / `commit`, no LKG fallback.
 /// 405 (method not exported), 500 (build failure), and 504
 /// (request timeout) retain distinct response semantics.
-fn build_failure_response(
-    error: &pipeline::BuildError,
-    detail: String,
-) -> (&'static str, String) {
+fn build_failure_response(error: &pipeline::BuildError, detail: String) -> (&'static str, String) {
     let (code, description) = match error {
-        pipeline::BuildError::Prepare(_) => {
-            (TspError::PagePrepareError.code(), TspError::PagePrepareError.describe())
-        }
+        pipeline::BuildError::Prepare(_) => (
+            TspError::PagePrepareError.code(),
+            TspError::PagePrepareError.describe(),
+        ),
         pipeline::BuildError::Jsc(jsc) => (jsc.code(), jsc.describe()),
     };
     let status = match error {
@@ -1808,13 +1857,21 @@ fn build_failure_response(
 /// an explicit source line. Bun diagnostics retain the original `tsp://`
 /// source URL in stderr, but their wrapper line numbers are not source-map
 /// offsets and therefore are not used to build a misleading frame.
-fn diagnostic_detail(path: &std::path::Path, error: &dyn std::fmt::Display, mut detail: String) -> String {
+fn diagnostic_detail(
+    path: &std::path::Path,
+    error: &dyn std::fmt::Display,
+    mut detail: String,
+) -> String {
     let text = error.to_string();
     let line = find_diagnostic_line(&text);
     let Some(line) = line else { return detail };
-    let Ok(source) = std::fs::read_to_string(path) else { return detail };
+    let Ok(source) = std::fs::read_to_string(path) else {
+        return detail;
+    };
     let lines: Vec<&str> = source.lines().collect();
-    if line == 0 || line > lines.len() { return detail; }
+    if line == 0 || line > lines.len() {
+        return detail;
+    }
     let start = line.saturating_sub(2);
     let end = (line + 1).min(lines.len());
     detail.push_str(&format!("\n--- {}:{} ---\n", path.display(), line));
@@ -1832,7 +1889,9 @@ fn find_diagnostic_line(text: &str) -> Option<usize> {
             .take_while(|ch| ch.is_ascii_digit())
             .collect();
         if let Ok(line) = digits.parse::<usize>() {
-            if line > 0 { return Some(line); }
+            if line > 0 {
+                return Some(line);
+            }
         }
     }
     None
@@ -1866,23 +1925,19 @@ fn render_per_request(
                 Ok(body) => ("HTTP/1.1 200 OK", "text/html; charset=utf-8", None, body),
                 Err(e) => {
                     let msg = format!("{e}");
-                    eprintln!(
-                        "TSPv2PoC1: build error on {}: {e}",
-                        route.source.display()
-                    );
+                    eprintln!("TSPv2PoC1: build error on {}: {e}", route.source.display());
                     let (status, body) = build_failure_response(
                         &e,
-                        diagnostic_detail(&route.source, &e, format!(
-                            "TSP v2 PoC 1 slice 16d: build error on {}\n  {msg}\n",
-                            route.source.display()
-                        )),
+                        diagnostic_detail(
+                            &route.source,
+                            &e,
+                            format!(
+                                "TSP v2 PoC 1 slice 16d: build error on {}\n  {msg}\n",
+                                route.source.display()
+                            ),
+                        ),
                     );
-                    (
-                        status,
-                        "text/plain; charset=utf-8",
-                        None,
-                        body,
-                    )
+                    (status, "text/plain; charset=utf-8", None, body)
                 }
             }
         }
@@ -1968,7 +2023,10 @@ fn render_for_route(
             body,
         );
     }
-    let state = snap.as_ref().map(|s| s.state.clone()).unwrap_or(PageState::Unloaded);
+    let state = snap
+        .as_ref()
+        .map(|s| s.state.clone())
+        .unwrap_or(PageState::Unloaded);
 
     match state {
         PageState::Unloaded | PageState::Dirty | PageState::Failed => {
@@ -2010,16 +2068,17 @@ fn render_for_route(
                         Err(e) => {
                             let msg = format!("{e}");
                             guard.fail(msg.clone());
-                            eprintln!(
-                                "TSPv2PoC1: build error on {}: {e}",
-                                route.source.display()
-                            );
+                            eprintln!("TSPv2PoC1: build error on {}: {e}", route.source.display());
                             let (status, body) = build_failure_response(
                                 &e,
-                                diagnostic_detail(&route.source, &e, format!(
-                                    "TSP v2 PoC 1 slice 12: build error on {}\n  {msg}\n",
-                                    route.source.display()
-                                )),
+                                diagnostic_detail(
+                                    &route.source,
+                                    &e,
+                                    format!(
+                                        "TSP v2 PoC 1 slice 12: build error on {}\n  {msg}\n",
+                                        route.source.display()
+                                    ),
+                                ),
                             );
                             (status, "text/plain; charset=utf-8", None, body)
                         }
@@ -2105,7 +2164,12 @@ fn serve_arc(
     _reason: &'static str,
     body: Arc<String>,
 ) -> (&'static str, &'static str, Option<String>, String) {
-    ("HTTP/1.1 200 OK", "text/html; charset=utf-8", None, (*body).clone())
+    (
+        "HTTP/1.1 200 OK",
+        "text/html; charset=utf-8",
+        None,
+        (*body).clone(),
+    )
 }
 
 fn serve_current_pinned_or_500(
@@ -2158,7 +2222,6 @@ fn serve_lkg_pinned_or_500(
 // above. The hot path uses Arc<String> exclusively so a
 // mid-flight commit cannot change the body an in-progress
 // request observes (plan sect.21.3 request pinning).
-
 
 fn render_405_body(
     route: &crate::router::Route,
@@ -2306,10 +2369,7 @@ fn parse_request(head: &str) -> ParsedRequest {
 /// misbehaving clients); the body is the raw `Vec<u8>`
 /// so binary multipart payloads survive intact (spec
 /// sect.14.3 / 14.2).
-fn read_request(
-    stream: &mut TcpStream,
-    max_body: usize,
-) -> Result<ReadOutcome, HostError> {
+fn read_request(stream: &mut TcpStream, max_body: usize) -> Result<ReadOutcome, HostError> {
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
     let mut tmp = [0u8; 4096];
     let mut head_end: Option<usize> = None;
@@ -2486,16 +2546,10 @@ mod tests {
 
     #[test]
     fn fragment_target_rejects_missing_or_wrong_capability() {
-        assert!(fragment_target(
-            "/__tsp/fragment",
-            "route=%2Fusers&name=list"
-        )
-        .is_none());
-        assert!(fragment_target(
-            "/__tsp/fragment",
-            "route=%2Fusers&name=list&token=wrong"
-        )
-        .is_none());
+        assert!(fragment_target("/__tsp/fragment", "route=%2Fusers&name=list").is_none());
+        assert!(
+            fragment_target("/__tsp/fragment", "route=%2Fusers&name=list&token=wrong").is_none()
+        );
     }
 
     #[test]
@@ -2504,7 +2558,10 @@ mod tests {
         // an object `{id, data}`; `data` is a JSON object
         // of the keys the page set on prior requests.
         let mut data = BTreeMap::new();
-        data.insert("name".to_string(), SessionValue::String("alice".to_string()));
+        data.insert(
+            "name".to_string(),
+            SessionValue::String("alice".to_string()),
+        );
         data.insert("n".to_string(), SessionValue::Number(7.0));
         let ctx = Context {
             method: HttpMethod::Get,
@@ -2520,7 +2577,10 @@ mod tests {
             }),
         };
         let s = ctx.to_json();
-        assert!(s.contains("\"session\":{\"id\":\"deadbeef\",\"data\":{\"n\":7,\"name\":\"alice\"}}"), "got: {s}");
+        assert!(
+            s.contains("\"session\":{\"id\":\"deadbeef\",\"data\":{\"n\":7,\"name\":\"alice\"}}"),
+            "got: {s}"
+        );
     }
 
     #[test]
@@ -2541,13 +2601,11 @@ mod tests {
 
     #[test]
     fn read_session_cookie_returns_sid_or_none() {
-        let headers = vec![
-            ("cookie".to_string(), "a=b; tsp_sid=deadbeef; c=d".to_string()),
-        ];
-        assert_eq!(
-            read_session_cookie(&headers).as_deref(),
-            Some("deadbeef")
-        );
+        let headers = vec![(
+            "cookie".to_string(),
+            "a=b; tsp_sid=deadbeef; c=d".to_string(),
+        )];
+        assert_eq!(read_session_cookie(&headers).as_deref(), Some("deadbeef"));
         let no = vec![("cookie".to_string(), "a=b; c=d".to_string())];
         assert_eq!(read_session_cookie(&no), None);
         let empty: Vec<(String, String)> = Vec::new();
@@ -2558,10 +2616,7 @@ mod tests {
     fn build_session_cookie_returns_none_when_unchanged() {
         // Same id -> no Set-Cookie needed; the browser
         // already has the right cookie.
-        assert_eq!(
-            build_session_cookie("deadbeef", "deadbeef"),
-            None
-        );
+        assert_eq!(build_session_cookie("deadbeef", "deadbeef"), None);
     }
 
     #[test]
@@ -2599,13 +2654,15 @@ mod tests {
         // entry are dropped, but everything before them stays).
         match &out.session_writes[0] {
             SessionWrite::Set(k, SessionValue::String(v)) => {
-                assert_eq!(k, "a"); assert_eq!(v, "alpha");
+                assert_eq!(k, "a");
+                assert_eq!(v, "alpha");
             }
             other => panic!("expected Set, got {other:?}"),
         }
         match &out.session_writes[1] {
             SessionWrite::Set(k, SessionValue::Number(n)) => {
-                assert_eq!(k, "n"); assert_eq!(*n, 7.0);
+                assert_eq!(k, "n");
+                assert_eq!(*n, 7.0);
             }
             other => panic!("expected Set, got {other:?}"),
         }
@@ -2636,7 +2693,8 @@ mod tests {
         assert_eq!(out.session_writes.len(), 1);
         match &out.session_writes[0] {
             SessionWrite::Set(k, SessionValue::Number(n)) => {
-                assert_eq!(k, "b"); assert_eq!(*n, 1.0);
+                assert_eq!(k, "b");
+                assert_eq!(*n, 1.0);
             }
             other => panic!("expected Set b/1, got {other:?}"),
         }
@@ -2701,7 +2759,6 @@ mod tests {
         assert!(s.contains("\"q=hello&page=2\""), "got: {s}");
     }
 
-
     #[test]
     fn context_to_json_serialises_params() {
         let mut params = std::collections::HashMap::new();
@@ -2731,7 +2788,10 @@ mod tests {
             // base64 wire form goes through to_json).
             body: b"hello=world".to_vec(),
             headers: vec![
-                ("content-type".to_string(), "application/x-www-form-urlencoded".to_string()),
+                (
+                    "content-type".to_string(),
+                    "application/x-www-form-urlencoded".to_string(),
+                ),
                 ("x-trace".to_string(), "abc".to_string()),
             ],
             services: Vec::new(),
@@ -2775,7 +2835,12 @@ mod tests {
         // parse_request only sees the header section.
         let head = "POST /submit HTTP/1.1\r\nHost: localhost:3000\r\nContent-Type: text/plain\r\nX-Multi: a\r\nX-Multi: b\r\n\r\n";
         match parse_request(head) {
-            ParsedRequest::Known { method, path, query, headers } => {
+            ParsedRequest::Known {
+                method,
+                path,
+                query,
+                headers,
+            } => {
                 assert_eq!(method, HttpMethod::Post);
                 assert_eq!(path, "/submit");
                 assert_eq!(query, "");
@@ -2858,7 +2923,9 @@ mod tests {
         // read_request must keep reading until Content-Length
         // is satisfied.
         let (mut client, mut server) = socket_pair();
-        client.write_all(b"POST / HTTP/1.1\r\nContent-Length: 6\r\n\r\nab").expect("write part 1");
+        client
+            .write_all(b"POST / HTTP/1.1\r\nContent-Length: 6\r\n\r\nab")
+            .expect("write part 1");
         std::thread::sleep(std::time::Duration::from_millis(10));
         client.write_all(b"cdef").expect("write part 2");
         let outcome = read_request(&mut server, 1024).expect("read");
@@ -2961,8 +3028,14 @@ mod tests {
             TspError::NoRouteMatches,
             "TSP v2 PoC 1 slice 10b: no route matches path=/ (table has 0 route(s))\n",
         );
-        assert!(body.starts_with("[TSP2003] no route matches\n"), "got: {body:?}");
-        assert!(body.contains("slice 10b: no route matches"), "got: {body:?}");
+        assert!(
+            body.starts_with("[TSP2003] no route matches\n"),
+            "got: {body:?}"
+        );
+        assert!(
+            body.contains("slice 10b: no route matches"),
+            "got: {body:?}"
+        );
     }
 
     #[test]
@@ -2978,8 +3051,10 @@ mod tests {
             "bun subprocess exited non-zero",
             "bun exited 1: error page\n",
         );
-        assert!(body.starts_with("[TSP3012] bun subprocess exited non-zero\n"),
-                "got: {body:?}");
+        assert!(
+            body.starts_with("[TSP3012] bun subprocess exited non-zero\n"),
+            "got: {body:?}"
+        );
         assert!(body.contains("bun exited 1: error page\n"), "got: {body:?}");
     }
 
@@ -2990,7 +3065,10 @@ mod tests {
         });
         let (status, body) = build_failure_response(&error, "timeout detail\n".to_string());
         assert_eq!(status, "HTTP/1.1 504 Gateway Timeout");
-        assert!(body.starts_with("[TSP3009] request timed out\n"), "got: {body:?}");
+        assert!(
+            body.starts_with("[TSP3009] request timed out\n"),
+            "got: {body:?}"
+        );
         assert!(body.contains("timeout detail\n"), "got: {body:?}");
     }
 
@@ -3005,7 +3083,8 @@ mod tests {
     #[test]
     fn json_value_serialize_roundtrips() {
         // The serializer used by ctx_json_for_env.
-        let json = r#"{"type":"response","status":201,"headers":{"x-comma":"a,b,c"},"body":"created"}"#;
+        let json =
+            r#"{"type":"response","status":201,"headers":{"x-comma":"a,b,c"},"body":"created"}"#;
         let v = parse_json(json).expect("parse");
         let mut out = String::new();
         v.serialize(&mut out);
@@ -3034,8 +3113,14 @@ mod tests {
         // Headers: content-type is derived into content_type,
         // both extras are propagated.
         assert_eq!(out.headers.len(), 3);
-        assert!(out.headers.contains(&("x-demo".to_string(), "slice16c".to_string())));
-        assert!(out.headers.contains(&("x-comma".to_string(), "a,b,c".to_string())));
+        assert!(
+            out.headers
+                .contains(&("x-demo".to_string(), "slice16c".to_string()))
+        );
+        assert!(
+            out.headers
+                .contains(&("x-comma".to_string(), "a,b,c".to_string()))
+        );
     }
 
     #[test]
@@ -3049,7 +3134,9 @@ mod tests {
 
     #[test]
     fn envelope_unknown_status_falls_back_200() {
-        let out = parse_envelope("__TSP_OUT_V1__\n{\"type\":\"response\",\"status\":599,\"headers\":{},\"body\":\"x\"}");
+        let out = parse_envelope(
+            "__TSP_OUT_V1__\n{\"type\":\"response\",\"status\":599,\"headers\":{},\"body\":\"x\"}",
+        );
         assert_eq!(out.status_line, "HTTP/1.1 200 OK");
         assert_eq!(out.body, "x");
     }
@@ -3060,7 +3147,10 @@ mod tests {
         let out = parse_envelope(
             "__TSP_OUT_V1__\n{\"type\":\"response\",\"status\":200,\"headers\":{\"x-quote\":\"say \\\"hi\\\"\"},\"body\":\"ok\"}",
         );
-        assert!(out.headers.contains(&("x-quote".to_string(), "say \"hi\"".to_string())));
+        assert!(
+            out.headers
+                .contains(&("x-quote".to_string(), "say \"hi\"".to_string()))
+        );
     }
 
     #[test]
@@ -3098,6 +3188,9 @@ mod tests {
             "__TSP_OUT_V1__\n{\"type\":\"response\",\"status\":200,\"headers\":[[\"x-ok\",\"yes\"],\"garbage\",[\"only-one\"],[\"a\",\"b\",\"c\"]],\"body\":\"ok\"}",
         );
         assert_eq!(out.headers.len(), 1, "got: {:?}", out.headers);
-        assert!(out.headers.contains(&("x-ok".to_string(), "yes".to_string())));
+        assert!(
+            out.headers
+                .contains(&("x-ok".to_string(), "yes".to_string()))
+        );
     }
 }

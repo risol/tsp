@@ -38,11 +38,17 @@ pub enum PrepareError {
     /// The route's `source` file is gone or unreadable. We surface the
     /// underlying `io::Error` so the operator sees the real reason
     /// (permission denied, race with an editor, etc.).
-    Io { path: std::path::PathBuf, source: std::io::Error },
+    Io {
+        path: std::path::PathBuf,
+        source: std::io::Error,
+    },
     /// The file's text was not valid UTF-8. `.tsp` is a text format;
     /// a binary file in this slot is operator error, not host error,
     /// and the 500 page should explain the actual byte sequence.
-    Utf8 { path: std::path::PathBuf, source: std::string::FromUtf8Error },
+    Utf8 {
+        path: std::path::PathBuf,
+        source: std::string::FromUtf8Error,
+    },
 }
 
 impl std::fmt::Display for PrepareError {
@@ -51,11 +57,9 @@ impl std::fmt::Display for PrepareError {
             Self::Io { path, source } => {
                 write!(f, "read {} failed: {source}", path.display())
             }
-            Self::Utf8 { path, source } => write!(
-                f,
-                "{} is not valid UTF-8: {source}",
-                path.display()
-            ),
+            Self::Utf8 { path, source } => {
+                write!(f, "{} is not valid UTF-8: {source}", path.display())
+            }
         }
     }
 }

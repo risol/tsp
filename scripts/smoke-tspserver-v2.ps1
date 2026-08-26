@@ -1,17 +1,14 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)] [string]$ServerBinary,
-  [Parameter(Mandatory = $true)] [string]$WorkerBinary,
   [string]$RoutesDirectory = "tests/v2_smoke/routes",
   [int]$Port = 9137,
   [switch]$SkipHotReload
 )
 
 $server = [System.IO.Path]::GetFullPath($ServerBinary)
-$worker = [System.IO.Path]::GetFullPath($WorkerBinary)
 $sourceRoutes = [System.IO.Path]::GetFullPath($RoutesDirectory)
 if (!(Test-Path -LiteralPath $server -PathType Leaf)) { throw "server binary not found: $server" }
-if (!(Test-Path -LiteralPath $worker -PathType Leaf)) { throw "worker binary not found: $worker" }
 if (!(Test-Path -LiteralPath $sourceRoutes -PathType Container)) { throw "routes directory not found: $sourceRoutes" }
 
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("tsp-v2-smoke-" + [guid]::NewGuid().ToString("N"))
@@ -29,7 +26,6 @@ $info.RedirectStandardError = $true
 $info.Environment["TSP_PORT"] = "$Port"
 $info.Environment["TSP_ROUTES_DIR"] = $routes
 $info.Environment["TSP_EMBEDDED_WORKER"] = "1"
-$info.Environment["TSP_WORKER_BIN"] = $worker
 $info.Environment["TSP_WORKER_COUNT"] = "2"
 $process = [System.Diagnostics.Process]::new()
 $process.StartInfo = $info
@@ -45,6 +41,7 @@ try {
     } catch { Start-Sleep -Milliseconds 100 }
   }
   if (!$ready) {
+    if (!$process.HasExited) { $process.Kill($true); $process.WaitForExit() }
     $stderr = $process.StandardError.ReadToEnd()
     throw "v2 server did not become ready. $stderr"
   }

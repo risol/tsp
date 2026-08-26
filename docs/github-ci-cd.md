@@ -5,13 +5,12 @@ metered GitHub services.
 
 ## Workflows
 
-- `.github/workflows/ci.yml` runs TypeScript tests and native Rust checks for
-  Linux, Windows, and macOS on standard GitHub-hosted runners. It runs for
-  pull requests and pushes to both `master` and `main`.
+- `.github/workflows/ci.yml` runs native v2 tests and the embedded-worker smoke
+  test for Linux, Windows, and macOS on standard GitHub-hosted runners. It
+  runs for pull requests and pushes to both `master` and `main`.
 - `.github/workflows/release.yml` runs only when a `v*` tag is pushed. It builds
-  the regular TSP server and the v2.4 embedded-worker package for the three
-  desktop targets, then uploads the packages directly to a draft GitHub
-  Release before publishing it.
+  and uploads the v2.4 embedded-worker package for the three desktop targets,
+  then publishes the draft GitHub Release.
 
 ## Cost protection
 
@@ -42,30 +41,24 @@ git push origin v0.1.6
 ```
 
 The release workflow creates a draft, uploads the Linux, Windows, and macOS
-packages for both the regular server and v2.4 embedded-worker runtime, then
-publishes the release only after all builds and smoke tests succeed.
+v2.4 embedded-worker packages, then publishes the release only after all builds
+and smoke tests succeed.
 
 ## v2.4 local verification
 
-Build the native v2 host and the Bun worker separately:
+Build and package the single-file v2 runtime:
 
 ```bash
-sh ./tsp.sh build:tspserver:v2:rel
-cd bun
-bun install --frozen-lockfile
-bun run build:release
-cd ..
+./tsp.sh build
 ```
 
-Run the embedded-worker and hot-reload smoke test using the resulting binaries:
+Run the embedded-worker and hot-reload smoke test using the packaged executable:
 
 ```bash
 sh ./scripts/smoke-tspserver-v2.sh \
-  bun/target/release/tspserver_v2 \
-  bun/build/release/bun
+  dist/tsp-v2/tspserver_v2
 ```
 
-On Windows, use `scripts/smoke-tspserver-v2.ps1` with the `.exe` paths. The
-package scripts emit a `tsp-v2-runtime.json` manifest and place the worker
-beside the host, so the packaged runtime can use `TSP_WORKER_BIN` explicitly
-or resolve the sibling `bun` executable automatically.
+On Windows, use `scripts/smoke-tspserver-v2.ps1` with the `.exe` path. The
+package scripts emit a `tsp-v2-runtime.json` manifest containing one runtime
+executable; the Master creates worker children automatically.

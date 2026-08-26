@@ -129,10 +129,23 @@ impl SourceHash {
 
 #[derive(Debug)]
 pub enum GraphError {
-    Io { path: PathBuf, source: std::io::Error },
-    Utf8 { path: PathBuf, source: std::string::FromUtf8Error },
-    MissingImport { importer: PathBuf, specifier: String },
-    UnsupportedImport { importer: PathBuf, specifier: String, reason: &'static str },
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    Utf8 {
+        path: PathBuf,
+        source: std::string::FromUtf8Error,
+    },
+    MissingImport {
+        importer: PathBuf,
+        specifier: String,
+    },
+    UnsupportedImport {
+        importer: PathBuf,
+        specifier: String,
+        reason: &'static str,
+    },
 }
 
 impl std::fmt::Display for GraphError {
@@ -144,12 +157,19 @@ impl std::fmt::Display for GraphError {
             Self::Utf8 { path, source } => {
                 write!(f, "{} is not valid UTF-8: {source}", path.display())
             }
-            Self::MissingImport { importer, specifier } => write!(
+            Self::MissingImport {
+                importer,
+                specifier,
+            } => write!(
                 f,
                 "cannot resolve import {specifier:?} from {}",
                 importer.display()
             ),
-            Self::UnsupportedImport { importer, specifier, reason } => write!(
+            Self::UnsupportedImport {
+                importer,
+                specifier,
+                reason,
+            } => write!(
                 f,
                 "unsupported import {specifier:?} from {}: {reason}",
                 importer.display()
@@ -242,7 +262,7 @@ fn visit_dir(root: &Path, dir: &Path, graph: &mut ModuleGraph) -> Result<(), Gra
             return Err(GraphError::Io {
                 path: dir.to_path_buf(),
                 source: e,
-            })
+            });
         }
     };
     for entry in entries {
@@ -252,7 +272,7 @@ fn visit_dir(root: &Path, dir: &Path, graph: &mut ModuleGraph) -> Result<(), Gra
                 return Err(GraphError::Io {
                     path: dir.to_path_buf(),
                     source: e,
-                })
+                });
             }
         };
         let file_type = match entry.file_type() {
@@ -261,7 +281,7 @@ fn visit_dir(root: &Path, dir: &Path, graph: &mut ModuleGraph) -> Result<(), Gra
                 return Err(GraphError::Io {
                     path: entry.path(),
                     source: e,
-                })
+                });
             }
         };
         let path = entry.path();
@@ -292,18 +312,14 @@ fn visit_dir(root: &Path, dir: &Path, graph: &mut ModuleGraph) -> Result<(), Gra
 
 use std::io;
 
-fn read_module(
-    root: &Path,
-    path: &Path,
-    name: &str,
-) -> Result<Option<ModuleNode>, GraphError> {
+fn read_module(root: &Path, path: &Path, name: &str) -> Result<Option<ModuleNode>, GraphError> {
     let bytes = match fs::read(path) {
         Ok(b) => b,
         Err(e) => {
             return Err(GraphError::Io {
                 path: path.to_path_buf(),
                 source: e,
-            })
+            });
         }
     };
     let text = match String::from_utf8(bytes) {
@@ -312,7 +328,7 @@ fn read_module(
             return Err(GraphError::Utf8 {
                 path: path.to_path_buf(),
                 source: e,
-            })
+            });
         }
     };
     let source_hash = SourceHash::compute(&text);
@@ -352,16 +368,16 @@ fn resolve_imports(root: &Path, importer: &Path, text: &str) -> Result<Vec<Modul
                 reason: "route .tsp modules are entry points and cannot be imported",
             });
         }
-        let Some(resolved) = resolve_local_module(importer.parent().unwrap_or(root), &specifier_text) else {
+        let Some(resolved) =
+            resolve_local_module(importer.parent().unwrap_or(root), &specifier_text)
+        else {
             return Err(GraphError::MissingImport {
                 importer: importer.to_path_buf(),
                 specifier: specifier_text.into_owned(),
             });
         };
         let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-        let canonical_resolved = resolved
-            .canonicalize()
-            .unwrap_or_else(|_| resolved.clone());
+        let canonical_resolved = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
         if !canonical_resolved.starts_with(&canonical_root) {
             return Err(GraphError::UnsupportedImport {
                 importer: importer.to_path_buf(),
@@ -491,13 +507,18 @@ fn route_path(root: &Path, path: &Path) -> String {
         .collect();
     for (index, component) in components.iter().enumerate() {
         let is_file = index + 1 == components.len();
-        if is_file && component == "index.tsp" { continue; }
+        if is_file && component == "index.tsp" {
+            continue;
+        }
         let segment = if is_file {
             component.strip_suffix(".tsp").unwrap_or(component)
         } else {
             component.as_str()
         };
-        let segment = if let Some(name) = segment.strip_prefix("[...").and_then(|s| s.strip_suffix(']')) {
+        let segment = if let Some(name) = segment
+            .strip_prefix("[...")
+            .and_then(|s| s.strip_suffix(']'))
+        {
             format!("*{name}")
         } else if let Some(name) = segment.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
             format!(":{name}")
@@ -506,7 +527,11 @@ fn route_path(root: &Path, path: &Path) -> String {
         };
         segments.push(segment);
     }
-    if segments.is_empty() { "/".to_string() } else { format!("/{}", segments.join("/")) }
+    if segments.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{}", segments.join("/"))
+    }
 }
 
 #[cfg(test)]
@@ -608,7 +633,11 @@ mod tests {
         )
         .unwrap();
         let error = ModuleGraph::from_routes_dir(&routes).unwrap_err();
-        assert!(error.to_string().contains("escapes the configured routes root"));
+        assert!(
+            error
+                .to_string()
+                .contains("escapes the configured routes root")
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

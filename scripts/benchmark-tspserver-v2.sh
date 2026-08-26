@@ -1,25 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -lt 2 || $# -gt 4 ]]; then
-  echo "usage: $0 <tspserver_v2> <bun> [routes-dir] [requests]" >&2
+if [[ $# -lt 1 || $# -gt 3 ]]; then
+  echo "usage: $0 <tspserver_v2> [routes-dir] [requests]" >&2
   exit 2
 fi
 
 server=$(realpath "$1")
-bun=$(realpath "$2")
-routes=$(realpath "${3:-routes}")
-requests=${4:-50}
+routes=$(realpath "${2:-routes}")
+requests=${3:-50}
 port=${TSP_BENCHMARK_PORT:-9140}
 [[ -x "$server" ]] || { echo "server binary is not executable: $server" >&2; exit 1; }
-[[ -x "$bun" ]] || { echo "Bun runtime is not executable: $bun" >&2; exit 1; }
 [[ -d "$routes" ]] || { echo "routes directory not found: $routes" >&2; exit 1; }
 
-if [[ "${TSP_BENCHMARK_EMBEDDED:-0}" == "1" ]]; then
-  TSP_PORT="$port" TSP_ROUTES_DIR="$routes" TSP_EMBEDDED_WORKER=1 TSP_WORKER_BIN="$bun" "$server" >/tmp/tsp-v2-bench.out 2>/tmp/tsp-v2-bench.err &
-else
-  TSP_PORT="$port" TSP_ROUTES_DIR="$routes" TSP_BUN_BIN="$bun" "$server" >/tmp/tsp-v2-bench.out 2>/tmp/tsp-v2-bench.err &
-fi
+TSP_PORT="$port" TSP_ROUTES_DIR="$routes" TSP_EMBEDDED_WORKER=1 "$server" >/tmp/tsp-v2-bench.out 2>/tmp/tsp-v2-bench.err &
 pid=$!
 samples=$(mktemp)
 cleanup() { rm -f "$samples"; kill "$pid" 2>/dev/null || true; }

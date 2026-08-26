@@ -21,17 +21,32 @@ impl InvalidationBus {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let reader = OpenOptions::new().create(true).read(true).write(true).open(&path)?;
+        let reader = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&path)?;
         let cursor = reader.metadata()?.len();
-        Ok(Self { path, reader, cursor })
+        Ok(Self {
+            path,
+            reader,
+            cursor,
+        })
     }
 
     pub fn publish(&mut self, paths: &[PathBuf]) -> io::Result<()> {
-        if paths.is_empty() { return Ok(()); }
-        let mut writer = OpenOptions::new().create(true).append(true).open(&self.path)?;
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let mut writer = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
         for path in paths {
             let text = path.to_string_lossy();
-            if text.contains('\n') || text.contains('\r') { continue; }
+            if text.contains('\n') || text.contains('\r') {
+                continue;
+            }
             writeln!(writer, "{text}")?;
         }
         writer.flush()?;
@@ -41,18 +56,32 @@ impl InvalidationBus {
 
     pub fn read_since(&mut self) -> io::Result<Vec<PathBuf>> {
         let len = self.reader.metadata()?.len();
-        if len <= self.cursor { return Ok(Vec::new()); }
+        if len <= self.cursor {
+            return Ok(Vec::new());
+        }
         self.reader.seek(SeekFrom::Start(self.cursor))?;
         let mut bytes = Vec::new();
         self.reader.read_to_end(&mut bytes)?;
-        let complete_len = bytes.iter().rposition(|byte| *byte == b'\n').map(|i| i + 1).unwrap_or(0);
-        if complete_len == 0 { return Ok(Vec::new()); }
+        let complete_len = bytes
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        if complete_len == 0 {
+            return Ok(Vec::new());
+        }
         self.cursor += complete_len as u64;
         let text = String::from_utf8_lossy(&bytes[..complete_len]);
-        Ok(text.lines().filter(|line| !line.is_empty()).map(PathBuf::from).collect())
+        Ok(text
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(PathBuf::from)
+            .collect())
     }
 
-    pub fn path(&self) -> &Path { &self.path }
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 #[cfg(test)]
@@ -61,13 +90,25 @@ mod tests {
 
     #[test]
     fn workers_exchange_paths_without_sharing_runtime_state() {
-        let path = std::env::temp_dir().join(format!("tsp-v2-invalidation-{}.log", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("tsp-v2-invalidation-{}.log", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let mut first = InvalidationBus::open(path.clone()).unwrap();
         let mut second = InvalidationBus::open(path.clone()).unwrap();
-        first.publish(&[PathBuf::from("routes/index.tsp"), PathBuf::from("routes/shared.tsx")]).unwrap();
+        first
+            .publish(&[
+                PathBuf::from("routes/index.tsp"),
+                PathBuf::from("routes/shared.tsx"),
+            ])
+            .unwrap();
         assert!(first.read_since().unwrap().is_empty());
-        assert_eq!(second.read_since().unwrap(), vec![PathBuf::from("routes/index.tsp"), PathBuf::from("routes/shared.tsx")]);
+        assert_eq!(
+            second.read_since().unwrap(),
+            vec![
+                PathBuf::from("routes/index.tsp"),
+                PathBuf::from("routes/shared.tsx")
+            ]
+        );
         assert!(second.read_since().unwrap().is_empty());
         let _ = std::fs::remove_file(path);
     }

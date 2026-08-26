@@ -1,0 +1,8 @@
+{
+  "root": "./tests/test_www",
+  "port": 9001,
+  "fileManager": {
+    "enabled": true,
+    "password": "test123"
+  }
+}

@@ -1,236 +1,113 @@
-# TSP
+# TSP v2 — TypeScript Server Page
 
-![Banner](./docs/images/banner.png)
-
-A TypeScript server that executes `.tsp` files directly like PHP, designed for AI-driven development.
+![TSP banner](./docs/images/banner.png)
 
 [![CI](https://github.com/risol/tsp/actions/workflows/ci.yml/badge.svg)](https://github.com/risol/tsp/actions/workflows/ci.yml)
-[![Latest Release](https://img.shields.io/github/v/release/risol/tsp?display_name=tag)](https://github.com/risol/tsp/releases)
+[![Latest release](https://img.shields.io/github/v/release/risol/tsp?display_name=tag)](https://github.com/risol/tsp/releases)
 
-## Features
+TSP v2 is a native Rust HTTP runtime that embeds Bun in worker child processes
+for executing `.tsp` route modules. It is intentionally incompatible with the former TSP v1
+`Page()`/React application host.
 
-- **Simple to Use** - Execute `.tsp` files directly like PHP
-- **Smart Caching** - File modification time-based module caching with excellent performance
-- **Hot Reload** - Support for hot reloading with nested dependencies at any depth
-- **Secure** - Comprehensive path checking and permission control
-- **Full-featured** - Query parameters, POST data, Cookies, redirects, and more
-- **Component-based** - Using TSX + React, supporting modern frontend component development
-- **Type-safe** - Complete TypeScript type support, Schema-first database API
-- **File Manager** - Built-in web file manager with password protection
-- **Config Auto-reload** - Configuration changes take effect automatically without restart
-- **Static Files** - Support for HTML, CSS, JS, images, and other static files
-- **Port Management** - Automatically detect and clean up processes occupying ports
-- **Database Integration** - Schema-first MySQL/Redis/LDAP support, type-safe database queries
+## Quick start
 
-## Why TSP for AI Code Generation?
+Requirements:
 
-TSP is designed specifically for AI-driven development with unique advantages:
+- Rust toolchain required by `bun/Cargo.toml`
+- Bun 1.x for building the embedded worker
+- Git with submodules when starting from a fresh checkout
 
-### 1. Minimal Behavioral Space
-
-Unlike full-stack frameworks with endless patterns (MVC, hooks, contexts, providers), TSP has **only one way** to write server-side code:
-
-```tsx
-export default Page(async function(ctx, deps) {
-  // Your logic here
-  return <html>...</html>;
-});
-```
-
-This constrains AI to a tiny, predictable pattern—**no choice paralysis**, **no framework-hopping**.
-
-### 2. Built-in Dependency Injection
-
-All dependencies must be obtained through **function factories**:
-
-```tsx
-export default Page(async function(ctx, { createMySQL, createRedis, createZod, response }) {
-  const z = await createZod();
-  const db = await createMySQL(config, z);
-  const redis = await createRedis(config);
-  // ...
-});
-```
-
-This ensures:
-- **Consistency** - AI always uses the same patterns
-- **Type safety** - Schemas are enforced at the factory level
-- **No ad-hoc imports** - Can't bypass the system
-
-### 3. Zero Configuration
-
-AI can generate working code without:
-- No `package.json` to manage
-- No `tsconfig.json` to configure
-- No router files to wire up
-- No environment variables to set
-
-Just create a `.tsp` file and it works.
-
-### 4. Type-Safe Dependency Injection
-
-All types are injected through the Page function—no imports needed:
-
-```tsx
-// Types come from dependency injection:
-export default Page(async function(ctx, { response, session, z }) {
-  // ctx: PageContext (method, url, query, body, cookies, files)
-  // response: ResponseBuilder (json, html, redirect, file, error)
-  // session: SessionManager
-  // z: Zod (for schema validation)
-});
-```
-
-This ensures **full type inference** without any imports.
-
-### 5. Schema-First Database API
-
-Database operations require schemas upfront:
-
-```tsx
-const UserSchema = z.object({
-  id: z.number(),
-  name: z.string(),
-  email: z.string().email()
-});
-
-const users = await db.query(UserSchema, 'SELECT * FROM users');
-```
-
-AI can't produce unsafe queries—**Zod validates everything**.
-
-### 6. Instant Hot Reload
-
-Save a `.tsp` file and **instantly see changes**—no rebuild, no restart:
+Build the v2 runtime package:
 
 ```bash
-# Production mode (recommended for deployment)
-./tspserver --root ./www --port 9000
-# Or: sh ./tsp.sh start
-```
-
-This enables **rapid feedback loops**:
-- AI generates code → save → see result → iterate
-- Fix bugs in seconds, not minutes
-- Test database queries live without restart
-
-Works with **nested dependencies** too—edit a component, all pages using it update instantly.
-
-## Quick Start
-
-### Option 1: Download Pre-built Release (Recommended)
-
-Download the latest release from [GitHub Releases](https://github.com/risol/tsp/releases):
-
-```bash
-# Download and extract (replace with your platform)
-curl -L https://github.com/risol/tsp/releases/latest/download/tsp-linux-x64.tar.gz -o tsp.tar.gz
-tar -xzf tsp.tar.gz
-cd tsp-linux-x64
-
-# Start the server
-./tspserver --root ./www --port 9000
-```
-
-### Option 2: Build from Source
-
-If you want to build from source, install Bun or the TSP-enabled Bun fork:
-
-```bash
-# Clone the repository (with submodules)
 git clone --recursive https://github.com/risol/tsp.git
 cd tsp
-
-# Or if already cloned, init submodules
-git submodule update --init --recursive
-
-# Install npm dependencies
-bun install
-
-# Start development server
-sh ./tsp.sh dev
-
-# Start production mode
-sh ./tsp.sh start
+./tsp.sh build
 ```
 
-### 3. Access the Application
-
-Open browser and visit `http://localhost:9000`
-
-## Example
-
-For more examples, see [tsp-examples](https://github.com/risol/tsp-examples). This repository includes built-in Claude Code skills for generating TSP pages - simply describe what you want and Claude Code will generate the code for you.
-
-A simple `.tsp` file looks like this:
-
-```tsx
-// www/hello.tsp - Access at /hello
-export default Page(async function(ctx, { response }) {
-  return (
-    <html>
-      <head>
-        <title>Hello TSP!</title>
-        <style>{`
-          body { font-family: sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
-          h1 { color: #3178c6; }
-        `}</style>
-      </head>
-      <body>
-        <h1>Hello, TSP!</h1>
-        <p>URL: {ctx.url.pathname}</p>
-        <p>Method: {ctx.method}</p>
-        <p>Time: {new Date().toLocaleString()}</p>
-      </body>
-    </html>
-  );
-});
-```
-
-Key features:
-- **No imports needed** - `Page`, `ctx`, `response` are all global
-- **JSX support** - Write HTML directly in TypeScript
-- **Type-safe** - Full TypeScript support with auto-completion
-
-## Build from Source (Advanced)
-
-Most users should download pre-built releases instead. Building from source requires Bun:
-
-- Bun 1.x or the TSP-enabled Bun fork
+Run the development server:
 
 ```bash
-# Build release binary for current platform
-sh ./tsp.sh build:tspserver
-
-# Build debug binary
-sh ./tsp.sh build:tspserver:dev
-
-# Build release binary (alias)
-sh ./tsp.sh build:tspserver:rel
-
-# Build the native v2 host
-sh ./tsp.sh build:tspserver:v2:rel
+./tsp.sh dev
 ```
 
-Build output is in `dist/bun/`. The compiled executable loads `www/` from the
-real filesystem; do not use `bun --hot` for TSP page reloads.
+The server listens on port `9000` by default and loads routes from `routes/`.
+Route changes are watched and published without restarting the host.
 
-The v2.4 embedded-worker build produces a native `tspserver_v2` host and a
-separate Bun worker. See [the v2.4 Worker guide](./docs/v2.4-worker.md) for
-building, packaging, smoke testing, and runtime settings.
+## v2 route contract
 
-## Docker Test Services
+Routes are `.tsp` modules. They export HTTP method handlers and may import the
+reserved v2 modules `tsp:server` and `tsp:html`.
 
-The project includes Docker Compose configuration for quickly starting MySQL and Redis services needed for testing.
+```tsx
+import { type Context, type PageConfig } from "tsp:server";
 
-See [DOCKER_SERVICES.md](docker/DOCKER_SERVICES.md)
+export const config = {
+  cache: "no-store",
+} satisfies PageConfig;
 
-## Documentation
+export function GET(ctx: Context) {
+  return <h1>Hello from {ctx.url.pathname}</h1>;
+}
+```
 
-- [Getting Started](./docs/getting-started.md) - Quick start guide
-- [Development Guide](./docs/development.md) - Development setup
-- [Configuration](./docs/configuration.md) - Server configuration
-- [Features](./docs/features/readme.md) - Feature documentation
-- [Bun migration boundary](./docs/bun-migration.md) - Bun runtime and page-loader contract
-- [Testing](./docs/testing/readme.md) - Testing guide
-- [Changelog](./docs/changelog.md) - Version change log
+The v2 context exposes the request, URL, route parameters, query parameters,
+cookies, session, services, abort signal, and route metadata. Handlers may
+return JSX, strings, or `Response` values created with `json`, `html`, `text`,
+`redirect`, or `notFound` from `tsp:server`.
+
+Dynamic routes use filesystem segments such as `routes/users/[id].tsp`.
+Static assets belong under `public/` and are served independently from route
+modules.
+
+## Configuration
+
+The native host is configured through environment variables:
+
+```text
+TSP_PORT=9000
+TSP_ROUTES_DIR=./routes
+TSP_PUBLIC_DIR=./public
+TSP_EMBEDDED_WORKER=1
+TSP_WORKER_COUNT=2
+```
+
+See `./tsp.sh --help` and `tspserver_v2 --help` for worker recycling,
+timeouts, Redis sessions, cgroup limits, and diagnostics.
+
+## Commands
+
+```bash
+./tsp.sh build          # Build the single-file runtime and dist/tsp-v2 package
+./tsp.sh build:host     # Copy the built runtime to dist/tsp-v2
+./tsp.sh build:worker   # Build the single-file runtime
+./tsp.sh start          # Run the packaged v2 server
+./tsp.sh dev            # Run with route hot reload
+./tsp.sh check          # cargo check for the v2 host
+./tsp.sh test           # Rust tests plus embedded-worker smoke test
+./tsp.sh test:rust      # Rust unit and Worker IPC tests
+./tsp.sh test:smoke     # HTTP, metrics, and hot-reload smoke test
+./tsp.sh package        # Package the single runtime binary
+```
+
+## Repository layout
+
+```text
+.
+├── bun/src/runtime/tsp/       Native v2 host, router, watcher, services, worker
+├── routes/                    Application route fixtures
+├── public/                    Optional static assets
+├── tests/v2_smoke/            End-to-end v2 route fixture
+├── scripts/                   Build, package, benchmark, and smoke workflows
+├── docs/v2/                   Frozen v2 contract and examples
+├── types/                     TypeScript declarations for v2 builtin modules
+└── tsp.sh                    Root v2 workflow wrapper
+```
+
+The v2 specification is in [`tsp-v2-specification.md`](./tsp-v2-specification.md).
+The frozen application contract is [`docs/v2/FREEZE.md`](./docs/v2/FREEZE.md).
+The embedded worker deployment guide is [`docs/v2.4-worker.md`](./docs/v2.4-worker.md).
+
+## License
+
+TSP is released under the MIT License.

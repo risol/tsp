@@ -1,203 +1,126 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# TSP Bun workflow. Page modules are intentionally not bundled into the
-# executable: the TSP-enabled Bun runtime loads ./www from the real filesystem.
-
+# TSP v2 build, test, and local runtime workflow.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$ROOT_DIR"
+RUST_TOOLCHAIN="${TSP_RUST_TOOLCHAIN:-nightly-2026-07-20}"
 
-require_bun() {
-  if [[ -n "${TSP_BUN_BIN:-}" ]]; then
-    if [[ ! -f "$TSP_BUN_BIN" ]]; then
-      echo "Error: TSP_BUN_BIN does not exist: $TSP_BUN_BIN" >&2
-      exit 1
-    fi
-    BUN_BIN=("$TSP_BUN_BIN")
-    return
-  fi
+die() { echo "$*" >&2; exit 1; }
 
+resolve_file() {
   local candidate
-  local candidates=(
-    "$ROOT_DIR/bun/build/debug/bun-debug.exe"
-    "$ROOT_DIR/bun/build/debug/bun-debug"
-    "$ROOT_DIR/bun/build/release/bun.exe"
-    "$ROOT_DIR/bun/build/release/bun"
-  )
-  for candidate in "${candidates[@]}"; do
+  for candidate in "$@"; do
     if [[ -f "$candidate" ]]; then
-      BUN_BIN=("$candidate")
-      return
+      printf '%s\n' "$candidate"
+      return 0
     fi
   done
-
-  if command -v bun >/dev/null 2>&1; then
-    BUN_BIN=("$(command -v bun)")
-    return
-  fi
-
-  {
-    echo "Error: Bun is required."
-    echo "Build the bundled fork or install Bun 1.x."
-    echo "You can also set TSP_BUN_BIN to an explicit Bun executable."
-  } >&2
-  exit 1
+  return 1
 }
 
-run_bun() {
-  "${BUN_BIN[@]}" "$@"
+require_command() { command -v "$1" >/dev/null 2>&1 || die "$1 is required"; }
+
+resolve_bun() {
+  if [[ -n "${TSP_BUN_BIN:-}" ]]; then
+    [[ -f "$TSP_BUN_BIN" ]] || die "TSP_BUN_BIN does not exist: $TSP_BUN_BIN"
+    printf '%s\n' "$TSP_BUN_BIN"
+    return 0
+  fi
+  if command -v bun >/dev/null 2>&1; then command -v bun; return 0; fi
+  resolve_file "$ROOT_DIR/.bun-bootstrap/node_modules/bun/bin/bun.exe" "$ROOT_DIR/.bun-bootstrap/node_modules/bun/bin/bun" ||
+    die "Bun is required; install Bun or set TSP_BUN_BIN"
 }
 
-require_bun_and_report() {
-  require_bun
-  echo "Using Bun: ${BUN_BIN[0]}"
+resolve_runtime_binary() {
+  resolve_file "$ROOT_DIR/bun/build/release/bun.exe" "$ROOT_DIR/bun/build/release/bun" "$ROOT_DIR/bun/build/debug/bun-debug.exe" "$ROOT_DIR/bun/build/debug/bun-debug" ||
+    die "single-file TSP runtime not found; run './tsp.sh build:worker'"
 }
 
-run_server() {
-  require_bun_and_report
-  exec "${BUN_BIN[@]}" run src/main.ts "$@"
+resolve_host() {
+  resolve_file "$ROOT_DIR/dist/tsp-v2/tspserver_v2.exe" "$ROOT_DIR/dist/tsp-v2/tspserver_v2" ||
+    die "v2 host not found; run './tsp.sh build:host'"
 }
 
-build_server() {
-  require_bun_and_report
-  local mode="${1:-release}"
-  local output_dir="$ROOT_DIR/dist/bun"
-  if [[ "$mode" == "dev" ]]; then
-    mode="debug"
-    shift
-  elif [[ "$mode" == "release" ]]; then
-    shift
-  fi
-
-  mkdir -p "$output_dir"
-  echo "Building TSP server with Bun ($mode)..."
-  run_bun build src/main.ts --compile --outfile "$output_dir/tspserver" "$@"
-  if [[ -d "$ROOT_DIR/www" ]]; then
-    rm -rf "$output_dir/www"
-    cp -R "$ROOT_DIR/www" "$output_dir/www"
-  fi
-  if [[ -f "$ROOT_DIR/config.jsonc" ]]; then
-    cp "$ROOT_DIR/config.jsonc" "$output_dir/config.jsonc"
-  fi
-  echo "Built $output_dir/tspserver with external www/ source tree"
+build_worker() {
+  local bun_bin
+  bun_bin="$(resolve_bun)"
+  echo "Building the single-file TSP runtime..."
+  (cd "$ROOT_DIR/bun" && "$bun_bin" run build:release)
 }
 
-build_v2_server() {
-  local mode="${1:-debug}"
-  local output_dir="$ROOT_DIR/dist/tsp-v2"
-  local cargo_args=(--manifest-path "$ROOT_DIR/bun/Cargo.toml" -p bun_runtime_tsp --bin tspserver_v2)
-  if [[ "$mode" == "release" ]]; then
-    cargo_args+=(--release)
+build_host() {
+  local binary
+  binary="$(resolve_runtime_binary)"
+  mkdir -p "$ROOT_DIR/dist/tsp-v2"
+  if [[ "$binary" == *.exe ]]; then
+    cp "$binary" "$ROOT_DIR/dist/tsp-v2/tspserver_v2.exe"
+  else
+    cp "$binary" "$ROOT_DIR/dist/tsp-v2/tspserver_v2"
   fi
+  echo "Built single-file TSP runtime in $ROOT_DIR/dist/tsp-v2"
+}
 
-  mkdir -p "$output_dir"
-  echo "Building TSP v2 host ($mode)..."
-  cargo build "${cargo_args[@]}"
+package_runtime() {
+  local host
+  host="$(resolve_host)"
+  bash "$ROOT_DIR/scripts/package-tspserver-v2.sh" "$host" "$ROOT_DIR/dist/tsp-v2" "$ROOT_DIR/routes" "$ROOT_DIR/public"
+}
 
-  local binary="$ROOT_DIR/bun/target/$mode/tspserver_v2"
-  if [[ -f "$binary.exe" ]]; then
-    binary="$binary.exe"
-  fi
-  if [[ ! -f "$binary" ]]; then
-    echo "Error: v2 host binary was not produced: $binary" >&2
-    exit 1
-  fi
-  cp "$binary" "$output_dir/$(basename "$binary")"
-  echo "Built $output_dir/$(basename "$binary")"
+build_runtime() { build_worker; build_host; package_runtime; }
+
+run_host() {
+  local host
+  host="$(resolve_host)"
+  TSP_PORT="${TSP_PORT:-9000}" TSP_ROUTES_DIR="${TSP_ROUTES_DIR:-$ROOT_DIR/routes}" TSP_PUBLIC_DIR="${TSP_PUBLIC_DIR:-$ROOT_DIR/public}" TSP_EMBEDDED_WORKER="${TSP_EMBEDDED_WORKER:-1}" TSP_WORKER_COUNT="${TSP_WORKER_COUNT:-2}" "$host" "$@"
+}
+
+run_smoke() {
+  local host
+  host="$(resolve_host)"
+  bash "$ROOT_DIR/scripts/smoke-tspserver-v2.sh" "$host" "$ROOT_DIR/tests/v2_smoke/routes" "${TSP_PORT:-9137}"
 }
 
 run_tests() {
-  require_bun_and_report
-  local command_name="$1"
-  shift
-  case "$command_name" in
-    test:unit) run_bun test tests/unit "$@" ;;
-    test:e2e) run_bun test tests/e2e "$@" ;;
-    *) run_bun test "$@" ;;
-  esac
+  require_command rustup
+  (cd "$ROOT_DIR/bun" && rustup run "$RUST_TOOLCHAIN" cargo test -p bun_runtime_tsp --lib --no-fail-fast --locked)
+  (cd "$ROOT_DIR/bun" && rustup run "$RUST_TOOLCHAIN" cargo test -p bun_runtime_tsp --test worker_integration --no-fail-fast --locked -- --test-threads=1)
 }
 
 run_check() {
-  require_bun_and_report
-  run_bun x tsc --noEmit
-}
-
-run_fmt() {
-  require_bun_and_report
-  run_bun x prettier --write src tests types.d.ts
-}
-
-run_lint() {
-  require_bun_and_report
-  run_bun x eslint src tests
+  require_command rustup
+  rustup run "$RUST_TOOLCHAIN" cargo check --manifest-path "$ROOT_DIR/bun/Cargo.toml" -p bun_bin --locked
 }
 
 case "${1:-help}" in
-  dev)
-    shift
-    run_server --dev "$@"
-    ;;
-  start)
-    shift
-    run_server "$@"
-    ;;
-  build:tspserver|compile|build)
-    shift
-    build_server release "$@"
-    ;;
-  build:tspserver:dev|compile:dev)
-    shift
-    build_server dev "$@"
-    ;;
-  build:tspserver:rel|compile:rel)
-    shift
-    build_server release "$@"
-    ;;
-  build:tspserver:v2|compile:v2)
-    shift
-    build_v2_server debug "$@"
-    ;;
-  build:tspserver:v2:rel|compile:v2:rel)
-    shift
-    build_v2_server release "$@"
-    ;;
-  test|test:unit|test:e2e)
-    run_tests "$@"
-    ;;
-  check)
-    run_check
-    ;;
-  fmt)
-    run_fmt
-    ;;
-  lint)
-    run_lint
-    ;;
-  clean)
-    rm -rf "$ROOT_DIR/dist/bun" "$ROOT_DIR/tspserver" "$ROOT_DIR/tspserver.exe"
-    ;;
+  build|build:v2|build:tspserver:v2|build:tspserver:v2:rel) build_runtime ;;
+  build:host) build_host ;;
+  build:worker) build_worker ;;
+  start|dev) shift; run_host "$@" ;;
+  test) run_tests; run_smoke ;;
+  test:rust) run_tests ;;
+  test:smoke) run_smoke ;;
+  check) run_check ;;
+  package) package_runtime ;;
+  clean) rm -rf "$ROOT_DIR/dist/tsp-v2" ;;
   help|-h|--help)
     cat <<'EOF'
 Usage: ./tsp.sh <command>
 
-  dev                         Run Bun development server
-  start                       Run Bun server
-  build:tspserver             Compile tspserver with Bun
-  build:tspserver:dev         Compile debug tspserver with Bun
-  build:tspserver:v2          Compile the native TSP v2 host
-  build:tspserver:v2:rel      Compile the native TSP v2 host in release mode
-  test / test:unit / test:e2e Run Bun tests
-  check                       Run TypeScript validation
-  fmt                         Format source files with Prettier
-  lint                        Lint source files with ESLint
-  clean                       Remove Bun build output
+  build / build:v2       Build the single-file runtime and v2 package
+  build:host             Copy the built runtime into dist/tsp-v2
+  build:worker           Build the single-file runtime
+  start                  Run the v2 server with self-created workers
+  dev                    Run the v2 server (route hot reload is always enabled)
+  test                   Run Rust tests and the v2 embedded-worker smoke test
+  test:rust              Run Rust unit and Worker IPC tests
+  test:smoke             Run the v2 hot-reload smoke test
+  check                  Run cargo check for the bundled runtime
+  package                Package the single runtime binary
+  clean                  Remove v2 package output
 
-  The bundled bun/build/debug/bun-debug(.exe) is preferred automatically.
-  Set TSP_BUN_BIN to override the Bun executable.
+Environment:
+  TSP_PORT, TSP_ROUTES_DIR, TSP_PUBLIC_DIR, TSP_BUN_BIN
 EOF
     ;;
-  *)
-    echo "Unknown command: $1" >&2
-    exit 2
-    ;;
+  *) die "unknown command: $1" ;;
 esac

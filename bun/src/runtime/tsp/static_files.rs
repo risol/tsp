@@ -15,33 +15,51 @@ pub struct StaticFile {
 /// router can handle the request. Existing files are canonicalized and must
 /// remain below the public root, which blocks traversal and symlink escape.
 pub fn load(root: &Path, request_path: &str) -> io::Result<Option<StaticFile>> {
-    let Some(relative) = decode_path(request_path) else { return Ok(None); };
+    let Some(relative) = decode_path(request_path) else {
+        return Ok(None);
+    };
     let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let mut candidate = canonical_root.clone();
     for segment in relative.split('/') {
-        if segment.is_empty() || segment == "." { continue; }
-        if segment == ".." || segment.contains('\0') { return Ok(None); }
+        if segment.is_empty() || segment == "." {
+            continue;
+        }
+        if segment == ".." || segment.contains('\0') {
+            return Ok(None);
+        }
         candidate.push(segment);
     }
     if candidate.is_dir() && relative == "/" {
         candidate.push("index.html");
     }
-    if !candidate.is_file() { return Ok(None); }
+    if !candidate.is_file() {
+        return Ok(None);
+    }
     let canonical = candidate.canonicalize()?;
-    if !canonical.starts_with(&canonical_root) { return Ok(None); }
+    if !canonical.starts_with(&canonical_root) {
+        return Ok(None);
+    }
     let body = fs::read(&canonical)?;
     let content_type = mime_type(&canonical);
-    Ok(Some(StaticFile { body, content_type, path: canonical }))
+    Ok(Some(StaticFile {
+        body,
+        content_type,
+        path: canonical,
+    }))
 }
 
 fn decode_path(path: &str) -> Option<String> {
-    if !path.starts_with('/') { return None; }
+    if !path.starts_with('/') {
+        return None;
+    }
     let bytes = path.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'%' {
-            if index + 2 >= bytes.len() { return None; }
+            if index + 2 >= bytes.len() {
+                return None;
+            }
             let hi = hex(bytes[index + 1])?;
             let lo = hex(bytes[index + 2])?;
             out.push((hi << 4) | lo);
@@ -64,7 +82,13 @@ fn hex(byte: u8) -> Option<u8> {
 }
 
 fn mime_type(path: &Path) -> &'static str {
-    match path.extension().and_then(|ext| ext.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "html" | "htm" => "text/html; charset=utf-8",
         "css" => "text/css; charset=utf-8",
         "js" | "mjs" => "text/javascript; charset=utf-8",
@@ -104,7 +128,8 @@ mod tests {
 
     #[test]
     fn missing_public_file_falls_through() {
-        let root = std::env::temp_dir().join(format!("tsp-v2-public-missing-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("tsp-v2-public-missing-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         assert!(load(&root, "/missing.js").unwrap().is_none());
         let _ = std::fs::remove_dir_all(root);
