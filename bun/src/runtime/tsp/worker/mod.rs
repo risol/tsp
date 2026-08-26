@@ -4,9 +4,10 @@
 //! bridge. The master must be able to speak the same versioned protocol to a
 //! worker whose Bun runtime is embedded in the worker executable.
 
-pub mod protocol;
-pub mod manager;
-pub mod pool;
 pub mod application;
 pub mod lifecycle;
+pub mod manager;
+pub mod pool;
+pub mod process_inspector;
+pub mod protocol;
 pub mod sandbox;
