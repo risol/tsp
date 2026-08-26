@@ -302,11 +302,24 @@ impl WorkerManager {
         if self.worker.is_none() {
             self.start_worker()?;
         }
-        let result = self.execute_inner(request);
-        if result.as_ref().is_err_and(|error| Self::should_restart(error)) {
-            let _ = self.restart_worker();
+        // Clone once so the retry-after-restart path can re-send the same
+        // request against the replacement worker. The clone cost is
+        // bounded by the request size (string + script bytes) and only
+        // paid once per call; the alternative -- restructuring
+        // `execute_inner` to take a reference -- would ripple through
+        // every protocol::Message::Execute write site.
+        let first = self.execute_inner(request.clone());
+        if first.as_ref().is_err_and(|error| Self::should_restart(error))
+            && self.restart_worker().is_ok()
+        {
+            // The worker died between requests (e.g. SIGKILL landed on
+            // the previous process). The replacement is alive and ready;
+            // re-issue the original request so the caller sees a
+            // transparent recovery rather than the underlying
+            // BrokenPipe / Io error.
+            return self.execute_inner(request);
         }
-        result
+        first
     }
 
     /// Execute with a hard response deadline. A timed-out worker is never
