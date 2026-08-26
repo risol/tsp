@@ -1,0 +1,5 @@
+# CI only: LDAP E2E tests need LDAP, but do not need Samba DNS/Kerberos ports.
+services:
+  samba-ad:
+    ports: !reset
+      - "389:389"

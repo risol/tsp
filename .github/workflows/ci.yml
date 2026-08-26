@@ -61,7 +61,7 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Start E2E services
-        run: docker compose -f docker/docker-compose.yml up -d mysql redis samba-ad
+        run: docker compose -f docker/docker-compose.yml -f .github/docker-compose.ci.yml up -d mysql redis samba-ad
 
       - name: Wait for E2E services
         shell: bash
@@ -96,11 +96,11 @@ jobs:
 
       - name: Show service logs
         if: always()
-        run: docker compose -f docker/docker-compose.yml logs --no-color mysql redis samba-ad
+        run: docker compose -f docker/docker-compose.yml -f .github/docker-compose.ci.yml logs --no-color mysql redis samba-ad
 
       - name: Stop E2E services
         if: always()
-        run: docker compose -f docker/docker-compose.yml down -v --remove-orphans
+        run: docker compose -f docker/docker-compose.yml -f .github/docker-compose.ci.yml down -v --remove-orphans
 
   native-linux:
     name: Native runtime (Linux)
