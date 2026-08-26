@@ -67,6 +67,11 @@ jobs:
         with:
           toolchain: nightly-2026-07-20
 
+      - name: Install pinned LLVM toolchain
+        uses: KyleMayes/install-llvm-action@v1
+        with:
+          llvm-version: "21.1.8"
+
       - name: Install Bun fork dependencies
         working-directory: bun
         run: bun install --frozen-lockfile

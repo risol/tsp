@@ -140,7 +140,7 @@ mod unix {
     /// find the end of the comm field. Field index 3 in the
     /// resulting list (0-based after the comm pair) is the parent
     /// PID.
-    fn parse_ppid_from_stat(stat: &str) -> io::Result<u32> {
+    pub(super) fn parse_ppid_from_stat(stat: &str) -> io::Result<u32> {
         let comm_end = stat.rfind(')').ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "missing comm close paren")
         })?;
