@@ -16,6 +16,8 @@ bun/build/
 bun/target/
 bun/vendor/
 bun/node_modules/
+.bun-bootstrap/
+node_modules/
 
 # Local test artifacts
 test_*.xlsx
