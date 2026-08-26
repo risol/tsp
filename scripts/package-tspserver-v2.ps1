@@ -4,8 +4,6 @@ param(
   [string]$ServerBinary,
 
   [Parameter(Mandatory = $true)]
-  [string]$BunBinary,
-
   [string]$OutputDirectory = "dist/tsp-v2",
 
   [string]$RoutesDirectory = "routes",
@@ -14,19 +12,17 @@ param(
 )
 
 $serverPath = [System.IO.Path]::GetFullPath($ServerBinary)
-$bunPath = [System.IO.Path]::GetFullPath($BunBinary)
 $outputPath = [System.IO.Path]::GetFullPath($OutputDirectory)
+$serverName = if ($serverPath.EndsWith(".exe", [System.StringComparison]::OrdinalIgnoreCase)) { "tspserver_v2.exe" } else { "tspserver_v2" }
 
 if (!(Test-Path -LiteralPath $serverPath -PathType Leaf)) {
   throw "server binary not found: $serverPath"
 }
-if (!(Test-Path -LiteralPath $bunPath -PathType Leaf)) {
-  throw "Bun runtime binary not found: $bunPath"
-}
-
 New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
-Copy-Item -LiteralPath $serverPath -Destination (Join-Path $outputPath "tspserver_v2.exe") -Force
-Copy-Item -LiteralPath $bunPath -Destination (Join-Path $outputPath "bun.exe") -Force
+$serverTarget = Join-Path $outputPath $serverName
+if ($serverPath -ne $serverTarget) {
+  Copy-Item -LiteralPath $serverPath -Destination $serverTarget -Force
+}
 if (Test-Path -LiteralPath $RoutesDirectory -PathType Container) {
   Copy-Item -LiteralPath $RoutesDirectory -Destination (Join-Path $outputPath "routes") -Recurse -Force
 }
@@ -34,11 +30,27 @@ if (Test-Path -LiteralPath $PublicDirectory -PathType Container) {
   Copy-Item -LiteralPath $PublicDirectory -Destination (Join-Path $outputPath "public") -Recurse -Force
 }
 
+# v2.4 distribution contract: the packaged directory must NOT
+# ship a standalone `bun.exe`. The master self-spawns the
+# same `tspserver_v2.exe`; shipping a separate Bun would be a
+# regression of the v2 single-binary contract. Pre-existing
+# standalone files are removed so a re-packaging against a
+# stale dist/tsp-v2 stays clean.
+$staleBun = Join-Path $outputPath "bun.exe"
+if (Test-Path -LiteralPath $staleBun -PathType Leaf) {
+  Write-Warning "removing stale standalone bun.exe from $outputPath (v2.4 ships a single binary)"
+  Remove-Item -LiteralPath $staleBun -Force
+}
+$staleBunNoExt = Join-Path $outputPath "bun"
+if (Test-Path -LiteralPath $staleBunNoExt -PathType Leaf) {
+  Write-Warning "removing stale standalone bun from $outputPath (v2.4 ships a single binary)"
+  Remove-Item -LiteralPath $staleBunNoExt -Force
+}
+
 $manifest = [ordered]@{
   runtime = "tsp-v2"
-  server = "tspserver_v2.exe"
-  bun = "bun.exe"
-  worker = "bun.exe"
+  server = $serverName
+  worker = $serverName
   embedded_worker = $true
   routes = "routes"
   public = "public"
@@ -46,4 +58,4 @@ $manifest = [ordered]@{
 }
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $outputPath "tsp-v2-runtime.json") -Encoding UTF8
 
-Write-Host "Packaged tspserver_v2 and bundled Bun runtime at $outputPath"
+Write-Host "Packaged single-file TSP runtime at $outputPath"

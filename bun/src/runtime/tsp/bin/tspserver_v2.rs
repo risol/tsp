@@ -285,6 +285,18 @@ fn env_u64(name: &str) -> Option<u64> {
         .filter(|value| *value > 0)
 }
 
+// LEGACY: this resolver is the v1 / pre-v2.4 fallback that
+// looked for an external `bun(.exe)` next to the host. The
+// production `tspserver_v2` binary built with the
+// `embedded-worker-entry` feature (see `bun_bin/Cargo.toml`)
+// never executes this code: the master instead self-spawns
+// (Windows) or pre-forks (Unix) the same executable and
+// hands it `--tsp-worker` / `Bun__tsp_run_worker()`. The
+// function stays compiled in so the `cargo build -p
+// bun_runtime_tsp --bin tspserver_v2` dev path (no feature
+// flag) still produces a runnable host for the integration
+// test suite, but production deployments must not depend on
+// it.
 fn resolve_worker_bin() -> Result<PathBuf, String> {
     if let Ok(path) = std::env::var("TSP_WORKER_BIN") {
         let path = PathBuf::from(path);
@@ -297,6 +309,11 @@ fn resolve_worker_bin() -> Result<PathBuf, String> {
         .ok()
         .and_then(|path| path.parent().map(PathBuf::from));
     if let Some(dir) = executable_dir {
+        // LEGACY: pre-v2.4 build artefact — a separately
+        // installed `bun(.exe)` that the v1 host shell-out
+        // path relied on. v2.4 master does not need this
+        // file: workers are produced from the same
+        // `tspserver_v2[.exe]` via fork() or self-spawn.
         let filenames = if cfg!(windows) {
             ["bun.exe", "bun-debug.exe"]
         } else {
