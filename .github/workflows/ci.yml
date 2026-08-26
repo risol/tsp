@@ -25,7 +25,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -53,7 +53,7 @@ jobs:
         working-directory: bun
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up bootstrap Bun
         uses: oven-sh/setup-bun@v2
@@ -99,7 +99,7 @@ jobs:
         working-directory: bun
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up bootstrap Bun
         uses: oven-sh/setup-bun@v2
@@ -145,7 +145,7 @@ jobs:
         working-directory: bun
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up bootstrap Bun
         uses: oven-sh/setup-bun@v2
