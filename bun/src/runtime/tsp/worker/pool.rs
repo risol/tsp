@@ -135,6 +135,18 @@ impl WorkerPool {
         self.slots.len()
     }
 
+    /// Return the number of requests currently admitted to the pool.
+    ///
+    /// This is useful for readiness probes and for deterministic integration
+    /// tests that need to observe admission before checking backpressure.
+    pub fn in_flight(&self) -> Result<usize, PoolError> {
+        self.admission
+            .in_flight
+            .lock()
+            .map(|in_flight| *in_flight)
+            .map_err(|_| PoolError::Poisoned)
+    }
+
     pub fn start(&self) -> Result<(), PoolError> {
         for slot in &self.slots {
             slot.manager.lock().map_err(|_| PoolError::Poisoned)?.start_worker()?;

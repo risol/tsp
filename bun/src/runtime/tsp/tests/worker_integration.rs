@@ -101,7 +101,14 @@ fn pool_applies_admission_backpressure() {
     let running = Arc::clone(&pool);
     let thread =
         thread::spawn(move || running.execute(request("sleep", b"__TSP_TEST_SLEEP__"), 500));
-    thread::sleep(Duration::from_millis(30));
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    while pool.in_flight().expect("pool admission should be readable") == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "first request should enter the pool before backpressure is checked"
+        );
+        thread::yield_now();
+    }
     let error = pool
         .execute(request("queued", b"queued"), 20)
         .expect_err("full pool should apply backpressure");
