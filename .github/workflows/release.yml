@@ -67,10 +67,33 @@ jobs:
         with:
           toolchain: nightly-2026-07-20
 
-      - name: Install pinned LLVM toolchain
-        uses: llvm-actions/setup-llvm@v1
-        with:
-          llvm-version: "21.1.0"
+      - name: Install pinned LLVM toolchain (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-21 main" | sudo tee /etc/apt/sources.list.d/llvm.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends clang-21 lld-21 llvm-21 cmake ninja-build nasm
+
+      - name: Install pinned LLVM toolchain (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install llvm@21 cmake ninja nasm
+          echo "/opt/homebrew/opt/llvm@21/bin" >> "$GITHUB_PATH"
+
+      - name: Install pinned LLVM toolchain (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $url = 'https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.0/LLVM-21.1.0-win64.exe'
+          $installer = Join-Path $env:TEMP 'llvm-installer.exe'
+          Write-Host "Downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          Write-Host "Installing LLVM 21.1.0 silently (/S)..."
+          $proc = Start-Process -FilePath $installer -ArgumentList '/S' -PassThru -Wait
+          if ($proc.ExitCode -ne 0) { throw "LLVM installer exit code: $($proc.ExitCode)" }
+          Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\LLVM\bin'
 
       - name: Install Bun fork dependencies
         working-directory: bun
