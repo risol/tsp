@@ -18,6 +18,9 @@ import { rm, writeFile } from "node:fs/promises";
 // Use ports 19001 and 19002 for the two test servers
 const TEST_PORT_1 = 19001;
 const TEST_PORT_2 = 19002;
+// All instances must use the same signing secret to validate shared cookies.
+const TEST_SESSION_SECRET = process.env.TSP_SESSION_SECRET ||
+  "tsp-e2e-shared-session-secret-do-not-use-in-production";
 
 export function getRedisSessionTests() {
   return [
@@ -50,6 +53,9 @@ export function getRedisSessionTests() {
         }
 
         if (!redisRunning) {
+          if (process.env.CI) {
+            throw new Error("Redis container is required in CI but is not running");
+          }
           console.log(
             `  ${COLORS.yellow}⚠ Redis container not running, skipping test${COLORS.reset}`,
           );
@@ -103,6 +109,10 @@ export function getRedisSessionTests() {
           configPath,
         ], {
           stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            TSP_SESSION_SECRET: TEST_SESSION_SECRET,
+          },
         }).spawn();
 
         // Wait a bit and then read output
@@ -122,6 +132,10 @@ export function getRedisSessionTests() {
           configPath2,
         ], {
           stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            TSP_SESSION_SECRET: TEST_SESSION_SECRET,
+          },
         }).spawn();
 
         // Wait for server 2 to start

@@ -35,6 +35,9 @@ export function getMysqlTests() {
         }
 
         if (!mysqlRunning) {
+          if (process.env.CI) {
+            throw new Error("MySQL container is required in CI but is not running");
+          }
           console.log(
             `  ${COLORS.yellow}⚠ MySQL container not running, skipping test${COLORS.reset}`,
           );

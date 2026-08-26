@@ -35,6 +35,9 @@ export function getRedisTests() {
         }
 
         if (!redisRunning) {
+          if (process.env.CI) {
+            throw new Error("Redis container is required in CI but is not running");
+          }
           console.log(
             `  ${COLORS.yellow}⚠ Redis container not running, skipping test${COLORS.reset}`,
           );

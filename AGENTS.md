@@ -4,7 +4,7 @@ This file provides guidance to coding agents when working with code in this repo
 
 ## Language Requirements
 
-All communication and content must be in English. Code comments, variable names, and documentation should be in English.
+Code comments, variable names, and repository documentation must be in English. User-facing conversation may use any language requested by the user.
 
 ## Project Overview
 

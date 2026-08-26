@@ -30,7 +30,10 @@ import { getMysqlTests } from "./e2e/mysql.ts";
 import { getRedisTests } from "./e2e/redis.ts";
 import { getRedisSessionTests } from "./e2e/redis_session.ts";
 import { getExcelJsTests } from "./e2e/exceljs.ts";
+import { getCryptoTests } from "./e2e/crypto.ts";
+import { getBcryptTests } from "./e2e/bcrypt.ts";
 import { getLdapTests } from "./e2e/ldap.ts";
+import { getMysqlV2Tests } from "./e2e/mysql_v2.ts";
 import { getConfigTests } from "./e2e/config.ts";
 import { getValidationTests } from "./e2e/validation.ts";
 import { getFragmentTests } from "./e2e/fragments.ts";
@@ -396,9 +399,12 @@ async function runE2ETests(): Promise<void> {
   tests.push(...getSessionTests());
   tests.push(...getUploadTests());
   tests.push(...getMysqlTests());
+  tests.push(...getMysqlV2Tests());
   tests.push(...getRedisTests());
-  // tests.push(...getRedisSessionTests()); // Skipped - manual verification needed
+  tests.push(...getRedisSessionTests());
   tests.push(...getExcelJsTests());
+  tests.push(...getCryptoTests());
+  tests.push(...getBcryptTests());
   tests.push(...getLdapTests());
   tests.push(...getConfigTests());
   tests.push(...getValidationTests());

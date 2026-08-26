@@ -41,6 +41,67 @@ jobs:
       - name: Run unit tests
         run: bun test tests/unit
 
+  e2e:
+    name: End-to-end tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      # Test-only secret shared by every TSP instance in this job.
+      TSP_SESSION_SECRET: tsp-ci-e2e-shared-session-secret-do-not-use-in-production
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.14'
+
+      - name: Install root dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Start E2E services
+        run: docker compose -f docker/docker-compose.yml up -d mysql redis samba-ad
+
+      - name: Wait for E2E services
+        shell: bash
+        run: |
+          set -euo pipefail
+          for container in tsp-mysql tsp-redis tsp-samba-ad; do
+            echo "Waiting for $container..."
+            for attempt in $(seq 1 90); do
+              status="$(docker inspect -f '{{.State.Health.Status}}' "$container" 2>/dev/null || true)"
+              if [[ "$status" == "healthy" ]]; then
+                echo "$container is healthy"
+                break
+              fi
+              if [[ "$status" == "unhealthy" ]]; then
+                docker logs "$container"
+                exit 1
+              fi
+              if [[ "$attempt" == "90" ]]; then
+                docker logs "$container"
+                echo "$container did not become healthy (last status: $status)"
+                exit 1
+              fi
+              sleep 2
+            done
+          done
+
+      - name: Build TSP server for E2E
+        run: bash ./tsp.sh build:tspserver:rel
+
+      - name: Run complete E2E suite
+        run: bun run tests/run_e2e_tests.ts
+
+      - name: Show service logs
+        if: always()
+        run: docker compose -f docker/docker-compose.yml logs --no-color mysql redis samba-ad
+
+      - name: Stop E2E services
+        if: always()
+        run: docker compose -f docker/docker-compose.yml down -v --remove-orphans
+
   native-linux:
     name: Native runtime (Linux)
     runs-on: ubuntu-latest
