@@ -1,12 +1,15 @@
 # TSP v2 — progress log
 
+The v2 runtime is now the only supported TSP runtime. Entries below preserve
+the historical implementation sequence; references to side-by-side v1 work are
+historical notes, not current compatibility requirements.
+
 Tracks the side-by-side v2 refactor driven by `tsp-v2-plan.md` (75 sections,
 12 phases) and `tsp-v2-specification.md` (normative).
 
-- **Strategy (locked with Sol 2026-08-24):** side-by-side. v1
-  `src/main.ts` keeps working as the default binary. v2 native host lives
-  in `bun/src/runtime/tsp/` and ships as `tspserver_v2`. No v1 code
-  removal in v2 slices until each v2 capability has parity.
+- **Historical strategy:** implementation proceeded side-by-side while v2
+  capabilities were developed. The current supported host is the native v2
+  host in `bun/src/runtime/tsp/`, shipped as `tspserver_v2`.
 - **First slice (locked):** PoC 1 from plan §70 — the 7-step vertical slice
   (Rust HTTP -> `routes/index.tsp` -> TSX transpile -> JSC instantiate ->
   find `GET` -> call `GET(ctx)` -> return Response / `<h1>Hello</h1>`).
@@ -1908,9 +1911,9 @@ Plan sect.70 "PoC 1" is the 7-step vertical slice:
 All 7 steps land. The model the plan asked us to validate --
 "Rust host owns HTTP lifecycle, JSC page module is replaceable
 execution generation" -- is proven in real life on the loopback
-interface. v1 (`src/main.ts`, `www/`, `tsp.sh`) is unchanged
-throughout the refactor; the side-by-side coexistence strategy
-holds.
+interface. The initial implementation was developed side-by-side with v1;
+the v1 host has since been removed and this native host is now the sole
+supported runtime.
 
 ### Plan sect.74 DoD items satisfied by PoC 1 (reconciled post-slice 13)
 
@@ -1990,11 +1993,10 @@ User-side decision required before any of (a), (b), (c) starts.
   option A) vs. top-level `crates/tsp-v2-host/` (option B). Currently on
   option A because Bun-fork style is what the plan's risk mitigations
   (Risk 1) recommend; switching is mostly mechanical.
-- Whether `tspserver_v2` binary stays as the long-term product name or
-  is renamed to `tsp` / `tspserver` once v1 is retired.
-- Whether `routes/` lives at the repo root or under a v2-specific
-  subdir (e.g. `v2/routes/`) to avoid stepping on a future v1 routes
-  dir at the root.
+- `tspserver_v2` remains the native product binary name for the v2-only
+  distribution.
+- `routes/` remains the root application route directory now that v1 is
+  retired.
 
 
 ## Session summary (2026-08-24)
@@ -2016,8 +2018,8 @@ contract in 9 slices:
   `FREEZE.md` + 4 topic docs + 10 example fixtures. Sol signed
   off; the contract is FROZEN.
 
-Side-by-side coexistence with v1 (`src/main.ts` / `www/` /
-`tsp.sh`) holds throughout: no v1 source was modified.
+The historical side-by-side phase is complete; the parent repository now
+ships only the native v2 host and its embedded worker.
 
 **v2 git log on the parent tsp repo** (10 commits, oldest to
 newest):
@@ -2201,3 +2203,46 @@ architecture boundary, not an unfinished implementation: the accepted ADR
 keeps production on the subprocess bridge until Bun exposes an
 embedder-safe VM startup/link surface. Native `ServiceRegistry`, sessions,
 metrics, and reload state are host-owned and survive page generation reloads.
+
+## Session update (2026-08-26) -- v2.4 worker pre-fork + distribution contract
+
+- **Process-model tests pinned.** `tests/process_model.rs` records
+  the actual PID / PPID / `--tsp-worker` flag / canonicalized exe
+  path of every spawned worker, plus cancel / SIGKILL / no-zombie
+  lifecycle assertions. The stub binary publishes its process info
+  to a JSON file the harness parses (no serde dep) so the assertions
+  are portable across Unix and Windows.
+- **`process_inspector` module added.** Cross-platform helper for
+  reading PID / PPID / exe / argv; the tests use it for the
+  "process is fully reaped" assertion that the manager's
+  `stop_worker` returns ESRCH after the wait/kill/reap cycle.
+- **Start-order contract test added.** `tests/start_order.rs`
+  boots the real `tspserver_v2[.exe]` and asserts the master prints
+  the worker / watcher / listener markers in the right order.
+  The CI gate that builds the binary is the same gate that
+  exercises it.
+- **CI extended to all 3 platforms.** `ci.yml` now runs
+  `process_model` + `start_order` on Linux / Windows / macOS, and
+  `smoke-windows` / `smoke-macos` mirror the existing `smoke-linux`
+  job. The release matrix exercises the same binaries that ship
+  to users.
+- **Legacy paths marked.** The v1 / pre-v2.4
+  `TSP_WORKER_BIN` / `bun(.exe)`-next-to-host fallback in
+  `bin/tspserver_v2.rs::resolve_worker_bin` is now `// LEGACY:`
+  annotated. `package-tspserver-v2.{sh,ps1}` now strips a stale
+  `bun` / `bun.exe` from a re-packaged `dist/tsp-v2/`.
+- **Verification:** 194 lib tests, 15 process-model tests,
+  1 start-order test, 4 worker-integration tests pass. The new
+  CI jobs run on every PR.
+
+### Deferred to a follow-up PR (Slice F, not in this commit)
+
+- **Node module embedding** is intentionally *not* part of this
+  pre-fork / distribution slice. Defining the embedded-module
+  source list, the build-time collection rules, the runtime
+  module resolution, and the size / startup-time / license
+  verification all sit on top of the pre-fork contract and
+  must be their own design + PR. Mixing them here would inflate
+  the slice scope and obscure the pre-fork verification surface.
+  The Node-module slice will land as `docs/v2/FREEZE.md`-amended
+  work, separate from this set.
