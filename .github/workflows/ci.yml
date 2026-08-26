@@ -80,7 +80,7 @@ jobs:
         working-directory: bun
 
       - name: Run Worker IPC integration tests
-        run: cargo test -p bun_runtime_tsp --test worker_integration --no-fail-fast --locked
+        run: cargo test -p bun_runtime_tsp --test worker_integration --no-fail-fast --locked -- --test-threads=1
         working-directory: bun
 
       - name: Check Linux v2 host
@@ -130,7 +130,7 @@ jobs:
         working-directory: bun
 
       - name: Run Windows Worker IPC integration tests
-        run: cargo test -p bun_runtime_tsp --test worker_integration --no-fail-fast --locked
+        run: cargo test -p bun_runtime_tsp --test worker_integration --no-fail-fast --locked -- --test-threads=1
         working-directory: bun
 
   native-macos:
@@ -172,5 +172,5 @@ jobs:
         working-directory: bun
 
       - name: Run macOS Worker IPC integration tests
-        run: cargo test -p bun_runtime_tsp --test worker_integration --no-fail-fast --locked
+        run: cargo test -p bun_runtime_tsp --test worker_integration --no-fail-fast --locked -- --test-threads=1
         working-directory: bun
