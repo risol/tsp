@@ -225,6 +225,18 @@ impl EmbeddedVm {
         let path = path
             .to_str()
             .ok_or_else(|| "worker request path is not valid UTF-8".to_string())?;
+        // Per-request cache bust. `load_entry_point` evaluates the
+        // synthetic `bun:main` module and stores the resolved promise
+        // in the JS module registry under that hardcoded name. Without
+        // this drop the second call returns the first request's
+        // already-resolved promise, the new wrap preamble never runs,
+        // and every URL aliases to whichever .tsp the first request hit
+        // (see docs/v2/bugs/0001). `clear_entry_point` removes the
+        // `bun:main` entry only; shared modules (e.g. `tsp:server`
+        // shims) keep their cache hits across requests.
+        self.vm
+            .clear_entry_point()
+            .map_err(|error| format!("{error:?}"))?;
         let _ = self
             .vm
             .load_entry_point(path.as_bytes())

@@ -199,4 +199,78 @@ mod tests {
         let methods = detect_methods(src);
         assert!(methods.is_empty());
     }
+
+    // -----------------------------------------------------------------
+    // Multi-route dispatch regression test
+    //
+    // The user's bug: every URL returns index.tsp's body. The wrap
+    // tests already proved wrap_for_embedded_worker is source-specific
+    // and the router tests proved lookup is path-specific. The remaining
+    // stage that can leak routes is page::prepare, which reads from
+    // `route.source` -- if it ever ignored `route.source` and read a
+    // fixed path, all routes would alias index.tsp. Pin it.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn prepare_reads_route_source_not_a_hardcoded_path() {
+        use crate::router::{HttpMethod, Route, Segment};
+
+        let dir = tempdir();
+        let index_path = dir.join("index.tsp");
+        let time_path = dir.join("time.tsp");
+        let index_body = r#"export function GET(ctx) {
+            return `<h1>Hello ${ctx.method} ${ctx.path}</h1>`;
+        }
+"#;
+        let time_body = r#"export async function GET(ctx) {
+            const t = ctx.services.time;
+            return new Response(`iso=${t.iso}`, { status: 200 });
+        }
+"#;
+        std::fs::write(&index_path, index_body).expect("write index");
+        std::fs::write(&time_path, time_body).expect("write time");
+
+        let index_route = Route {
+            path: "/".to_string(),
+            source: index_path.clone(),
+            methods: vec![HttpMethod::Get],
+            segments: vec![],
+            params: Default::default(),
+        };
+        let time_route = Route {
+            path: "/time".to_string(),
+            source: time_path.clone(),
+            methods: vec![HttpMethod::Get],
+            segments: vec![Segment::Static("time".to_string())],
+            params: Default::default(),
+        };
+
+        let index_page = prepare(&index_route).expect("prepare index");
+        let time_page = prepare(&time_route).expect("prepare time");
+
+        // Each route must yield its own source bytes, not a shared
+        // alias. If `prepare` ever ignored `route.source`, both
+        // routes would resolve to the same file (whichever the bug
+        // pointed at) and one of these asserts would fail.
+        assert_eq!(index_page.text, index_body, "index.tsp content leaked");
+        assert_eq!(time_page.text, time_body, "time.tsp content leaked");
+        assert_ne!(
+            index_page.text, time_page.text,
+            "two routes produced identical source bytes"
+        );
+        assert_eq!(index_page.byte_len, index_body.len());
+        assert_eq!(time_page.byte_len, time_body.len());
+    }
+
+    fn tempdir() -> std::path::PathBuf {
+        let mut dir = std::env::temp_dir();
+        let pid = std::process::id();
+        let nonce: u64 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        dir.push(format!("tsp-page-test-{pid}-{nonce}"));
+        std::fs::create_dir_all(&dir).expect("create tempdir");
+        dir
+    }
 }

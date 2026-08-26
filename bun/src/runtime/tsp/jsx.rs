@@ -317,6 +317,10 @@ fn rewrite_tsp_server_imports(source: &str) -> Result<String, JsxError> {
                             | "notFound"
                             | "HttpError"
                             | "fragment"
+                            | "nanoid"
+                            | "customAlphabet"
+                            | "customRandom"
+                            | "random"
                     )
                 };
                 if !allowed || imported.is_empty() || local.is_empty() {
@@ -374,13 +378,111 @@ fn rewrite_tsp_server_imports(source: &str) -> Result<String, JsxError> {
 ///   exit and serves a 500. This matches spec sect.6.3
 ///   (invalid return values).
 ///
+/// Hardcoded copy of nanoid 5.1.6's `url-alphabet` constant
+/// (defined in `node_modules/nanoid/url-alphabet/index.js`).
+/// The page module's wrap preamble runs in a temp file with no
+/// on-disk access to `node_modules/`, so the relative import
+/// `from './url-alphabet/index.js'` would fail to resolve. We
+/// inline the constant string instead and strip the import in
+/// `nanoid_prelude` below.
+const NANOID_URL_ALPHABET: &str =
+    "useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict";
+
+/// The raw nanoid 5.1.6 source. Embedded into the binary at
+/// compile time via `include_str!` so the wrap preamble can
+/// ship a working ID generator without an `import` step. The
+/// path is relative to this file (`bun/src/runtime/tsp/jsx.rs`):
+/// four `..` segments walk back to the workspace root, then into
+/// `node_modules/nanoid/`. If nanoid is moved out of that path
+/// the build will fail with a clear `include_str!` error.
+const NANOID_RAW_SOURCE: &str =
+    include_str!("../../../../node_modules/nanoid/index.js");
+
+/// Build the prelude that inlines nanoid 5.1.6's runtime as
+/// top-level function declarations in the page module's
+/// scope. The page reaches them via `import { nanoid } from
+/// "tsp:server" and `wrap_for_bun_cli` then re-exports them on
+/// the frozen `__tspServer` object that the rewriter
+/// destructures against.
+///
+/// This deliberately does NOT publish the functions on
+/// `globalThis` (plan §16.4: framework API must be explicitly
+/// imported or accessed via Context, not exposed on the
+/// global). The names are scoped to the wrap's module; the
+/// page sees them only as imports of `tsp:server`.
+///
+/// Three transformations are applied to the raw source:
+/// 1. The `node:crypto` import is replaced with `globalThis.crypto`
+///    (same webcrypto instance in Bun; avoids a module graph
+///    edge the synthetic entry doesn't need).
+/// 2. The relative `./url-alphabet/index.js` import and the
+///    re-export are stripped; the alphabet is injected as a
+///    local `const` from `NANOID_URL_ALPHABET`.
+/// 3. The four `export function` declarations are reduced to
+///    plain `function` so the prelude runs as top-level script
+///    (the synthetic entry evaluates the wrap as a module, but
+///    the `export` keyword on a per-request prelude is noise and
+///    would shadow the page module's own exports).
+fn nanoid_prelude() -> String {
+    let mut src = NANOID_RAW_SOURCE.to_string();
+    src = src.replace(
+        "import { webcrypto as crypto } from 'node:crypto'",
+        "const crypto = globalThis.crypto;",
+    );
+    src = src.replace(
+        "import { urlAlphabet as scopedUrlAlphabet } from './url-alphabet/index.js'",
+        &format!("const scopedUrlAlphabet = {:?};", NANOID_URL_ALPHABET),
+    );
+    src = src.replace(
+        "export { urlAlphabet } from './url-alphabet/index.js'\n",
+        "",
+    );
+    // All four public functions get a `__tspNanoid*` prefix so the
+    // module scope keeps NO bare `nanoid`/`random`/etc. names. If we
+    // left them bare, the page-side rewriter (
+    // `import { nanoid } from "tsp:server"` -> `const { nanoid } =
+    // __tspServer;`) would collide with the prelude's `function
+    // nanoid(...)` declaration in the same module scope ("already
+    // declared" SyntaxError). The `__tspServer` freeze exports them
+    // under their PUBLIC names, so pages still destructure cleanly.
+    src = src.replace("export function random(", "function __tspNanoidRandom(");
+    src = src.replace(
+        "export function customRandom(",
+        "function __tspNanoidCustomRandom(",
+    );
+    src = src.replace(
+        "export function customAlphabet(",
+        "function __tspNanoidCustomAlphabet(",
+    );
+    src = src.replace("export function nanoid(", "function __tspNanoid(");
+    // Internal cross-references inside the inlined source (they use
+    // the bare names in the original module).
+    src = src.replace(
+        "return customRandom(alphabet, size, random)",
+        "return __tspNanoidCustomRandom(alphabet, size, __tspNanoidRandom)",
+    );
+    format!(
+        "// === Inlined nanoid runtime (compiled from {} bytes of source, see bun/package.json#nanoid) ===\n\
+         {}\n\
+         // === End nanoid runtime (functions are in module scope; tsp:server re-exports them) ===\n",
+        NANOID_RAW_SOURCE.len(),
+        src,
+    )
+}
+
 /// `ctx_json` is the JSON-serialised `Context` (spec
 /// sect.13). If `Some`, the preamble parses it and passes
 /// the resulting object as the page handler's only
 /// argument. If `None`, the handler is called with no
 /// argument so legacy zero-arg fixtures keep working.
 pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>) -> String {
-    let mut out = String::with_capacity(transformed.len() + 1024);
+    let mut out = String::with_capacity(transformed.len() + 1024 + nanoid_prelude().len());
+    // Compile nanoid 5.1.6 into the wrap preamble so pages can call
+    // `nanoid()` / `customAlphabet()` / `random()` / `customRandom()`
+    // directly, without an `import` step (the synthetic entry has no
+    // module resolver for arbitrary npm packages). See
+    // `nanoid_prelude` for the build pipeline.
+    out.push_str(&nanoid_prelude());
     out.push_str("// Generated by TSP v2 PoC 1 slice 16b (jsx.rs)\n");
     out.push_str("// Transformed .tsp -> runnable .js for `bun run tempfile`.\n");
     out.push_str("// Do not edit by hand; the host regenerates this on every request.\n");
@@ -426,7 +528,7 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
          class __tspHttpError__ extends Error {\n\
          \x20 constructor(__status__, __message__, __init__) { super(__message__); this.name = 'HttpError'; this.status = __status__; this.headers = new Headers((__init__ || {}).headers || {}); }\n\
          }\n\
-         const __tspServer = Object.freeze({json: __tspJson__, redirect: __tspRedirect__, text: __tspText__, html: __tspHtml__, notFound: __tspNotFound__, HttpError: __tspHttpError__, fragment: __tspFragment__, raw: __tspRaw__});\n"
+         const __tspServer = Object.freeze({json: __tspJson__, redirect: __tspRedirect__, text: __tspText__, html: __tspHtml__, notFound: __tspNotFound__, HttpError: __tspHttpError__, fragment: __tspFragment__, raw: __tspRaw__, nanoid: __tspNanoid, customAlphabet: __tspNanoidCustomAlphabet, customRandom: __tspNanoidCustomRandom, random: __tspNanoidRandom});\n"
     );
     out.push_str(
         "function __tspEscape__(__value__) {\n\
@@ -987,4 +1089,340 @@ mod tests {
             "got: {wrapped}"
         );
     }
+
+    // -----------------------------------------------------------------
+    // Multi-route dispatch regression tests
+    //
+    // The user observed that requesting /, /time, /svc, /users/42
+    // against a routes/ tree with 8 distinct .tsp files all returned
+    // the same `Hello GET /` body (which is uniquely index.tsp's GET
+    // output). To localize the bug between master and worker we want
+    // the wrap to be source-specific: a wrap built from time.tsp's
+    // source text must differ from a wrap built from index.tsp's
+    // source text in BOTH the handler invocation line and the
+    // transformed module body. If these asserts pass, the master is
+    // sending per-route scripts; if a real server still aliases all
+    // requests to index.tsp, the bug lives in the worker's
+    // load_entry_point / module-cache path.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn wrap_for_embedded_worker_distinguishes_two_routes() {
+        let index_src = r#"
+export function GET(ctx) {
+  return `<h1>Hello ${ctx.method} ${ctx.path}</h1>`;
 }
+"#;
+        let time_src = r#"
+export async function GET(ctx) {
+  const t = ctx.services.time;
+  return new Response(`iso=${t.iso}`, {
+    status: 200,
+    headers: { 'content-type': 'text/plain' },
+  });
+}
+"#;
+        let json = r#"{"method":"GET","path":"/time","query":"","headers":{},"body":""}"#;
+        let wrap_index = wrap_for_embedded_worker(index_src, "GET", Some(json));
+        let wrap_time = wrap_for_embedded_worker(time_src, "GET", Some(json));
+
+        // The transformed module body must contain route-specific
+        // markers. If the wraps are byte-identical, the master is
+        // dropping the source somewhere between page::prepare and
+        // wrap_for_embedded_worker.
+        assert!(
+            wrap_index.contains("Hello ${ctx.method}"),
+            "index wrap must carry the Hello template; got prefix: {}",
+            &wrap_index[..wrap_index.len().min(200)]
+        );
+        assert!(
+            wrap_time.contains("iso=${t.iso}"),
+            "time wrap must carry the iso template; got prefix: {}",
+            &wrap_time[..wrap_time.len().min(200)]
+        );
+        // The two routes' source content must NOT be cross-contaminated.
+        assert!(
+            !wrap_index.contains("iso=${t.iso}"),
+            "index wrap leaked the time.tsp template"
+        );
+        assert!(
+            !wrap_time.contains("Hello ${ctx.method}"),
+            "time wrap leaked the index.tsp template"
+        );
+        // Wraps are different lengths because the source differs.
+        assert_ne!(
+            wrap_index.len(),
+            wrap_time.len(),
+            "two different sources produced byte-identical wraps"
+        );
+    }
+
+    #[test]
+    fn wrap_for_embedded_worker_method_bakes_into_handler_selection() {
+        // Even for the SAME source, the handler-selection line must
+        // reference the request's HTTP method. A worker that reuses a
+        // cached wrap across methods would dispatch a POST to GET and
+        // the page's POST handler would never run.
+        let body = r#"
+export function GET(ctx) { return 'get-handler'; }
+export async function POST(ctx) { return new Response('post-handler', { status: 201 }); }
+"#;
+        let json_get = r#"{"method":"GET","path":"/x","query":"","headers":{},"body":""}"#;
+        let json_post = r#"{"method":"POST","path":"/x","query":"","headers":{},"body":""}"#;
+        let wrap_get = wrap_for_embedded_worker(body, "GET", Some(json_get));
+        let wrap_post = wrap_for_embedded_worker(body, "POST", Some(json_post));
+
+        // The wrap stamps the method into `__tspHandler__ = METHOD;`.
+        // If the master conflated method, both wraps would have the
+        // same handler line.
+        assert!(
+            wrap_get.contains("__tspHandler__ = GET;"),
+            "GET wrap must select GET; got prefix: {}",
+            &wrap_get[..wrap_get.len().min(200)]
+        );
+        assert!(
+            wrap_post.contains("__tspHandler__ = POST;"),
+            "POST wrap must select POST; got prefix: {}",
+            &wrap_post[..wrap_post.len().min(200)]
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // nanoid runtime inlining (slice 17a)
+    //
+    // The wrap preamble inlines nanoid 5.1.6 as top-level
+    // function declarations in the page module's scope and
+    // re-exports the four functions on the frozen `__tspServer`
+    // object. The page reaches them via
+    //     import { nanoid } from "tsp:server"
+    // which the rewriter turns into
+    //     const { nanoid } = __tspServer;
+    //
+    // Per plan §16.4 the functions MUST NOT be exposed on
+    // `globalThis` -- framework API must be imported, not on the
+    // global. This test pins both halves: the inlined source is
+    // present, the imports/exports are stripped, AND nothing
+    // leaks to `globalThis`.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn wrap_for_bun_cli_inlines_nanoid_runtime_for_pages() {
+        let body = "function GET() { return nanoid(); }";
+        let wrapped = wrap_for_bun_cli(body, "GET", Some("{}"));
+        // 1) the inlined nanoid function body must be present.
+        //    Functions are prefixed `__tspNanoid*` so the module
+        //    scope keeps no bare `nanoid` name -- the page-side
+        //    rewriter later generates `const { nanoid } =
+        //    __tspServer;`, which WOULD collide with a bare
+        //    `function nanoid` in the same scope.
+        assert!(
+            wrapped.contains("function __tspNanoid("),
+            "expected inlined `function __tspNanoid(...)` in the wrap; got prefix: {}",
+            &wrapped[..wrapped.len().min(400)]
+        );
+        assert!(
+            wrapped.contains("function __tspNanoidCustomAlphabet("),
+            "expected inlined `function __tspNanoidCustomAlphabet(...)` in the wrap"
+        );
+        assert!(
+            wrapped.contains("function __tspNanoidCustomRandom("),
+            "expected inlined `function __tspNanoidCustomRandom(...)` in the wrap"
+        );
+        assert!(
+            wrapped.contains("function __tspNanoidRandom("),
+            "expected inlined `function __tspNanoidRandom(...)` in the wrap"
+        );
+        // 2) the frozen __tspServer object must expose the four
+        //    names to the page (plan §16.4: explicit import
+        //    surface, not globalThis).
+        assert!(
+            wrapped.contains("nanoid: __tspNanoid, customAlphabet: __tspNanoidCustomAlphabet, customRandom: __tspNanoidCustomRandom, random: __tspNanoidRandom"),
+            "wrap must expose the four nanoid names on __tspServer; got prefix: {}",
+            &wrapped[..wrapped.len().min(800)]
+        );
+        // 3) the url-alphabet must be inlined as a const so the
+        //    relative `./url-alphabet/index.js` import never has
+        //    to resolve from the worker's temp file.
+        assert!(
+            wrapped.contains("const scopedUrlAlphabet = \"useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict\";"),
+            "url-alphabet must be inlined as a const"
+        );
+        // 4) no `import` or `export` statements from the original
+        //    nanoid source may survive in the prelude.
+        for forbidden in [
+            "import { webcrypto as crypto } from 'node:crypto'",
+            "import { urlAlphabet as scopedUrlAlphabet } from './url-alphabet/index.js'",
+            "export { urlAlphabet } from './url-alphabet/index.js'",
+            "export function nanoid",
+            "export function customAlphabet",
+            "export function customRandom",
+            "export function random",
+        ] {
+            assert!(
+                !wrapped.contains(forbidden),
+                "the raw nanoid fragment `{forbidden}` must be transformed away"
+            );
+        }
+        // 5) plan §16.4: framework API must NOT be on globalThis.
+        //    The functions are local, exposed only via the frozen
+        //    __tspServer object.
+        for forbidden in [
+            "globalThis.nanoid =",
+            "globalThis.customAlphabet =",
+            "globalThis.customRandom =",
+            "globalThis.random =",
+        ] {
+            assert!(
+                !wrapped.contains(forbidden),
+                "the nanoid functions must not be published on globalThis (plan §16.4); found `{forbidden}`"
+            );
+        }
+    }
+
+    #[test]
+    fn rewrite_tsp_server_imports_accepts_nanoid_named_exports() {
+        // Plan §16.1/§16.4: nanoid and friends are reached via
+        //     import { nanoid, customAlphabet, customRandom, random } from "tsp:server";
+        // which the rewriter collapses into
+        //     const { nanoid, customAlphabet, customRandom, random } = __tspServer;
+        let src = "import { nanoid, customAlphabet, customRandom, random } from \"tsp:server\";\nexport function GET() { return nanoid(); }";
+        let rewritten = rewrite_tsp_server_imports(src).expect("rewrite should succeed");
+        assert!(
+            rewritten.contains("const { nanoid, customAlphabet, customRandom, random } = __tspServer;"),
+            "rewriter must collapse the four nanoid names into a single destructure; got: {rewritten}"
+        );
+        // And the page-side import must be gone (replaced).
+        assert!(
+            !rewritten.contains("from \"tsp:server\""),
+            "the `from \"tsp:server\"` clause must be stripped after rewrite; got: {rewritten}"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // End-to-end pipeline test (real Bun execution)
+    //
+    // The unit tests above verify the wrap STRING. This one takes the
+    // full production pipeline for the actual `routes/nanoid.tsp`
+    // shape -- `tsx_to_js` (import rewrite + fragment rewrite), then
+    // `wrap_for_bun_cli` (nanoid prelude + envelope transport) -- and
+    // executes the generated module with the REAL `bun` binary. If
+    // the pipeline is broken (e.g. the import rewrite mis-orders the
+    // `__tspServer` binding, or the prelude leaves a dangling
+    // reference), bun will fail with a syntax/RuntimeError and this
+    // test catches it without needing a 9-minute binary relink.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn nanoid_pipeline_generates_runable_module_under_real_bun() {
+        // Mirror of production `routes/nanoid.tsp` (import + GET + POST).
+        let source = r#"// Slice 17a regression test fixture.
+import { nanoid } from "tsp:server";
+
+export function GET(_ctx) {
+  return new Response(nanoid(), {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
+}
+
+export async function POST(ctx) {
+  const body = await ctx.request.text();
+  let size = 21;
+  if (body) {
+    try {
+      const parsed = JSON.parse(body);
+      if (typeof parsed.size === "number" && parsed.size > 0) {
+        size = parsed.size;
+      }
+    } catch {
+      // body wasn't JSON
+    }
+  }
+  return new Response(nanoid(size), {
+    status: 200,
+    headers: { "content-type": "text/plain", "x-demo": "slice17a" },
+  });
+}
+"#;
+        let transformed = tsx_to_js(source).expect("tsx_to_js must succeed");
+        // The import must have been rewritten away and the page handler
+        // must still reference the destructured binding.
+        assert!(
+            !transformed.contains("from \"tsp:server\""),
+            "import must be rewritten away; got: {transformed}"
+        );
+        assert!(
+            transformed.contains("const { nanoid } = __tspServer;"),
+            "rewriter must emit `const {{ nanoid }} = __tspServer;`; got: {transformed}"
+        );
+
+        let ctx_json = r#"{"method":"GET","path":"/nanoid","query":"","headers":{"host":"127.0.0.1:1"},"body_b64":""}"#;
+        let wrapped = wrap_for_bun_cli(&transformed, "GET", Some(ctx_json));
+
+        // Locate a runnable bun: the workspace bootstrap bun on
+        // Windows, or `bun` on PATH on Unix. Skip on CI images that
+        // don't have one (the integration tests in start_order.rs
+        // have the same skip-if-unbuilt policy).
+        let bun_candidates: &[&str] = if cfg!(windows) {
+            &[
+                r"D:\GitHub\tsp\.bun-bootstrap\node_modules\bun\bin\bun.exe",
+                r"D:\GitHub\tsp\.bun-bootstrap\node_modules\bun\bin\bun.exe".trim_start(), // no-op; keep list readable
+            ]
+        } else {
+            &["bun"]
+        };
+        let mut bun_exe: Option<std::path::PathBuf> = None;
+        for cand in bun_candidates {
+            let p = std::path::PathBuf::from(cand);
+            if p.is_file() {
+                bun_exe = Some(p);
+                break;
+            }
+        }
+        let Some(bun_exe) = bun_exe else {
+            eprintln!("skipping: no bun executable found (CI without bootstrap bun)");
+            return;
+        };
+
+        let temp_path = std::env::temp_dir().join(format!(
+            "tsp-pipeline-nanoid-{}.tsx",
+            std::process::id()
+        ));
+        std::fs::write(&temp_path, &wrapped).expect("wrap must be writable");
+
+        let output = std::process::Command::new(&bun_exe)
+            .arg(&temp_path)
+            .output()
+            .expect("bun must run the generated wrap");
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let _ = std::fs::remove_file(&temp_path);
+
+        assert!(
+            output.status.success(),
+            "generated wrap must run cleanly under bun\nstdout: {stdout}\nstderr: {stderr}"
+        );
+        assert!(
+            stdout.contains("__TSP_OUT_V1__"),
+            "bun must print the envelope marker; stdout: {stdout}"
+        );
+        // The body must be a 21-char nanoid from the url alphabet.
+        // Scan stdout for 21 consecutive alphabet chars (no regex
+        // dependency needed in this crate).
+        let alphabet = "useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict";
+        let has_21_alphabet_run = stdout
+            .as_bytes()
+            .windows(21)
+            .any(|window| window.iter().all(|b| alphabet.as_bytes().contains(b)));
+        assert!(
+            has_21_alphabet_run,
+            "envelope must contain a 21-char nanoid; stdout: {stdout}"
+        );
+        assert!(
+            !stdout.contains("ReferenceError") && !stdout.contains("SyntaxError"),
+            "no JS errors allowed in the generated module; stdout: {stdout}"
+        );
+    }
+}
+
+

@@ -1266,4 +1266,77 @@ mod tests {
             assert_eq!(err.code(), *want, "err = {err:?}");
         }
     }
+
+    // -----------------------------------------------------------------
+    // Multi-route dispatch regression test
+    //
+    // The user observed that requesting /, /time, /svc, /users/42
+    // against a routes/ tree with 8 .tsp files all returned
+    // index.tsp's body. The wrap tests already proved the master
+    // builds per-route scripts; this test pins the upstream stage so
+    // a future regression in lookup cannot also be the cause.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn lookup_returns_route_specific_source_for_each_url() {
+        let table = table_with(vec![
+            rt("/", vec![], vec![HttpMethod::Get, HttpMethod::Post]),
+            rt(
+                "/time",
+                vec![Segment::Static("time".to_string())],
+                vec![HttpMethod::Get],
+            ),
+            rt(
+                "/svc",
+                vec![Segment::Static("svc".to_string())],
+                vec![HttpMethod::Get],
+            ),
+            rt(
+                "/users/:id",
+                vec![
+                    Segment::Static("users".to_string()),
+                    Segment::Param("id".to_string()),
+                ],
+                vec![HttpMethod::Get],
+            ),
+        ]);
+
+        // / -> root (path "/")
+        let route = match table.lookup("/", HttpMethod::Get) {
+            MatchResult::Found { route, .. } => route,
+            other => panic!("expected Found for /, got {other:?}"),
+        };
+        assert_eq!(route.path, "/", "/ must resolve to root path");
+
+        // /time -> time route
+        let route = match table.lookup("/time", HttpMethod::Get) {
+            MatchResult::Found { route, .. } => route,
+            other => panic!("expected Found for /time, got {other:?}"),
+        };
+        assert_eq!(route.path, "/time", "/time must hit the time route");
+
+        // /svc -> svc route
+        let route = match table.lookup("/svc", HttpMethod::Get) {
+            MatchResult::Found { route, .. } => route,
+            other => panic!("expected Found for /svc, got {other:?}"),
+        };
+        assert_eq!(route.path, "/svc", "/svc must hit the svc route");
+
+        // /users/42 -> dynamic route, binds id
+        let route = match table.lookup("/users/42", HttpMethod::Get) {
+            MatchResult::Found { route, .. } => route,
+            other => panic!("expected Found for /users/42, got {other:?}"),
+        };
+        assert_eq!(route.path, "/users/:id", "/users/42 must hit the dynamic route");
+        assert_eq!(route.params.get("id").map(String::as_str), Some("42"));
+
+        // /time POST -> MethodNotAllowed on the time route (not Found)
+        match table.lookup("/time", HttpMethod::Post) {
+            MatchResult::MethodNotAllowed { route, requested } => {
+                assert_eq!(route.path, "/time");
+                assert_eq!(requested, HttpMethod::Post);
+            }
+            other => panic!("POST /time must be 405, got {other:?}"),
+        }
+    }
 }
