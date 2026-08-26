@@ -15,10 +15,14 @@ fn socket_path(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be after epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!(
-        "tsp-worker-test-{name}-{}-{nonce}.sock",
-        std::process::id()
-    ))
+    // Unix domain sockets have a small platform-defined pathname limit. Keep
+    // the test endpoint short even when the runner provides a deeply nested
+    // temporary directory; production socket paths remain configurable.
+    #[cfg(unix)]
+    let root = PathBuf::from("/tmp");
+    #[cfg(not(unix))]
+    let root = std::env::temp_dir();
+    root.join(format!("tsp-{name}-{}-{nonce}.sock", std::process::id()))
 }
 
 fn request(path: &str, script: &[u8]) -> ExecuteRequest {
