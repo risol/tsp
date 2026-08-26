@@ -2,9 +2,27 @@ use bun_runtime_tsp::worker::manager::{ManagerError, WorkerManager};
 use bun_runtime_tsp::worker::pool::{PoolError, WorkerPool};
 use bun_runtime_tsp::worker::protocol::ExecuteRequest;
 use std::path::PathBuf;
+use std::panic;
 use std::sync::Arc;
+use std::sync::Once;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+fn install_github_failure_reporter() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        if std::env::var_os("GITHUB_ACTIONS").is_none() {
+            return;
+        }
+        panic::set_hook(Box::new(|info| {
+            let message = format!("{info}")
+                .replace('%', "%25")
+                .replace('\r', "%0D")
+                .replace('\n', "%0A");
+            eprintln!("::error title=Worker IPC integration failure::{message}");
+        }));
+    });
+}
 
 fn stub_binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_tsp_worker_test_stub"))
@@ -40,6 +58,7 @@ fn request(path: &str, script: &[u8]) -> ExecuteRequest {
 
 #[test]
 fn manager_reuses_one_worker_for_multiple_requests() {
+    install_github_failure_reporter();
     let socket = socket_path("reuse");
     let mut manager = WorkerManager::new(stub_binary(), socket.clone());
     manager
@@ -61,6 +80,7 @@ fn manager_reuses_one_worker_for_multiple_requests() {
 
 #[test]
 fn crashed_worker_is_replaced_before_next_request() {
+    install_github_failure_reporter();
     let mut manager = WorkerManager::new(stub_binary(), socket_path("crash"));
     manager
         .start_worker()
@@ -80,6 +100,7 @@ fn crashed_worker_is_replaced_before_next_request() {
 
 #[test]
 fn timeout_restarts_a_stuck_worker() {
+    install_github_failure_reporter();
     let mut manager = WorkerManager::new(stub_binary(), socket_path("timeout"));
     manager
         .start_worker()
@@ -96,6 +117,7 @@ fn timeout_restarts_a_stuck_worker() {
 
 #[test]
 fn pool_applies_admission_backpressure() {
+    install_github_failure_reporter();
     let pool = Arc::new(WorkerPool::new(stub_binary(), socket_path("pool"), 1, 1));
     pool.start().expect("pool worker should start");
     let running = Arc::clone(&pool);
