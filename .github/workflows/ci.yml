@@ -157,9 +157,9 @@ jobs:
           toolchain: nightly-2026-07-20
 
       - name: Install pinned LLVM toolchain
-        uses: KyleMayes/install-llvm-action@v1
+        uses: llvm-actions/setup-llvm@v1
         with:
-          version: "21.1.8"
+          llvm-version: "21.1.0"
 
       - name: Install Bun fork dependencies
         working-directory: bun
@@ -195,9 +195,9 @@ jobs:
           toolchain: nightly-2026-07-20
 
       - name: Install pinned LLVM toolchain
-        uses: KyleMayes/install-llvm-action@v1
+        uses: llvm-actions/setup-llvm@v1
         with:
-          version: "21.1.8"
+          llvm-version: "21.1.0"
 
       - name: Install Bun fork dependencies
         working-directory: bun
@@ -234,9 +234,9 @@ jobs:
           toolchain: nightly-2026-07-20
 
       - name: Install pinned LLVM toolchain
-        uses: KyleMayes/install-llvm-action@v1
+        uses: llvm-actions/setup-llvm@v1
         with:
-          version: "21.1.8"
+          llvm-version: "21.1.0"
 
       - name: Install Bun fork dependencies
         working-directory: bun
