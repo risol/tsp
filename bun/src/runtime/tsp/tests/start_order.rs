@@ -1058,6 +1058,170 @@ fn password_runtime_through_bun_password_serves_hashed_passwords() {
 }
 
 // ---------------------------------------------------------------------------
+// bun builtin `util` namespace integration test (slice 18)
+//
+// The wrap preamble surfaces bun 1.4's builtins to the page
+// as `__tspServer.util` (a frozen namespace). The page reaches
+// them through
+//     import { util } from "tsp:server";
+//     util.randomUUIDv7(); util.hash(buf); util.markdown.html(md);
+//     util.YAML.parse(s); new util.CryptoHasher("sha256").update(s)...
+// We pin the high-risk subset (`Bun.serve`, `Bun.spawn`,
+// `Bun.FFI`, `Bun.S3Client`, `Bun.mmap`, `Bun.Transpiler`,
+// `Bun.env.toJSON`) at the unit-test level in jsx.rs; this
+// integration test only exercises the safe surfaces end-to-end
+// through the real binary.
+// ---------------------------------------------------------------------------
+
+const UTIL_DEMO_TSP: &str = r##"import { util } from "tsp:server";
+
+function jsonResponse(value, status = 200) {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { "content-type": "application/json", "x-demo": "slice18" },
+  });
+}
+
+export function GET(_ctx) {
+  const id = util.randomUUIDv7();
+  // `util.hash` returns a BigInt; we serialize as hex string
+  // so JSON.stringify does not choke and the test can assert
+  // on the value stably across runs.
+  const hash = util.hash(new TextEncoder().encode("hello, world")).toString(16);
+  const safe = util.escapeHTML("<script>alert('xss')</script>");
+  const html = util.markdown.html("# Title\n\n**bold** _italic_");
+  const config = util.YAML.parse("version: 1\nname: demo\n");
+  const toml = util.TOML.parse("key = \"value\"\nn = 42\n");
+  const sha = new util.CryptoHasher("sha256");
+  sha.update("hello");
+  const digest = sha.digest("hex");
+  return jsonResponse({
+    ok: true,
+    id,
+    hash,
+    sha256: digest,
+    safe,
+    markdown: html,
+    config,
+    toml,
+  });
+}
+
+export async function POST(ctx) {
+  const body = await ctx.request.text();
+  let parsed;
+  try { parsed = JSON.parse(body); }
+  catch {
+    return jsonResponse({ ok: false, error: "body must be JSON" }, 400);
+  }
+  if (typeof parsed.password !== "string" || !parsed.password) {
+    return jsonResponse({ ok: false, error: "password must be a non-empty string" }, 400);
+  }
+  const key = util.hash(new TextEncoder().encode(parsed.password)).toString(16);
+  return jsonResponse({ ok: true, key });
+}
+"##;
+
+#[test]
+fn util_namespace_surfaces_bun_builtins_for_pages() {
+    let Some(master) = locate_master() else {
+        eprintln!(
+            "skipping: tspserver_v2 binary not found under dist/tsp-v2/ \
+             (run ./tsp.sh build:host first)"
+        );
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-util-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir should be creatable");
+    std::fs::write(routes_dir.join("util_demo.tsp"), UTIL_DEMO_TSP)
+        .expect("util_demo.tsp should be writable");
+
+    let port: u16 = 33_500 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    // GET /util_demo: kitchen-sink. Each field exercises a
+    // different bun builtin. We assert on a few key shapes --
+    // id format (UUIDv7 starts with a hex timestamp prefix),
+    // hash (numeric, stable for the same input),
+    // sha256 hex length (64), markdown rendered tags,
+    // YAML/TOML parsed object shape, escape html-escaped.
+    let (status, body) =
+        http_get_status(port, "/util_demo", Duration::from_secs(15));
+    assert_eq!(
+        status, 200,
+        "GET /util_demo must return 200, got {status} body={body:?}"
+    );
+    assert!(
+        body.contains("\"sha256\":") && body.contains("\"id\":") && body.contains("\"hash\":\""),
+        "GET /util_demo body must carry id/hash/sha256 fields; got {body:?}"
+    );
+    assert!(
+        body.contains("\"markdown\":\"<h1>") && body.contains("<strong>") && body.contains("<em>"),
+        "GET /util_demo body must contain rendered markdown tags; got {body:?}"
+    );
+    assert!(
+        body.contains("&lt;script&gt;"),
+        "GET /util_demo body must contain escapeHTML output; got {body:?}"
+    );
+    assert!(
+        body.contains("\"config\":{\"version\":1,\"name\":\"demo\"}"),
+        "GET /util_demo body must contain parsed YAML config; got {body:?}"
+    );
+    assert!(
+        body.contains("\"toml\":{\"key\":\"value\",\"n\":42}"),
+        "GET /util_demo body must contain parsed TOML; got {body:?}"
+    );
+
+    // POST /util_demo: hash a password, return the key.
+    let (status3, body3) = http_post_status(
+        port,
+        "/util_demo",
+        r#"{"password":"hunter2"}"#,
+        Duration::from_secs(10),
+    );
+    assert_eq!(status3, 200, "POST must return 200, got {status3} body={body3:?}");
+    assert!(
+        body3.contains("\"ok\":true") && body3.contains("\"key\":\""),
+        "POST body must carry ok + key fields; got {body3:?}"
+    );
+
+    // POST with non-JSON body: 400.
+    let (status_bad, body_bad) =
+        http_post_status(port, "/util_demo", "not json", Duration::from_secs(5));
+    assert_eq!(
+        status_bad, 400,
+        "POST with non-JSON body must return 400, got {status_bad} body={body_bad:?}"
+    );
+    assert!(
+        body_bad.contains("body must be JSON"),
+        "POST non-JSON body must carry the explicit error; got {body_bad:?}"
+    );
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+// ---------------------------------------------------------------------------
 // bun:sql runtime integration test (slice 17d)
 //
 // The TSP v2 wrap preamble surfaces bun's native SQL client
