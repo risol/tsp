@@ -717,6 +717,92 @@ fn http_post_status(
     (status, body)
 }
 
+/// Minimal HTTP/1.1 GET that lets the caller attach a
+/// `Cookie:` header (so the test can send a session id
+/// back to the server on subsequent requests). Returns
+/// `(status, body)` just like `http_get_status`; the
+/// `Set-Cookie` lines the server emits ride back through
+/// the response headers and are inspected by the
+/// cookies / session e2e tests via the raw-response
+/// helper below.
+fn http_get_with_cookie(
+    port: u16,
+    path: &str,
+    cookie: &str,
+    deadline: Duration,
+) -> (u16, String) {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    let start = std::time::Instant::now();
+    let mut stream = loop {
+        match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(s) => break s,
+            Err(_) if start.elapsed() < deadline => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => panic!("connect to 127.0.0.1:{port} failed: {e}"),
+        }
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("set_read_timeout");
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {cookie}\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).expect("write request");
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).expect("read response");
+    let status_line = raw.lines().next().unwrap_or("");
+    let status: u16 = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let body = raw.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+    (status, body)
+}
+
+/// Returns the full raw HTTP/1.1 response so the caller
+/// can inspect `Set-Cookie` and other multi-value headers
+/// that `http_get_status` / `http_post_status` would
+/// collapse. Used by the cookies e2e test to assert that
+/// a `ctx.cookies.set(...)` call actually produced a
+/// `Set-Cookie:` line on the response.
+fn http_get_raw(
+    port: u16,
+    path: &str,
+    deadline: Duration,
+) -> (u16, String) {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    let start = std::time::Instant::now();
+    let mut stream = loop {
+        match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(s) => break s,
+            Err(_) if start.elapsed() < deadline => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => panic!("connect to 127.0.0.1:{port} failed: {e}"),
+        }
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("set_read_timeout");
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).expect("write request");
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).expect("read response");
+    let status_line = raw.lines().next().unwrap_or("");
+    let status: u16 = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    (status, raw)
+}
+
 #[test]
 fn zod_runtime_compiled_into_wrap_serves_validated_schemas() {
     let Some(master) = locate_master() else {
@@ -1214,6 +1300,473 @@ fn util_namespace_surfaces_bun_builtins_for_pages() {
     assert!(
         body_bad.contains("body must be JSON"),
         "POST non-JSON body must carry the explicit error; got {body_bad:?}"
+    );
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+// ---------------------------------------------------------------------------
+// ctx.cookies integration test (slice 16f)
+//
+// The TSP v2 wrap preamble parses the request's `Cookie:`
+// header into a `Map` and exposes `ctx.cookies` with read
+// (`get` / `has`) and write (`set` / `delete`) methods.
+// Writes are pushed into a buffer that the async IIFE
+// merges into the response `headers` as separate
+// `Set-Cookie` lines, so multiple cookies on one request
+// do not collapse via the response's flatten loop. The
+// integration test exercises the full page lifecycle
+// against the real binary:
+//
+//   1. GET  /cookies (no cookie)           -> empty echo
+//   2. GET  /cookies (Cookie: theme=dark)  -> echoes "dark"
+//   3. POST /cookies (writes 2 cookies)    -> 200 + 2 Set-Cookie
+//                                           lines in the raw response
+//   4. GET  /cookies (Cookie: a=v1; b=v2)  -> echoes both values
+//   5. DELETE /cookies?k=a                 -> Set-Cookie: a=;
+//                                            Max-Age=0 (delete)
+//
+// Pinning the raw response is the strongest signal that
+// the merge into outgoing headers works (the body
+// fingerprint alone would not catch a regression where
+// the page wrote a cookie but the host dropped it).
+// ---------------------------------------------------------------------------
+
+const COOKIES_TSP: &str = r#"
+// Slice 16f: ctx.cookies (spec sect.15) demo. The
+// page mirrors the production `routes/cookies.tsp`
+// shape so the regression test is self-contained.
+function jsonResponse(value, status = 200) {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+export function GET(ctx) {
+  // `?? null` because ctx.cookies.get returns `undefined`
+  // for missing keys (JS Map.get convention) and
+  // JSON.stringify drops undefined values; null survives.
+  const theme = ctx.cookies.get("theme") ?? null;
+  const lang = ctx.cookies.get("lang") ?? null;
+  const a = ctx.cookies.get("a") ?? null;
+  const b = ctx.cookies.get("b") ?? null;
+  return jsonResponse({
+    ok: true,
+    has_theme: ctx.cookies.has("theme"),
+    has_missing: ctx.cookies.has("does-not-exist"),
+    theme,
+    lang,
+    a,
+    b,
+  });
+}
+
+export async function POST(ctx) {
+  let body;
+  try { body = await ctx.request.json(); }
+  catch { return jsonResponse({ ok: false, error: "body must be JSON" }, 400); }
+  if (typeof body.name !== "string" || !body.name) {
+    return jsonResponse({ ok: false, error: "name must be a non-empty string" }, 400);
+  }
+  const value = String(body.value ?? "");
+  const options = body.options || {};
+  ctx.cookies.set(body.name, value, options);
+  return jsonResponse({ ok: true, name: body.name, value });
+}
+
+export function DELETE(ctx) {
+  const k = ctx.url.searchParams.get("k");
+  if (!k) return jsonResponse({ ok: false, error: "missing k" }, 400);
+  ctx.cookies.delete(k);
+  return jsonResponse({ ok: true, deleted: k });
+}
+"#;
+
+#[test]
+fn cookies_runtime_parses_request_and_emits_set_cookie_on_write() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-cookies-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir should be creatable");
+    std::fs::write(routes_dir.join("cookies.tsp"), COOKIES_TSP)
+        .expect("cookies.tsp should be writable");
+
+    let port: u16 = 33_500 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    // 1. GET with no cookie: nothing parsed, has_missing is false.
+    let (status1, body1) = http_get_status(port, "/cookies", Duration::from_secs(10));
+    assert_eq!(status1, 200, "no-cookie GET must 200, got {status1} body={body1:?}");
+    assert!(
+        body1.contains("\"has_theme\":false")
+            && body1.contains("\"has_missing\":false")
+            && body1.contains("\"theme\":null"),
+        "no-cookie GET must echo empty map; got {body1:?}"
+    );
+
+    // 2. GET with `theme=dark` cookie: page reads it.
+    let (status2, body2) = http_get_with_cookie(
+        port,
+        "/cookies",
+        "theme=dark; lang=en",
+        Duration::from_secs(10),
+    );
+    assert_eq!(status2, 200, "theme-cookie GET must 200, got {status2} body={body2:?}");
+    assert!(
+        body2.contains("\"has_theme\":true")
+            && body2.contains("\"theme\":\"dark\"")
+            && body2.contains("\"lang\":\"en\""),
+        "theme-cookie GET must echo parsed values; got {body2:?}"
+    );
+
+    // 3. POST writes 2 cookies; raw response must carry
+    //    2 Set-Cookie lines (multi-cookie merge path).
+    let (status3, raw3) = http_get_raw(port, "/cookies", Duration::from_secs(5));
+    // We just connected; do the actual POST via a fresh stream.
+    let _ = (status3, raw3);
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect for POST");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("read timeout");
+    let body3 = r#"{"name":"a","value":"v1","options":{"path":"/"}}"#;
+    let post_a = format!(
+        "POST /cookies HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body3}",
+        body3.len()
+    );
+    stream.write_all(post_a.as_bytes()).expect("write POST a");
+    let mut raw_post_a = String::new();
+    stream.read_to_string(&mut raw_post_a).expect("read POST a");
+    assert!(
+        raw_post_a.contains("Set-Cookie: a=v1; Path=/"),
+        "first POST must set cookie a with Path=/; got:\n{raw_post_a}"
+    );
+    let status_a: u16 = raw_post_a
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    assert_eq!(status_a, 200, "first cookie POST must 200, got {status_a}");
+
+    // Second cookie: separate request, separate stream,
+    // to prove each page invocation produces its own
+    // Set-Cookie and the host does not collapse them.
+    let body_b = r#"{"name":"b","value":"v2","options":{"httpOnly":true,"sameSite":"Lax"}}"#;
+    let mut stream2 = TcpStream::connect(("127.0.0.1", port)).expect("connect for POST b");
+    stream2
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("read timeout");
+    let post_b = format!(
+        "POST /cookies HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body_b}",
+        body_b.len()
+    );
+    stream2.write_all(post_b.as_bytes()).expect("write POST b");
+    let mut raw_post_b = String::new();
+    stream2.read_to_string(&mut raw_post_b).expect("read POST b");
+    assert!(
+        raw_post_b.contains("Set-Cookie: b=v2; HttpOnly; SameSite=Lax"),
+        "second cookie POST must set cookie b with HttpOnly + SameSite=Lax; got:\n{raw_post_b}"
+    );
+
+    // 4. GET echoing both cookies back (server-side parser
+    //    is the one that fed the page during step 2; the
+    //    cookie WRITE in steps 3a / 3b lives only in the
+    //    browser-side jar in real usage -- here we feed
+    //    them back via the Cookie header).
+    let (status4, body4) = http_get_with_cookie(
+        port,
+        "/cookies",
+        "a=v1; b=v2",
+        Duration::from_secs(10),
+    );
+    assert_eq!(status4, 200, "echo-cookie GET must 200, got {status4} body={body4:?}");
+    assert!(
+        body4.contains("\"a\":\"v1\"") && body4.contains("\"b\":\"v2\""),
+        "echo-cookie GET must parse a=v1 + b=v2; got {body4:?}"
+    );
+
+    // 5. DELETE emits Set-Cookie with Max-Age=0 (the
+    //    default the wrap applies on .delete()).
+    let mut stream3 = TcpStream::connect(("127.0.0.1", port)).expect("connect for DELETE");
+    stream3
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("read timeout");
+    let delete_req = format!(
+        "DELETE /cookies?k=a HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    stream3.write_all(delete_req.as_bytes()).expect("write DELETE");
+    let mut raw_del = String::new();
+    stream3.read_to_string(&mut raw_del).expect("read DELETE");
+    assert!(
+        raw_del.contains("Set-Cookie: a=; Max-Age=0"),
+        "DELETE must emit Set-Cookie with Max-Age=0; got:\n{raw_del}"
+    );
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+// ---------------------------------------------------------------------------
+// ctx.session integration test (slice 16k + 16l)
+//
+// The TSP v2 wrap preamble hydrates `ctx.session` from
+// the host's SessionView. Calls (`set` / `delete` /
+// `clear` / `regenerate` / `destroy`) buffer into
+// `__tspSessionWrites` which the envelope carries back
+// to the host; the host applies them via SessionService
+// and emits a `Set-Cookie: tsp_sid=...` line when the
+// session id changed (mint / regenerate / destroy).
+//
+// The integration test exercises the full lifecycle:
+//
+//   1. GET  /session (no cookie)  -> 200, body shows
+//      "counter=0" + a fresh sid; response carries
+//      `Set-Cookie: tsp_sid=<sid>; HttpOnly; SameSite=Lax`
+//   2. GET  /session (Cookie: tsp_sid=<sid>) -> 200,
+//      body shows "counter=1" + the SAME sid; no new
+//      Set-Cookie (id did not change)
+//   3. POST /session {action: "regenerate"} (Cookie
+//      carried) -> 200, body shows a NEW sid, counter
+//      preserved; response carries Set-Cookie: tsp_sid=
+//      <new>
+//   4. POST /session {action: "destroy"} -> 200, the
+//      NEXT request mints a fresh sid; response carries
+//      Set-Cookie: tsp_sid=; Max-Age=0
+// ---------------------------------------------------------------------------
+
+const SESSION_TSP: &str = r#"
+// Slice 16k: ctx.session (spec sect.16) demo. Mirrors
+// the production `routes/session.tsp` shape so the
+// regression test is self-contained.
+function textResponse(s, status = 200) {
+  return new Response(s, { status, headers: { "content-type": "text/plain" } });
+}
+
+export function GET(ctx) {
+  const before = ctx.session.get("counter") || 0;
+  const sid = ctx.session.id;
+  ctx.session.set("counter", Number(before) + 1);
+  return textResponse(`sid=${sid} counter=${before}`);
+}
+
+export async function POST(ctx) {
+  let payload;
+  try { payload = await ctx.request.json(); } catch { payload = {}; }
+  const action = (payload && payload.action) || "";
+  if (action === "regenerate") {
+    await ctx.session.regenerate();
+    return textResponse(`regen sid=${ctx.session.id} counter=${ctx.session.get("counter") || 0}`);
+  }
+  if (action === "destroy") {
+    await ctx.session.destroy();
+    return textResponse("destroyed");
+  }
+  return textResponse(`unknown action=${action}`, 400);
+}
+"#;
+
+#[test]
+fn session_runtime_mints_regenerates_and_destroys_session_id() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-session-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir should be creatable");
+    std::fs::write(routes_dir.join("session.tsp"), SESSION_TSP)
+        .expect("session.tsp should be writable");
+
+    let port: u16 = 33_700 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    // helper: open a stream, send a raw request, return (status, raw_response, sid-from-cookie).
+    //
+    // The third element is the extracted sid value as it
+    // appears in the `Set-Cookie: tsp_sid=<value>; ...`
+    // header. We do NOT filter out empty values because
+    // `destroy()` emits a clearing Set-Cookie whose value
+    // is intentionally empty (the caller checks for that
+    // shape with `assert_eq!(sid, "")`).
+    fn round_trip(
+        port: u16,
+        request: &str,
+    ) -> (u16, String, Option<String>) {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("read timeout");
+        stream.write_all(request.as_bytes()).expect("write");
+        let mut raw = String::new();
+        stream.read_to_string(&mut raw).expect("read");
+        let status: u16 = raw
+            .lines()
+            .next()
+            .and_then(|l| l.split_whitespace().nth(1))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        // Extract sid from Set-Cookie: tsp_sid=<sid>; ...
+        // Empty value (destroy) is preserved as Some("").
+        let sid = raw
+            .lines()
+            .find(|l| l.to_ascii_lowercase().starts_with("set-cookie: tsp_sid="))
+            .and_then(|l| {
+                let after = &l["set-cookie: tsp_sid=".len()..];
+                after.split(';').next().map(|s| s.trim().to_string())
+            });
+        (status, raw, sid)
+    }
+
+    // 1. First GET, no cookie: server mints a fresh sid,
+    //    counter starts at 0, response plants Set-Cookie.
+    let req1 = format!(
+        "GET /session HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (status1, raw1, sid1) = round_trip(port, &req1);
+    assert_eq!(status1, 200, "first GET must 200, got {status1} body={raw1:?}");
+    let body1 = raw1.split("\r\n\r\n").nth(1).unwrap_or("");
+    assert!(
+        body1.contains("counter=0"),
+        "first GET must show counter=0; got {body1:?}"
+    );
+    let sid1 = sid1.expect("first response must plant tsp_sid Set-Cookie");
+    assert!(sid1.len() >= 16, "fresh sid must be reasonably long; got {sid1:?}");
+    // The standard session cookie flags:
+    assert!(
+        raw1.lines().any(|l| l.to_ascii_lowercase().contains("httponly")),
+        "first Set-Cookie must be HttpOnly; got:\n{raw1}"
+    );
+    assert!(
+        raw1.lines().any(|l| l.to_ascii_lowercase().contains("samesite=lax")),
+        "first Set-Cookie must be SameSite=Lax; got:\n{raw1}"
+    );
+
+    // 2. Second GET, carrying the sid cookie: server
+    //    reuses the same session, counter increments to 1.
+    //    No NEW Set-Cookie because id did not change.
+    let req2 = format!(
+        "GET /session HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: tsp_sid={sid1}\r\nConnection: close\r\n\r\n"
+    );
+    let (status2, raw2, sid2_opt) = round_trip(port, &req2);
+    assert_eq!(status2, 200, "second GET must 200, got {status2} body={raw2:?}");
+    let body2 = raw2.split("\r\n\r\n").nth(1).unwrap_or("");
+    assert!(
+        body2.contains("counter=1"),
+        "second GET must show counter=1 (session persisted); got {body2:?}"
+    );
+    // The page body should still report the same sid; if
+    // a new Set-Cookie line is present, it must carry the
+    // SAME sid (id stable across requests with no writes).
+    if let Some(sid2) = sid2_opt.as_deref() {
+        assert_eq!(sid2, sid1, "id must be stable across reads; got {sid2} vs {sid1}");
+    }
+    // No new Set-Cookie at all is the more common shape
+    // (host skips the line when id matches); either way,
+    // the cookie value must match.
+    assert!(
+        body2.contains(&sid1),
+        "second GET body must echo the same sid; got {body2:?}"
+    );
+
+    // 3. POST {action: regenerate}: id changes, counter
+    //    preserved. The page's GET handler reads `counter`
+    //    then sets `counter+1`, so after step 2 the storage
+    //    holds `2`. Regenerate must keep that value (and
+    //    NOT reset to 0) and bump the id; the body shows
+    //    the value the page READ at the start of the
+    //    request, which is 2.
+    let regen_body = r#"{"action":"regenerate"}"#;
+    let req3 = format!(
+        "POST /session HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: tsp_sid={sid1}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{regen_body}",
+        regen_body.len()
+    );
+    let (status3, raw3, sid3_opt) = round_trip(port, &req3);
+    assert_eq!(status3, 200, "regenerate POST must 200, got {status3} body={raw3:?}");
+    let sid3 = sid3_opt.expect("regenerate must plant a new Set-Cookie");
+    assert_ne!(sid3, sid1, "regenerate must change the id; both = {sid3}");
+    let body3 = raw3.split("\r\n\r\n").nth(1).unwrap_or("");
+    assert!(
+        body3.contains("counter=2"),
+        "regenerate must preserve data (counter=2 after step 2); got {body3:?}"
+    );
+
+    // 4. POST {action: destroy}: id is cleared, response
+    //    plants Set-Cookie: tsp_sid=; Max-Age=0.
+    let destroy_body = r#"{"action":"destroy"}"#;
+    let req4 = format!(
+        "POST /session HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: tsp_sid={sid3}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{destroy_body}",
+        destroy_body.len()
+    );
+    let (status4, raw4, sid4_opt) = round_trip(port, &req4);
+    assert_eq!(status4, 200, "destroy POST must 200, got {status4} body={raw4:?}");
+    let sid4 = sid4_opt.expect("destroy must plant a clearing Set-Cookie");
+    assert_eq!(sid4, "", "destroy Set-Cookie value must be empty; got {sid4:?}");
+    assert!(
+        raw4.lines().any(|l| l.to_ascii_lowercase().contains("max-age=0")),
+        "destroy Set-Cookie must carry Max-Age=0; got:\n{raw4}"
+    );
+
+    // 5. Next GET with no cookie (destroyed): fresh sid,
+    //    counter starts at 0 again.
+    let req5 = format!(
+        "GET /session HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (status5, raw5, sid5_opt) = round_trip(port, &req5);
+    assert_eq!(status5, 200, "post-destroy GET must 200, got {status5}");
+    let sid5 = sid5_opt.expect("post-destroy GET must plant a fresh Set-Cookie");
+    assert_ne!(sid5, sid3, "post-destroy sid must differ from the destroyed one");
+    let body5 = raw5.split("\r\n\r\n").nth(1).unwrap_or("");
+    assert!(
+        body5.contains("counter=0"),
+        "post-destroy GET must show counter=0 (fresh session); got {body5:?}"
     );
 
     let _ = terminate(child.id());

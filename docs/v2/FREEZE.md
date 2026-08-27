@@ -279,7 +279,59 @@ What this freezes for application code:
   `Bun.Cookie`, `Bun.Transpiler`. Pages needing them belong in the
   host layer, not in the import surface.
 
-Evidence: `tsp-v2-specification.md` §16, `tsp-v2-plan.md` §16, §17.3.
+In addition to the `tsp:*` importable names above, the
+`Context` argument the host injects into every page handler
+exposes a per-request view of the cross-request state the
+host itself owns. These are **not** `tsp:server` exports;
+they ride on the handler signature. The contract for them is:
+
+```text
+ctx.request       Web `Request` (read body, json, formData, etc.)
+ctx.url           URL parsed from the request path + query
+ctx.params        Route parameters (empty until dynamic segments land)
+ctx.cookies       (Amendment 1)  get/has/set/delete
+                  - get returns `undefined` for missing keys
+                    (JS `Map.get` convention; coalesce with
+                    `?? null` if the page wants JSON-stable
+                    output, since JSON.stringify drops
+                    `undefined` values)
+                  - set writes to a per-request buffer the
+                    async IIFE merges into the response
+                    `headers` as separate `Set-Cookie` lines
+                    (multi-value merge, no header flatten)
+                  - delete emits `Set-Cookie: <name>=; Max-Age=0`
+                    by default
+ctx.session       (Amendment 1)  id / get / has / set / delete
+                  / clear / regenerate / destroy
+                  - `id` is the host's `SessionView.id`; on a
+                    first request this is a freshly-minted id,
+                    on subsequent requests it is the value of
+                    the `tsp_sid` cookie
+                  - writes buffer into the envelope's
+                    `session_writes` array; the host applies
+                    them to its process-lifetime SessionService
+                    and plants `Set-Cookie: tsp_sid=...` on the
+                    response when the id changes (new /
+                    regenerate / destroy)
+                  - backends: in-memory (default, dev) or
+                    Redis (production); plan §18
+ctx.services      host-owned service descriptors, snapshot
+                  per request (plan §17.5)
+ctx.fragment      fragment URL builder (plan §14)
+```
+
+The host's `SessionService` (with `MemoryBackend` and
+`RedisBackend` implementations) and the response builder
+that merges cookie / session writes are part of the
+contract; tests pin both at the unit level
+(`session_backend.rs` + `host.rs` Set-Cookie emission
+tests) and at the e2e level (the
+`session_runtime_mints_regenerates_and_destroys_session_id`
+and
+`cookies_runtime_parses_request_and_emits_set_cookie_on_write`
+tests in `tests/start_order.rs`).
+
+Evidence: `tsp-v2-specification.md` §16, `tsp-v2-plan.md` §16, §17.3, §18.
 
 ### 9. JSX child / attribute escaping semantics
 
@@ -551,6 +603,20 @@ imported value is a stateless library or a factory (`sql`,
 Pages that need cross-request state must go through `ctx.session`
 (plan §18) or `ctx.services` (plan §17.5), not through `tsp:server`.
 
+**Companion `ctx.*` surfaces.** Slices 16f (`ctx.cookies`) and
+16k/l (`ctx.session`) ride on the auto-injected `Context`
+argument, not on `tsp:server` imports. They are host-owned
+state with a per-request view: the host's `SessionService`
+holds the live session map (in-memory or Redis), the wrap
+preamble buffers `ctx.cookies.set` / `ctx.session.set` writes,
+and the host merges them into the response (Set-Cookie for
+cookies, session_writes for session, Set-Cookie: tsp_sid
+on id change). Both are pinned by the e2e tests in
+`tests/start_order.rs`:
+`cookies_runtime_parses_request_and_emits_set_cookie_on_write`
+and
+`session_runtime_mints_regenerates_and_destroys_session_id`.
+
 **High-risk bun builtins explicitly excluded.** `Bun.serve`,
 `Bun.spawn`, `Bun.FFI`, `Bun.S3Client`, `Bun.connect`, `Bun.mmap`,
 `Bun.Cookie`, `Bun.Transpiler` are deliberately **not** exposed.
@@ -573,11 +639,15 @@ in at JSX-expansion time. No code that shipped on or before the
 v2.0 sign-off imported these names, so this is a documentation
 correction rather than a behaviour change.
 
-**Verification.** 228 tests green as of this amendment
-(202 lib + 4 worker_integration + 15 process_model + 7 start_order
+**Verification.** 230 tests green as of this amendment
+(202 lib + 4 worker_integration + 15 process_model + 9 start_order
 e2e, including `util_namespace_surfaces_bun_builtins_for_pages` for
 the new `util` namespace, `zod_runtime_compiled_into_wrap_serves_validated_schemas`
 for `zod`, `password_runtime_through_bun_password_serves_hashed_passwords`
 for `password`, `sql_runtime_uses_bun_native_pool_for_page_local_datasource`
-for `sql`, and `nanoid_runtime_compiled_into_wrap_serves_distinct_ids`
-for the nanoid family).
+for `sql`, `nanoid_runtime_compiled_into_wrap_serves_distinct_ids`
+for the nanoid family, and — added with this amendment —
+`cookies_runtime_parses_request_and_emits_set_cookie_on_write` for
+`ctx.cookies` (slice 16f) and
+`session_runtime_mints_regenerates_and_destroys_session_id` for
+`ctx.session` (slice 16k/l)).
