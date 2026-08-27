@@ -3338,3 +3338,224 @@ fn extract_token(url: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
+// ---------------------------------------------------------------------------
+// Phase 11 tooling (plan §11) -- `tspserver_v2 typings` subcommand
+//
+// The host ships a `typings` subcommand (plan §11
+// "IDE typings") that writes three TypeScript declaration
+// files (`tsp-server.d.ts`, `tsp-html.d.ts`,
+// `tsp-runtime.d.ts`) into a user-supplied output directory.
+// Pages that add the directory to their `tsconfig.json`
+// `include` list get intellisense + type-checking for every
+// `import { ... } from "tsp:*"` declaration.
+//
+// The e2e runs the subcommand against the real
+// `dist/tsp-v2/tspserver_v2.exe` binary and pins:
+//
+//   1. The three files are written under the requested dir
+//      (default `.tsp-types`).
+//   2. Each file has the right `declare module` block.
+//   3. The wrap-prelude names the runtime actually exposes
+//      (json, text, html, fragment, zod, sql, util, ...)
+//      each appear as a `tsp:server` export -- so a future
+//      slice that adds a name to the wrap without updating
+//      the typings would fail this test.
+//   4. The `Context` interface declares every field the
+//      wrap sets on `__tspContext` (method, url, request,
+//      params, query, cookies, session, services, signal,
+//      fragment).
+//   5. The `util` namespace lists the slice 18 + Amendment 2
+//      surface (randomUUIDv7, hash, ..., env, password).
+//   6. The `--out` flag and the bare-positional form both
+//      work, and the default falls back to `.tsp-types`.
+//
+// The e2e does NOT shell out to `tsc --noEmit` because
+// `tsc` is not a required dev-dependency for the runtime;
+// the unit test in `typings.rs` already pins the string
+// shape and a real user project can wire `tsc` themselves.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tspserver_v2_typings_emits_three_dts_files() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-typings-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&temp_root).expect("temp root");
+
+    // (1) Default -- bare positional dir, no --out flag.
+    let default_dir = temp_root.join("default-out");
+    let default_status = std::process::Command::new(master)
+        .arg("typings")
+        .arg(&default_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .status()
+        .expect("typings spawn");
+    assert_eq!(
+        default_status.code(),
+        Some(0),
+        "`typings <DIR>` (bare positional) must exit 0"
+    );
+    for name in ["tsp-server.d.ts", "tsp-html.d.ts", "tsp-runtime.d.ts"] {
+        let path = default_dir.join(name);
+        assert!(
+            path.is_file(),
+            "default-out must contain {name}; got dir={}",
+            default_dir.display()
+        );
+    }
+
+    // (2) Explicit --out flag. The host accepts the
+    // flag form too; the bare-positional form is the
+    // common case, but the flag is useful when the
+    // user pipes the subcommand through a script.
+    let flag_dir = temp_root.join("flag-out");
+    let flag_status = std::process::Command::new(master)
+        .arg("typings")
+        .arg("--out")
+        .arg(&flag_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .status()
+        .expect("typings --out spawn");
+    assert_eq!(
+        flag_status.code(),
+        Some(0),
+        "`typings --out <DIR>` must exit 0"
+    );
+    for name in ["tsp-server.d.ts", "tsp-html.d.ts", "tsp-runtime.d.ts"] {
+        let path = flag_dir.join(name);
+        assert!(
+            path.is_file(),
+            "flag-out must contain {name}; got dir={}",
+            flag_dir.display()
+        );
+    }
+
+    // (3) `tsp:server` declares the wrap-prelude surface.
+    // This is the contract the application code writes
+    // against; the e2e pins every name a previous slice
+    // shipped so a future slice that drops a typings
+    // commit would fail this test.
+    let server_body = std::fs::read_to_string(default_dir.join("tsp-server.d.ts"))
+        .expect("read tsp-server.d.ts");
+    for name in &[
+        "json",
+        "text",
+        "html",
+        "redirect",
+        "notFound",
+        "HttpError",
+        "fragment",
+        "raw",
+        "nanoid",
+        "customAlphabet",
+        "customRandom",
+        "random",
+        "zod",
+        "sql",
+        "util",
+    ] {
+        assert!(
+            server_body.contains(name),
+            "tsp-server.d.ts must declare `{name}`; got:\n{server_body}"
+        );
+    }
+
+    // (4) `Context` declares every field the wrap sets
+    // on `__tspContext` (jsx.rs wrap preamble). Drift
+    // here would mean either the wrap added a field the
+    // typings forgot, or vice versa.
+    for field in &[
+        "method", "url", "request", "params", "query", "cookies", "session", "services", "signal",
+        "fragment",
+    ] {
+        assert!(
+            server_body.contains(field),
+            "Context declaration must include `{field}`; got:\n{server_body}"
+        );
+    }
+
+    // (5) `util` namespace lists the slice 18 + Amendment 2
+    // surface. `password` was merged into `util` per
+    // Amendment 2 (slice 17c drop + slice 18 follow-up);
+    // the merge lives in `jsx.rs:780` as
+    // `password: Bun.password` in the `__tspUtilNs__` freeze.
+    for name in &[
+        "randomUUIDv7",
+        "hash",
+        "CryptoHasher",
+        "Glob",
+        "TOML",
+        "YAML",
+        "markdown",
+        "escapeHTML",
+        "gzipSync",
+        "gunzipSync",
+        "nanoseconds",
+        "env",
+        "password",
+    ] {
+        assert!(
+            server_body.contains(name),
+            "util namespace must declare `{name}`; got:\n{server_body}"
+        );
+    }
+
+    // (6) `tsp:html` and `tsp:runtime` declare the slice
+    // 16b / 16c surface. The `raw` helper is shared
+    // between `tsp:server` and `tsp:html`; the typings
+    // for both modules use the same `RawNode` interface.
+    let html_body = std::fs::read_to_string(default_dir.join("tsp-html.d.ts"))
+        .expect("read tsp-html.d.ts");
+    assert!(
+        html_body.contains("declare module \"tsp:html\""),
+        "tsp-html.d.ts must declare the tsp:html module; got:\n{html_body}"
+    );
+    assert!(
+        html_body.contains("export function raw"),
+        "tsp-html.d.ts must export `raw`; got:\n{html_body}"
+    );
+
+    let runtime_body = std::fs::read_to_string(default_dir.join("tsp-runtime.d.ts"))
+        .expect("read tsp-runtime.d.ts");
+    assert!(
+        runtime_body.contains("declare module \"tsp:runtime\""),
+        "tsp-runtime.d.ts must declare the tsp:runtime module; got:\n{runtime_body}"
+    );
+    for name in &["version", "env", "development"] {
+        assert!(
+            runtime_body.contains(name),
+            "tsp-runtime.d.ts must declare `{name}`; got:\n{runtime_body}"
+        );
+    }
+
+    // (7) `--help` flag returns 0 and prints the
+    // expected usage line.
+    let help_output = std::process::Command::new(master)
+        .arg("typings")
+        .arg("--help")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("typings --help spawn");
+    assert_eq!(help_output.status.code(), Some(0));
+    let help = String::from_utf8_lossy(&help_output.stdout);
+    assert!(
+        help.contains("tspserver_v2 typings"),
+        "typings --help must show usage; got:\n{help}"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+

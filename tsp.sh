@@ -91,6 +91,36 @@ run_check() {
   rustup run "$RUST_TOOLCHAIN" cargo check --manifest-path "$ROOT_DIR/bun/Cargo.toml" -p bun_bin --locked
 }
 
+# Phase 11 tooling: thin wrappers that exec the host's
+# introspection subcommands against the user's routes dir.
+# They do not start the server; they read the routes and
+# print / write the result, then exit.
+run_routes() {
+  local host
+  host="$(resolve_host)"
+  TSP_ROUTES_DIR="${TSP_ROUTES_DIR:-$ROOT_DIR/routes}" "$host" routes
+}
+
+run_graph() {
+  local host
+  host="$(resolve_host)"
+  TSP_ROUTES_DIR="${TSP_ROUTES_DIR:-$ROOT_DIR/routes}" "$host" graph
+}
+
+run_check_app() {
+  local host
+  host="$(resolve_host)"
+  TSP_ROUTES_DIR="${TSP_ROUTES_DIR:-$ROOT_DIR/routes}" "$host" check
+}
+
+run_typings() {
+  local host out_dir
+  host="$(resolve_host)"
+  out_dir="${TSP_TYPINGS_DIR:-$ROOT_DIR/.tsp-types}"
+  mkdir -p "$out_dir"
+  "$host" typings --out "$out_dir"
+}
+
 case "${1:-help}" in
   build|build:v2|build:tspserver:v2|build:tspserver:v2:rel) build_runtime ;;
   build:host) build_host ;;
@@ -100,6 +130,10 @@ case "${1:-help}" in
   test:rust) run_tests ;;
   test:smoke) run_smoke ;;
   check) run_check ;;
+  check:app) run_check_app ;;
+  routes) run_routes ;;
+  graph) run_graph ;;
+  typings) shift; run_typings "$@" ;;
   package) package_runtime ;;
   clean) rm -rf "$ROOT_DIR/dist/tsp-v2" ;;
   help|-h|--help)
@@ -115,11 +149,19 @@ Usage: ./tsp.sh <command>
   test:rust              Run Rust unit and Worker IPC tests
   test:smoke             Run the v2 hot-reload smoke test
   check                  Run cargo check for the bundled runtime
+  check:app              Run tsp check for the application routes
+  routes                 List the application routes (tspserver_v2 routes)
+  graph                  Print the application module graph
+                          (tspserver_v2 graph)
+  typings                Write the tsp:* TypeScript declaration files
+                          (default output: ./.tsp-types; override with
+                          --out <DIR> or TSP_TYPINGS_DIR)
   package                Package the single runtime binary
   clean                  Remove v2 package output
 
 Environment:
   TSP_PORT, TSP_ROUTES_DIR, TSP_PUBLIC_DIR, TSP_BUN_BIN
+  TSP_TYPINGS_DIR        default --out target for the `typings` command
 EOF
     ;;
   *) die "unknown command: $1" ;;

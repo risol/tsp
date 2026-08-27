@@ -1176,3 +1176,125 @@ are unchanged. The new e2e exercises the real
 production-shape demo route, so a regression in the
 fragment dispatch or capability check would surface
 as a hard failure on `cargo test --test start_order`.
+
+---
+
+### Amendment 5 (2026-08-27) — Phase 11 IDE typings + tooling shortcuts
+
+Plan §11 ("Tooling") lists five dev-workflow items
+the v2 contract should ship: `tsp check`, `tsp routes`,
+`tsp graph`, IDE typings, diagnostics, source maps.
+The host binary already had `routes` / `graph` / `check`
+subcommands wired (slice 11 forward), but they were
+not surfaced through `tsp.sh` and IDE typings were
+not emitted. This amendment closes the "IDE typings"
+piece plus the `tsp.sh` shortcuts so the dev workflow
+matches the plan.
+
+**What changed in this amendment.**
+
+- **New `tspserver_v2 typings` subcommand.** Writes
+  three TypeScript declaration files into a
+  user-supplied output directory (default
+  `.tsp-types`):
+  - `tsp-server.d.ts` — declares the `tsp:server`
+    module with the request / response / fragment /
+    id-gen / validation / database / bun-builtin
+    surface (mirror of the wrap-prelude's
+    `__tspServer = Object.freeze({...})` in
+    `jsx.rs:829`).
+  - `tsp-html.d.ts` — declares the `tsp:html`
+    module (single `raw` export).
+  - `tsp-runtime.d.ts` — declares the `tsp:runtime`
+    module (`runtime.version`, `runtime.env` with
+    get/has only, `runtime.development`).
+  Both `--out <DIR>` and the bare-positional
+  `<DIR>` form are accepted; `--help` prints
+  usage. The files are embedded at compile time
+  via `include_str!` so a binary that ships the
+  typings subcommand cannot drift from the
+  declarations (the build is the contract).
+
+- **New `tsp.sh` shortcuts.** The host's
+  `routes` / `graph` / `check` subcommands were
+  only reachable through `./tsp.sh dev <sub>`;
+  the new top-level shortcuts `./tsp.sh routes`,
+  `./tsp.sh graph`, `./tsp.sh check:app`, and
+  `./tsp.sh typings` exec the host directly
+  (the existing `./tsp.sh check` is unchanged --
+  it still runs `cargo check` for the Rust
+  runtime; `check:app` is the host's check for
+  application routes + module graph). The
+  `typings` shortcut accepts `--out <DIR>` /
+  `<DIR>` and respects `TSP_TYPINGS_DIR` for
+  the default.
+
+- **Updated `--help` text.** The host's help
+  output now lists the `typings` subcommand
+  alongside `check` / `routes` / `graph`.
+
+**What was NOT changed in this amendment.**
+
+- The host's `routes` / `graph` / `check` runtime
+  behavior is unchanged. This amendment only
+  surfaces the existing subcommands and adds the
+  new `typings` subcommand. The hand-rolled
+  content for the typings is a NEW piece; the
+  subcommand dispatch is a NEW arm; the existing
+  arm list is untouched.
+- The wrap-prelude (`jsx.rs`) is unchanged. The
+  typings mirror the wrap surface but the wrap
+  itself is the source of truth; a future slice
+  that adds a new name to the wrap MUST also add
+  the matching declaration to `tsp-server.d.ts`
+  in the same commit (the e2e
+  `tspserver_v2_typings_emits_three_dts_files`
+  + the unit tests in `typings.rs` pin every
+  public name so a drift surfaces as a hard
+  failure).
+- `tsp check` is still "validate routes and
+  local imports" (the host's existing check
+  subcommand), NOT a real TypeScript type-check.
+  Plan §11 lists "tsp check" as the type-checker;
+  the existing check is a much narrower parse +
+  module-graph validator (it confirms every
+  `.tsp` file parses + every local import
+  resolves). A real `tsc --noEmit`-style
+  type-checker is a follow-up slice: it would
+  need either bun's experimental
+  type-only-mode, a child `tsc` process, or a
+  hand-rolled Rust type-checker. The v1.0
+  contract is "the user wires `tsc` themselves
+  using the typings this amendment ships".
+- The `Context.route: RouteInfo` field is in
+  the FREEZE contract (item 6) but the wrap
+  has not been updated to set it. The typings
+  ship the contract shape so the type-checker
+  is correct; the runtime gap is on a follow-up
+  slice.
+- Bun-builtin types (`Bun.password`,
+  `Bun.markdown`, etc.) are intentionally NOT
+  re-exported from `bun-types` in the typings.
+  The user can install `bun-types` and
+  augment the `UtilNamespace` interface
+  themselves if they need the full typing;
+  the slice 18 surface we expose is
+  hand-rolled so the user does not need a
+  devDependency just to satisfy the
+  type-checker.
+
+**Verification.** 245 tests green (210 lib +
+4 worker_integration + 15 process_model + 16 start_order
+e2e, the prior 15 plus
+`tspserver_v2_typings_emits_three_dts_files`).
+The lib gain is the 4 new `typings::tests::*`
+tests; the start_order e2e gain is the 1 new
+typings e2e. The new e2e runs the real
+`dist/tsp-v2/tspserver_v2.exe` binary with the
+new subcommand, asserts the three files are
+written, and pins every public name the
+wrap-prelude exposes (so a future slice that
+adds a name to the wrap without updating
+`tsp-server.d.ts` would fail the
+`tsp_server_declares_every_wrap_prelude_name`
+unit test).

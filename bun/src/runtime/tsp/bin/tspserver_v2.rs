@@ -36,6 +36,7 @@ use bun_runtime_tsp::services::load_counter_services_from_config;
 use bun_runtime_tsp::services::SESSION_STORE_CAP_DEFAULT;
 use bun_runtime_tsp::services::ServiceRegistry;
 use bun_runtime_tsp::session_backend::{MemoryBackend, RedisBackend, SessionBackend};
+use bun_runtime_tsp::typings;
 use bun_runtime_tsp::watcher::{self, WatchConfig};
 use bun_runtime_tsp::worker::pool::WorkerPool;
 use bun_runtime_tsp::worker::lifecycle::RecyclePolicy;
@@ -47,6 +48,7 @@ pub fn run() -> ExitCode {
         Some("check") => run_check(),
         Some("routes") => run_routes(),
         Some("graph") => run_graph(),
+        Some("typings") => run_typings(),
         Some("--help") | Some("-h") => {
             print_help();
             ExitCode::SUCCESS
@@ -287,7 +289,7 @@ fn resolve_routes_dir() -> PathBuf {
 
 fn print_help() {
     println!(
-        "TSP v2 commands:\n  tspserver_v2              run the native HTTP server\n  tspserver_v2 check       validate routes and local imports\n  tspserver_v2 routes      list filesystem routes and exports\n  tspserver_v2 graph       print the resolved module graph\n\nEnvironment:\n  TSP_ROUTES_DIR            route root (default: routes)\n  TSP_PUBLIC_DIR            public asset root (default: public)\n  TSP_PORT                  HTTP port (default: 3000)\n  TSP_WORKER_COUNT          embedded self-spawned worker processes (default: 1)\n  TSP_WORKER_MAX_IN_FLIGHT  max concurrent requests per worker (default: 2*count)\n  TSP_WORKER_MAX_REQUESTS   recycle each worker after N requests\n  TSP_WORKER_MAX_AGE_MS     recycle each worker after this many ms\n  TSP_WORKER_MAX_MEMORY_BYTES  recycle each worker after RSS reaches this\n  TSP_INVALIDATION_FILE     shared cross-worker invalidation log\n  TSP_MAX_BODY_BYTES         per-request body size cap; requests with\n                            Content-Length over this are rejected with\n                            413 Payload Too Large (default: 1 MiB)\n  TSP_CGROUP_ROOT           explicit Linux cgroup v2 parent directory\n  TSP_WORKER_MEMORY_MAX / TSP_WORKER_CPU_MAX / TSP_WORKER_PIDS_MAX  cgroup limits\n  TSP_REDIS_URL             optional Redis URL for the session backend\n  TSP_CONFIG                JSON file declaring config-driven custom\n                            services (default: tsp.config.json);\n                            supports `kind: counter` with `initial`\n  TSP_APPLICATION_NAME      application name registered in the registry (default: main)"
+        "TSP v2 commands:\n  tspserver_v2              run the native HTTP server\n  tspserver_v2 check       validate routes and local imports\n  tspserver_v2 routes      list filesystem routes and exports\n  tspserver_v2 graph       print the resolved module graph\n  tspserver_v2 typings     write tsp:* TypeScript declaration files\n\nEnvironment:\n  TSP_ROUTES_DIR            route root (default: routes)\n  TSP_PUBLIC_DIR            public asset root (default: public)\n  TSP_PORT                  HTTP port (default: 3000)\n  TSP_WORKER_COUNT          embedded self-spawned worker processes (default: 1)\n  TSP_WORKER_MAX_IN_FLIGHT  max concurrent requests per worker (default: 2*count)\n  TSP_WORKER_MAX_REQUESTS   recycle each worker after N requests\n  TSP_WORKER_MAX_AGE_MS     recycle each worker after this many ms\n  TSP_WORKER_MAX_MEMORY_BYTES  recycle each worker after RSS reaches this\n  TSP_INVALIDATION_FILE     shared cross-worker invalidation log\n  TSP_MAX_BODY_BYTES         per-request body size cap; requests with\n                            Content-Length over this are rejected with\n                            413 Payload Too Large (default: 1 MiB)\n  TSP_CGROUP_ROOT           explicit Linux cgroup v2 parent directory\n  TSP_WORKER_MEMORY_MAX / TSP_WORKER_CPU_MAX / TSP_WORKER_PIDS_MAX  cgroup limits\n  TSP_REDIS_URL             optional Redis URL for the session backend\n  TSP_CONFIG                JSON file declaring config-driven custom\n                            services (default: tsp.config.json);\n                            supports `kind: counter` with `initial`\n  TSP_APPLICATION_NAME      application name registered in the registry (default: main)"
     );
 }
 
@@ -394,6 +396,91 @@ fn run_graph() -> ExitCode {
             .join(",");
         println!("{}\timports=[{}]", node.path.display(), imports);
     }
+    ExitCode::SUCCESS
+}
+
+/// Phase 11 tooling (plan §11): write the three
+/// `tsp:*` declaration files (`tsp-server.d.ts`,
+/// `tsp-html.d.ts`, `tsp-runtime.d.ts`) into the
+/// user-supplied output directory (default `.tsp-types`).
+///
+/// Usage:
+///   tspserver_v2 typings                  # writes to ./.tsp-types
+///   tspserver_v2 typings <DIR>            # writes to <DIR>
+///   tspserver_v2 typings --out <DIR>      # same
+///
+/// The hand-rolled content lives in `bun/src/runtime/tsp/typings.rs`
+/// (loaded via `include_str!` from `tsp-types/` at the repo
+/// root). A drift between the runtime surface and the
+/// typings is pinned by the unit test in `typings.rs`
+/// (asserts the public exports are still wired correctly)
+/// and by the e2e in `start_order.rs`
+/// (`tspserver_v2_typings_emits_three_dts_files`).
+fn run_typings() -> ExitCode {
+    // Parse the second positional arg (after "typings") as
+    // the output dir. We accept both `<DIR>` and
+    // `--out <DIR>` for ergonomics. The flag-form matches
+    // other dev tools; the bare-positional-form matches
+    // `tsc --outDir`.
+    let raw_args: Vec<String> = std::env::args().skip(2).collect();
+    let mut out_dir: Option<String> = None;
+    let mut i = 0;
+    while i < raw_args.len() {
+        let arg = &raw_args[i];
+        if arg == "--out" {
+            if i + 1 >= raw_args.len() {
+                eprintln!("tsp typings: --out requires a directory argument");
+                return ExitCode::from(2);
+            }
+            out_dir = Some(raw_args[i + 1].clone());
+            i += 2;
+        } else if arg == "--help" || arg == "-h" {
+            println!(
+                "Usage: tspserver_v2 typings [--out <DIR>]\n\n\
+                 Writes the three `tsp:*` TypeScript declaration files\n\
+                 (tsp-server.d.ts, tsp-html.d.ts, tsp-runtime.d.ts) into\n\
+                 <DIR> (default: .tsp-types). Add <DIR> to your\n\
+                 `tsconfig.json` `include` list to enable type-checking\n\
+                 of `import {{ ... }} from \"tsp:*\"` declarations."
+            );
+            return ExitCode::SUCCESS;
+        } else if out_dir.is_none() {
+            out_dir = Some(arg.clone());
+            i += 1;
+        } else {
+            eprintln!("tsp typings: unexpected argument `{arg}`");
+            return ExitCode::from(2);
+        }
+    }
+    let out_dir = out_dir.unwrap_or_else(|| ".tsp-types".to_string());
+    let out_path = PathBuf::from(&out_dir);
+
+    if let Err(error) = std::fs::create_dir_all(&out_path) {
+        eprintln!("tsp typings: cannot create {out_dir}: {error}");
+        return ExitCode::from(2);
+    }
+
+    let files: [(&str, &str); 3] = [
+        ("tsp-server.d.ts", typings::tsp_server_dts()),
+        ("tsp-html.d.ts", typings::tsp_html_dts()),
+        ("tsp-runtime.d.ts", typings::tsp_runtime_dts()),
+    ];
+    for (name, content) in &files {
+        let target = out_path.join(name);
+        if let Err(error) = std::fs::write(&target, content) {
+            eprintln!(
+                "tsp typings: cannot write {}: {error}",
+                target.display()
+            );
+            return ExitCode::from(2);
+        }
+        println!("wrote {}", target.display());
+    }
+    println!(
+        "tsp typings: {} file(s) written to {}",
+        files.len(),
+        out_path.display()
+    );
     ExitCode::SUCCESS
 }
 
