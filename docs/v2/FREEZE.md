@@ -726,6 +726,30 @@ also uses `ServiceRegistry::iter_names` (NOT
 `snapshot`) so the summary line does not bump a
 counter just by printing it.
 
+**Body size cap + 413 (spec sect.14.2).** The host
+reads `TSP_MAX_BODY_BYTES` (default 1 MiB) at boot
+and rejects any request whose `Content-Length` header
+exceeds the cap with a 413 Payload Too Large
+response, without buffering the body. The error code
+is `TSP2002` and the body carries `request body
+exceeds limit` so a misconfigured client (e.g. a
+test fixture that forgot to set the cap) fails fast
+at the wire boundary rather than at the page. The
+e2e test `body_size_cap_rejects_oversized_requests_with_413`
+in `tests/start_order.rs` runs the real binary with
+`TSP_MAX_BODY_BYTES=200` and pins four scenarios:
+50-byte body -> 200 (echo len=50), 200-byte body
+(at the cap) -> 200 (== cap is allowed), 201-byte
+body -> 413 + TSP2002, and 1 KiB body (5x the cap) ->
+413 + TSP2002. The cap check happens before any body
+bytes are buffered, so a 50 MiB multipart upload
+attempt is rejected with 413 + a small error body
+instead of allocating the full 50 MiB in the host
+process. Note: chunked transfer encoding (no
+`Content-Length`) is not supported today -- such
+requests are treated as empty bodies; a future
+slice should add a streaming cap for that path.
+
 **High-risk bun builtins explicitly excluded.** `Bun.serve`,
 `Bun.spawn`, `Bun.FFI`, `Bun.S3Client`, `Bun.connect`, `Bun.mmap`,
 `Bun.Cookie`, `Bun.Transpiler` are deliberately **not** exposed.
@@ -748,8 +772,8 @@ in at JSX-expansion time. No code that shipped on or before the
 v2.0 sign-off imported these names, so this is a documentation
 correction rather than a behaviour change.
 
-**Verification.** 233 tests green as of this amendment
-(202 lib + 4 worker_integration + 15 process_model + 12 start_order
+**Verification.** 234 tests green as of this amendment
+(202 lib + 4 worker_integration + 15 process_model + 13 start_order
 e2e, including `util_namespace_surfaces_bun_builtins_for_pages` for
 the new `util` namespace, `zod_runtime_compiled_into_wrap_serves_validated_schemas`
 for `zod`, `password_runtime_through_bun_password_serves_hashed_passwords`
@@ -763,9 +787,11 @@ for the nanoid family, and — added with this amendment —
 `dynamic_segments_and_catch_all_route_to_pages_with_params` for
 dynamic route segments + catch-all (slice 16e),
 `multipart_form_data_round_trips_through_real_binary` for
-`ctx.request.formData()` (slice 16g), and
+`ctx.request.formData()` (slice 16g),
 `config_driven_counter_service_increments_across_requests` for
-config-driven custom services (slice 22 prototype)).
+config-driven custom services (slice 22 prototype), and
+`body_size_cap_rejects_oversized_requests_with_413` for the
+`TSP_MAX_BODY_BYTES` cap and 413 path (spec sect.14.2)).
 
 ### Amendment 2 (2026-08-27) — `password` merged into `util`
 
@@ -860,8 +886,8 @@ to maintain).
   e2e test, just routed through `util.password`
   instead of the top-level `password`.
 
-**Verification.** Same 233 tests green (202 lib +
-4 worker_integration + 15 process_model + 12 start_order
+**Verification.** Same 234 tests green (202 lib +
+4 worker_integration + 15 process_model + 13 start_order
 e2e). The 3 password unit tests in `jsx.rs` change
 contract (one now asserts a negative -- the rewriter
 rejects the old shape) but they still cover the same
