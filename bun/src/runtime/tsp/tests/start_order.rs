@@ -1775,6 +1775,200 @@ fn session_runtime_mints_regenerates_and_destroys_session_id() {
 }
 
 // ---------------------------------------------------------------------------
+// Dynamic route segments + catch-all integration test (slice 16e)
+//
+// The router already ships static / dynamic / catch-all matching
+// (slices 16e / 16f, see `bun/src/runtime/tsp/router.rs::lookup`)
+// and the host threads the matched `params` into the `Context`
+// the wrap preamble hydrates. The integration test exercises
+// the full page lifecycle against the real binary to prove the
+// wire path is sound end-to-end:
+//
+//   routes/
+//     users/[id].tsp           -> /users/:id
+//     users/new.tsp            -> /users/new  (static beats dynamic)
+//     posts/[year]/[month]/[slug].tsp
+//                              -> /posts/:year/:month/:slug
+//     files/[...path].tsp      -> /files/* (catch-all)
+//
+//   1. GET /users/123          -> params.id = "123"
+//   2. GET /users/abc-def      -> params.id = "abc-def" (hyphens allowed)
+//   3. GET /users/new          -> static `new.tsp` wins over [id]
+//   4. GET /users/             -> 404 (no index.tsp)
+//   5. GET /posts/2024/05/hello
+//                              -> all three params populated
+//   6. GET /files/a/b/c        -> catch-all path = "a/b/c"
+//   7. GET /files              -> catch-all path = "" (zero segments)
+//   8. GET /nope               -> 404
+// ---------------------------------------------------------------------------
+
+const DYNA_USER_ID_TSP: &str = r#"
+// Slice 16e: dynamic segment `[id]` (spec sect.11.3).
+// Mirrors the production `routes/users/[id].tsp` shape.
+export function GET(ctx) {
+  return new Response(JSON.stringify({
+    ok: true,
+    route: "users/[id]",
+    id: ctx.params.id ?? null,
+    path: ctx.url.pathname,
+  }), { status: 200, headers: { "content-type": "application/json" } });
+}
+"#;
+
+const DYNA_USER_NEW_TSP: &str = r#"
+// Static `new.tsp` lives next to `[id].tsp`; spec sect.11.6
+// requires the static route to win for exact `/users/new`.
+export function GET(_ctx) {
+  return new Response(JSON.stringify({
+    ok: true,
+    route: "users/new",
+    static: true,
+  }), { status: 200, headers: { "content-type": "application/json" } });
+}
+"#;
+
+const DYNA_POST_TSP: &str = r#"
+// Three dynamic segments in one route: `[year]/[month]/[slug]`.
+export function GET(ctx) {
+  return new Response(JSON.stringify({
+    ok: true,
+    route: "posts/[year]/[month]/[slug]",
+    year: ctx.params.year ?? null,
+    month: ctx.params.month ?? null,
+    slug: ctx.params.slug ?? null,
+  }), { status: 200, headers: { "content-type": "application/json" } });
+}
+"#;
+
+const DYNA_FILES_TSP: &str = r#"
+// Catch-all `[...path]` (spec sect.11.4) -- matches zero or
+// more trailing segments and binds them joined by `/`.
+export function GET(ctx) {
+  return new Response(JSON.stringify({
+    ok: true,
+    route: "files/[...path]",
+    path: ctx.params.path ?? null,
+    length: (ctx.params.path ?? "").length,
+  }), { status: 200, headers: { "content-type": "application/json" } });
+}
+"#;
+
+#[test]
+fn dynamic_segments_and_catch_all_route_to_pages_with_params() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-dyna-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    let users_dir = routes_dir.join("users");
+    let posts_dir = routes_dir.join("posts").join("[year]").join("[month]");
+    let files_dir = routes_dir.join("files");
+    std::fs::create_dir_all(&users_dir).expect("users dir");
+    std::fs::create_dir_all(&posts_dir).expect("posts dir");
+    std::fs::create_dir_all(&files_dir).expect("files dir");
+    std::fs::write(users_dir.join("[id].tsp"), DYNA_USER_ID_TSP).expect("[id].tsp");
+    std::fs::write(users_dir.join("new.tsp"), DYNA_USER_NEW_TSP).expect("new.tsp");
+    std::fs::write(posts_dir.join("[slug].tsp"), DYNA_POST_TSP).expect("[slug].tsp");
+    std::fs::write(files_dir.join("[...path].tsp"), DYNA_FILES_TSP).expect("[...path].tsp");
+
+    let port: u16 = 34_200 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    // 1. /users/123 -- matches [id] with id="123".
+    let (s1, b1) = http_get_status(port, "/users/123", Duration::from_secs(10));
+    assert_eq!(s1, 200, "GET /users/123 must 200, got {s1} body={b1:?}");
+    assert!(
+        b1.contains("\"route\":\"users/[id]\"") && b1.contains("\"id\":\"123\""),
+        "/users/123 must bind id=123; got {b1:?}"
+    );
+
+    // 2. /users/abc-def -- hyphens are part of the value
+    //    because the dynamic segment only forbids `/`.
+    let (s2, b2) = http_get_status(port, "/users/abc-def", Duration::from_secs(10));
+    assert_eq!(s2, 200, "GET /users/abc-def must 200, got {s2} body={b2:?}");
+    assert!(
+        b2.contains("\"id\":\"abc-def\""),
+        "/users/abc-def must bind id=abc-def; got {b2:?}"
+    );
+
+    // 3. /users/new -- static `new.tsp` must win over [id].
+    //    (If the static-priority rule were broken, the
+    //    request would match [id] and report id="new".)
+    let (s3, b3) = http_get_status(port, "/users/new", Duration::from_secs(10));
+    assert_eq!(s3, 200, "GET /users/new must 200, got {s3} body={b3:?}");
+    assert!(
+        b3.contains("\"route\":\"users/new\"") && b3.contains("\"static\":true"),
+        "/users/new must match the static route; got {b3:?}"
+    );
+    assert!(
+        !b3.contains("\"id\""),
+        "/users/new must NOT carry an id field; got {b3:?}"
+    );
+
+    // 4. /users/ (trailing slash, no index) -- 404.
+    let (s4, _) = http_get_status(port, "/users/", Duration::from_secs(5));
+    assert_eq!(s4, 404, "GET /users/ must 404 (no index), got {s4}");
+
+    // 5. /posts/2024/05/hello-world -- all three params.
+    let (s5, b5) = http_get_status(
+        port,
+        "/posts/2024/05/hello-world",
+        Duration::from_secs(10),
+    );
+    assert_eq!(s5, 200, "GET /posts/.../hello must 200, got {s5} body={b5:?}");
+    assert!(
+        b5.contains("\"year\":\"2024\"")
+            && b5.contains("\"month\":\"05\"")
+            && b5.contains("\"slug\":\"hello-world\""),
+        "/posts/2024/05/hello-world must bind all three params; got {b5:?}"
+    );
+
+    // 6. /files/a/b/c -- catch-all path = "a/b/c".
+    let (s6, b6) = http_get_status(port, "/files/a/b/c", Duration::from_secs(10));
+    assert_eq!(s6, 200, "GET /files/a/b/c must 200, got {s6} body={b6:?}");
+    assert!(
+        b6.contains("\"route\":\"files/[...path]\"") && b6.contains("\"path\":\"a/b/c\""),
+        "/files/a/b/c must bind catch-all path=a/b/c; got {b6:?}"
+    );
+
+    // 7. /files -- catch-all with zero segments binds "".
+    //    (Spec sect.11.4: catch-all matches zero or more.)
+    let (s7, b7) = http_get_status(port, "/files", Duration::from_secs(10));
+    assert_eq!(s7, 200, "GET /files must 200 (catch-all zero), got {s7} body={b7:?}");
+    assert!(
+        b7.contains("\"path\":\"\""),
+        "/files must bind catch-all path=\"\"; got {b7:?}"
+    );
+
+    // 8. /nope -- 404.
+    let (s8, _) = http_get_status(port, "/nope", Duration::from_secs(5));
+    assert_eq!(s8, 404, "GET /nope must 404, got {s8}");
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+// ---------------------------------------------------------------------------
 // bun:sql runtime integration test (slice 17d)
 //
 // The TSP v2 wrap preamble surfaces bun's native SQL client

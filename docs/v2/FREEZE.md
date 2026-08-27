@@ -288,7 +288,23 @@ they ride on the handler signature. The contract for them is:
 ```text
 ctx.request       Web `Request` (read body, json, formData, etc.)
 ctx.url           URL parsed from the request path + query
-ctx.params        Route parameters (empty until dynamic segments land)
+ctx.params        Route parameters (spec sect.11.3 / 11.4)
+                  - `Record<string, string>` for one-segment
+                    dynamic segments (`[id].tsp` -> `:id`)
+                  - catch-all (`[...path].tsp`) binds the
+                    remaining segments joined by `/`; an
+                    empty path binds `""` (the catch-all
+                    matches zero or more segments)
+                  - the host serializes the matched `params`
+                    into the `Context` JSON; the wrap
+                    preamble leaves it as `ctx.params` for
+                    the page handler (no per-field hydration
+                    needed because the host already does
+                    percent-decode and segment splitting)
+                  - priority rule (spec sect.11.6): static
+                    > dynamic > catch-all; if two routes
+                    collide, the host refuses to start with
+                    `TSP1004: ambiguous routes ...`
 ctx.cookies       (Amendment 1)  get/has/set/delete
                   - get returns `undefined` for missing keys
                     (JS `Map.get` convention; coalesce with
@@ -617,6 +633,23 @@ on id change). Both are pinned by the e2e tests in
 and
 `session_runtime_mints_regenerates_and_destroys_session_id`.
 
+**Dynamic route segments (slice 16e).** Slice 16e shipped the
+radix-tree matcher (`bun/src/runtime/tsp/router.rs::lookup`)
+with static / dynamic / catch-all patterns. The earlier v2.0
+freeze text said `ctx.params` was "empty until dynamic
+segments land"; that is now lifted — `ctx.params` carries
+the matched segment values (one entry per `[name]` segment,
+plus one entry for the catch-all `[...name]` binding the
+remaining path joined by `/`). The e2e test
+`dynamic_segments_and_catch_all_route_to_pages_with_params`
+in `tests/start_order.rs` exercises 8 scenarios (single
+dynamic, hyphenated value, static-wins-over-dynamic,
+multi-segment, catch-all with 3 segments, catch-all with
+zero segments, 404s for both unknown path and
+trailing-slash-on-no-index). Spec sect.11.6 priority rule
+(static > dynamic > catch-all) and the `TSP1004`
+ambiguous-route refusal are part of the contract.
+
 **High-risk bun builtins explicitly excluded.** `Bun.serve`,
 `Bun.spawn`, `Bun.FFI`, `Bun.S3Client`, `Bun.connect`, `Bun.mmap`,
 `Bun.Cookie`, `Bun.Transpiler` are deliberately **not** exposed.
@@ -639,8 +672,8 @@ in at JSX-expansion time. No code that shipped on or before the
 v2.0 sign-off imported these names, so this is a documentation
 correction rather than a behaviour change.
 
-**Verification.** 230 tests green as of this amendment
-(202 lib + 4 worker_integration + 15 process_model + 9 start_order
+**Verification.** 231 tests green as of this amendment
+(202 lib + 4 worker_integration + 15 process_model + 10 start_order
 e2e, including `util_namespace_surfaces_bun_builtins_for_pages` for
 the new `util` namespace, `zod_runtime_compiled_into_wrap_serves_validated_schemas`
 for `zod`, `password_runtime_through_bun_password_serves_hashed_passwords`
@@ -648,6 +681,8 @@ for `password`, `sql_runtime_uses_bun_native_pool_for_page_local_datasource`
 for `sql`, `nanoid_runtime_compiled_into_wrap_serves_distinct_ids`
 for the nanoid family, and — added with this amendment —
 `cookies_runtime_parses_request_and_emits_set_cookie_on_write` for
-`ctx.cookies` (slice 16f) and
+`ctx.cookies` (slice 16f),
 `session_runtime_mints_regenerates_and_destroys_session_id` for
-`ctx.session` (slice 16k/l)).
+`ctx.session` (slice 16k/l), and
+`dynamic_segments_and_catch_all_route_to_pages_with_params` for
+dynamic route segments + catch-all (slice 16e)).
