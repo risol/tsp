@@ -3742,7 +3742,7 @@ fn dev_error_page_renders_html_in_dev_mode_and_json_in_prod() {
 // ---------------------------------------------------------------------------
 // `kind: rate_limit` config service (slice 22 + Amendment 8)
 //
-// Adds a fourth kind to `load_counter_services_from_config`:
+// Adds a fourth kind to `load_config_services`:
 // `rate_limit` with `{limit, window_seconds}`. The page
 // reads the snapshot via `ctx.services.rate.{count,limit,
 // window_ms,window_start_ms,remaining}` and gates the

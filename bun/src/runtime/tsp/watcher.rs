@@ -723,7 +723,7 @@ pub fn spawn(
             // Initial sync so the first poll only reports
             // CHANGES, not the boot-time state. If the file
             // exists at boot, the host already loaded it via
-            // `load_counter_services_from_config`; we just
+            // `load_config_services`; we just
             // record its current hash so a no-op edit does
             // not fire a reload.
             if let Some(path) = &config.config_path {

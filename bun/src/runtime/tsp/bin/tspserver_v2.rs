@@ -32,7 +32,7 @@ use bun_runtime_tsp::host;
 use bun_runtime_tsp::jsc_bridge::BunRuntime;
 use bun_runtime_tsp::module_graph::ModuleGraph;
 use bun_runtime_tsp::router::RouteTable;
-use bun_runtime_tsp::services::load_counter_services_from_config;
+use bun_runtime_tsp::services::load_config_services;
 use bun_runtime_tsp::services::SESSION_STORE_CAP_DEFAULT;
 use bun_runtime_tsp::services::ServiceRegistry;
 use bun_runtime_tsp::session_backend::{MemoryBackend, RedisBackend, SessionBackend};
@@ -103,7 +103,7 @@ fn serve_main() -> ExitCode {
 
     // v2.4 self-spawn only: the master always embeds a WorkerPool that
     // self-spawns the same `tspserver_v2[.exe]` (resolved via
-    // `resolve_worker_bin()` → `current_exe()`) with `--tsp-worker`.
+    // `resolve_worker_bin()` -> `current_exe()`) with `--tsp-worker`.
     // See `worker/manager.rs` for the spawn loop and `tsp_worker::run()`
     // for the worker-side dispatch.
     let worker_binary = match resolve_worker_bin() {
@@ -218,7 +218,7 @@ fn serve_main() -> ExitCode {
     if std::path::Path::new(&config_path).is_file() {
         let text = std::fs::read_to_string(&config_path)
             .unwrap_or_else(|e| panic!("TSPv2PoC1: read {config_path}: {e}"));
-        let custom = load_counter_services_from_config(&text)
+        let custom = load_config_services(&text)
             .unwrap_or_else(|e| panic!("TSPv2PoC1: parse {config_path}: {e}"));
         // §22.3: route the config-declared services through
         // `apply_config_snapshot` so the registry's
@@ -285,7 +285,7 @@ fn serve_main() -> ExitCode {
     // briefly, but the request path only holds the read
     // lock for a snapshot call (microseconds), so the
     // wait is invisible in practice. The callback is the
-    // same one the host's boot path uses (`load_counter_services_from_config`),
+    // same one the host's boot path uses (`load_config_services`),
     // so a typo in the new config that the boot path would
     // have rejected is also rejected here -- the watcher
     // logs the error and the previous snapshot stays in
@@ -293,7 +293,7 @@ fn serve_main() -> ExitCode {
     let on_config_reload: Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync> = {
         let services_for_reload: &'static std::sync::RwLock<ServiceRegistry> = services;
         Arc::new(move |text: &str| {
-            let fresh = load_counter_services_from_config(text)?;
+            let fresh = load_config_services(text)?;
             let names: Vec<String> = fresh.iter().map(|s| s.name().to_string()).collect();
             {
                 let mut guard = services_for_reload
@@ -368,7 +368,7 @@ fn env_u64(name: &str) -> Option<u64> {
 // with `--tsp-worker` (see `worker/manager.rs` and `bun_bin/lib.rs`'s
 // `tsp_worker::requested()` dispatch). There is intentionally no
 // fallback to a separate `bun(.exe)` runtime, no `TSP_WORKER_BIN` env
-// override, and no host-sibling lookup — production deployments ship a
+// override, and no host-sibling lookup ' production deployments ship a
 // single self-contained executable.
 fn resolve_worker_bin() -> Result<PathBuf, String> {
     let exe = std::env::current_exe()

@@ -41,3 +41,11 @@ bench-*.json
 # list; it does not need to be in the repo. Override with
 # `TSP_TYPINGS_DIR` or `--out <DIR>`.
 .tsp-types/
+
+# One-off Python / PowerShell scratch files used to repair
+# PowerShell-Set-Content-induced UTF-8 corruption (CJK comments
+# in src/ files). Safe to delete; never committed.
+.fix.py
+.diag.py
+fix_services.py
+

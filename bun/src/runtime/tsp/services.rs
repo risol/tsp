@@ -11,8 +11,7 @@
 //!   and live for the whole process. They are NOT owned by a
 //!   page generation, so a generation reload (watcher swap)
 //!   or an old-generation release never tears them down --
-//!   the "reload 页面后 service 不重建 / old generation
-//!   release 不关闭 service" acceptance in plan sect.61.
+//!   the "reload does not tear services down; old generation release does not close services" acceptance in plan sect.61.
 //! - Request-scoped services are created per request and
 //!   dropped with it; 16j surfaces the snapshot slot in the
 //!   registry API but the host has no built-in request-scoped
@@ -251,7 +250,7 @@ impl ServiceRegistry {
     ///
     /// - Every name in `fresh` is registered (last-wins for
     ///   duplicate names within `fresh` itself -- the
-    ///   `load_counter_services_from_config` parser already
+    ///   `load_config_services` parser already
     ///   rejects duplicates at the config-parse layer).
     /// - Every name currently in the registry that is also
     ///   in `fresh` is dropped before the new entry is
@@ -1312,7 +1311,8 @@ impl Service for RateLimitService {
 ///     "config": { "kind": "kv",
 ///                 "entries": { "support_email": "help@example.com" } },
 ///     "flags":  { "kind": "feature_flag",
-///                 "flags": { "beta_ui": true, "new_checkout": false } }
+///                 "flags": { "beta_ui": true, "new_checkout": false } },
+///     "rate":   { "kind": "rate_limit",   "limit": 100, "window_seconds": 60 }
 ///   }
 /// }
 /// ```
@@ -1325,12 +1325,14 @@ impl Service for RateLimitService {
 /// hard error so a typo'd config does not silently
 /// register a phantom service.
 ///
-/// (Function name kept as
-/// `load_counter_services_from_config` for now -- it
-/// was the only kind in slice 22. A follow-up can
-/// rename to `load_services_from_config` if the call
-/// sites stay short; the function body is generic.)
-pub fn load_counter_services_from_config(
+/// Renamed from `load_config_services`
+/// (Amendment 8 follow-up): the function body is
+/// generic across the four kinds (`counter` / `kv` /
+/// `feature_flag` / `rate_limit`) and the old name was
+/// misleading since slice 22. The call sites -- the
+/// bin's boot path and the §22.3 config-reload
+/// callback -- both updated in this commit.
+pub fn load_config_services(
     text: &str,
 ) -> Result<Vec<Arc<dyn Service>>, String> {
     let mut services: Vec<Arc<dyn Service>> = Vec::new();
@@ -1951,7 +1953,7 @@ mod tests {
     #[test]
     fn service_survives_generation_drop() {
         // Plan sect.61 acceptance: "old generation release
-        // 不关闭 service". The registry is host-owned and a
+        // 不关 ?service". The registry is host-owned and a
         // generation never references it; dropping every
         // generation must leave the service fully usable.
         let reg = ServiceRegistry::with_defaults();
@@ -2155,7 +2157,7 @@ mod tests {
 
     #[test]
     fn session_survives_generation_drop() {
-        // Plan sect.61 acceptance: "reload 页面后 session
+        // Plan sect.61 acceptance: "reload 页面 ?session
         // 不丢". The store is host-owned; a generation
         // release never touches the HashMap.
         let svc = SessionService::new(8);
@@ -2255,7 +2257,7 @@ mod tests {
             "rate": { "kind": "rate_limit", "limit": 100, "window_seconds": 60 }
           }
         }"#;
-        let svcs = load_counter_services_from_config(text).expect("parse");
+        let svcs = load_config_services(text).expect("parse");
         assert_eq!(svcs.len(), 1);
         assert_eq!(svcs[0].name(), "rate");
         let downcast = svcs[0]
@@ -2271,7 +2273,7 @@ mod tests {
             "rate": { "kind": "rate_limit", "limit": 10 }
           }
         }"#;
-        let svcs2 = load_counter_services_from_config(text2).expect("parse");
+        let svcs2 = load_config_services(text2).expect("parse");
         let s = svcs2[0]
             .as_any()
             .downcast_ref::<RateLimitService>()
@@ -2289,7 +2291,7 @@ mod tests {
             "rate": { "kind": "rate_limit" }
           }
         }"#;
-        match load_counter_services_from_config(text3) {
+        match load_config_services(text3) {
             Err(err) => assert!(
                 err.contains("missing `\"limit\"` field"),
                 "error message must name the missing field; got: {err}"
