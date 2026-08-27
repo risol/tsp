@@ -1481,6 +1481,82 @@ is green.
   `setTimeout` at the moment the watchdog fires.
   The host still hard-kills in 1s and the request
   returns 500 [TSP3012] in that case.
+- **Third attempt (rolled back, 2026-08-28):** the
+  persistent host process (slice 16n+ follow-up)
+  did not materialize, so we tried to ship 16n
+  through the existing `Message::Cancel` IPC
+  channel that the v2.4 pre-fork worker already
+  uses. The diff:
+  - `worker/manager.rs::execute_with_timeout` —
+    after the `ReadTimeout` error, send
+    `Message::Cancel { id }` to the worker over
+    the same master↔worker socket, then give the
+    worker a 250ms grace window to write a
+    cooperative response.
+  - `jsx.rs::wrap_for_embedded_worker` — instead
+    of `process.stdin.on('data', ...)`, register
+    the `AbortController` on
+    `globalThis.__tspAbortController__` so the
+    worker can find it without going through
+    stdin.
+  - `tsp_worker.rs` — the only file that actually
+    receives `Message::Cancel` in production
+    (the binary protocol on the worker socket).
+    **No change was made here.** The
+    `Message::Cancel { .. }` arm at
+    `tsp_worker.rs:148-151` is still the
+    documented no-op ("The native VM cancellation
+    hook is wired in the next slice.").
+  - `worker_runtime.ts` — line-based stdin
+    protocol with a "PREFIX = __TSP_WORKER_V1__"
+    reader. **Dead code in v2.4.** The diff
+    rewrote its `Cancel` arm to call
+    `globalThis.__tspAbortController__?.abort()`,
+    but the production worker is `tsp_worker.rs`,
+    not this file.
+  - E2E (`wrap_side_abort_signal_fires_inside_page_on_host_timeout`)
+    used the real binary with `TSP_TIMEOUT_MS=2000`
+    against a page that awaits a 3s `setTimeout`.
+    Result: WinSock 10060 from the test client at
+    2.06s. The host fired `Message::Cancel` on
+    time, but the worker ignored it (no-op arm),
+    the page kept waiting for the 3s timer, the
+    250ms grace window expired, the master
+    hard-restarted the worker, and the test's
+    client read-timeout (hardcoded 2s in
+    `http_get_status`) fired at the same time as
+    the master's 2s read-timeout so the 500
+    never reached the client. Two independent
+    failures.
+  - The roll-back is symmetric: `jsx.rs`,
+    `worker/manager.rs`, `worker_runtime.ts`, and
+    the new e2e in `tests/start_order.rs` are
+    all back at HEAD (`dd708ec35a`).
+  - The third attempt confirmed the original
+    diagnosis: a parked `setTimeout` is a
+    fundamental bun 1.4 limitation, and no amount
+    of "look up the AbortController on
+    globalThis" can fix it. The controller
+    reference is found, but `controller.abort()`
+    is never called because there is no
+    non-deferred IO primitive in the worker's
+    per-request loop. The next attempt MUST use
+    a bun-native wakeup (`Bun.watch` on a
+    per-request file, or a localhost TCP
+    loopback the page reads from via
+    `Bun.readableStream`), or it MUST refactor
+    the per-request loop to be event-loop-driven
+    (the bun event loop's `wait_for_promise`
+    pattern, with the master↔worker socket
+    attached as a `ReadableStream` the wrap
+    subscribes to).
+- **Status:** slice 16n remains deferred. The
+  follow-up paths in the original list (named
+  pipe / TCP loopback / `Bun.watch`) are still
+  the only viable IPC channels. They are
+  deferred together with the larger "persistent
+  host process" sub-architecture that motivates
+  them — 16n' is not landing in this series.
 
 ### Slice 16m -- `time` service: call-capable read-only snapshot (done, bun commit `8dfefe6c`)
 
