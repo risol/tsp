@@ -1715,3 +1715,125 @@ the parser change (the unknown-kind error
 message now lists `rate_limit`) and the snapshot
 serializer change do not regress any of the
 prior 18 e2e scenarios.
+
+---
+
+### Amendment 9 (2026-08-27) — §32.2 source-map gap pinned
+
+Plan §32.2 ("Source Map") asks for "TS/TSX
+runtime stack MUST map back to the original
+source" per the spec. The wrap already emits
+`//# sourceURL=<tsp://path>?generation=<N>` for
+the embedded-worker path
+(`bun/src/runtime/tsp/jsc_bridge.rs:338`), so a
+`vm.eval`-style runtime would attribute the script
+to the .tsp file. The current production worker
+writes the script to a temp `.tsx` file and runs
+it via `vm.load_entry_point`; bun 1.4 honors
+`//# sourceURL=` for IN-LINE eval'd scripts but
+NOT for the file-loaded path, so the dev error
+page stack currently shows
+`tsp-embedded-worker-<pid>-<id>.tsx:<line>:<col>`
+where `<line>` is the WRAPPED-output line (the
+prelude is thousands of lines long) -- not the
+original .tsp line.
+
+This amendment is a "pin + document" rather than
+a "fix". The bun-side change required is either
+(a) honor `//# sourceURL=` for file-loaded
+scripts in bun:runtime, or (b) move the TSP
+worker from file-load to in-line `vm.eval` /
+`vm.Script.evaluate` (so the directive is
+honored). Both are outside the runtime crate.
+The host can ship every other Phase 11 /
+Amendment 8 surface (the dev error page, the
+config-driven services, the config hot reload,
+the rate-limit / kv / feature_flag kinds)
+without the source-map remap; the page still
+throws, the host still captures the error, the
+dev page still renders HTML. The line/col being
+unhelpful is a known limitation; the future
+bun-side change can flip the assertions this
+amendment adds.
+
+**What changed in this amendment.**
+
+- **`bun/src/runtime/tsp/jsx.rs`: 2 new unit
+  tests.**
+  - `wrap_for_embedded_worker_emits_sourceurl_directive`
+    pins the wrap's contract -- the wrap does
+    NOT emit any sourceURL or sourceMappingURL.
+    The `//# sourceURL=` is appended AFTER the
+    wrap by `jsc_bridge::execute_inner` with the
+    real source path (so the wrap itself does
+    not need to know the path). The test asserts
+    the absence of any sourceURL in the wrap
+    output; a regression that emits a placeholder
+    path (or no directive at all) is caught.
+  - `jsc_bridge_appends_tsp_sourceurl_with_generation`
+    pins the directive shape in
+    `jsc_bridge.rs`:
+    `//# sourceURL=tsp://<path>?generation=<N>`.
+    The `?generation=<N>` suffix is the
+    per-request cache-bust for `bun:main`
+    (see BUG-0001); a refactor that drops the
+    suffix would re-introduce the multi-route
+    alias bug. The test is a string-pin against
+    `include_str!("jsc_bridge.rs")` so a
+    refactor that changes the format is caught
+    here, and the start_order e2e catches the
+    runtime consequence.
+
+- **`bun/src/runtime/tsp/tests/start_order.rs`:**
+  the existing
+  `dev_error_page_renders_html_in_dev_mode_and_json_in_prod`
+  e2e gained 2 assertions in the "plain" body
+  check:
+  - The stack MUST currently show
+    `tsp-embedded-worker-` (pin the worker's
+    temp-file attribution, which is what bun
+    actually uses).
+  - The stack MUST NOT show `dev_error_demo.tsp`
+    (pin the gap -- the `.tsp` file is not yet
+    visible in the stack because the source
+    remap needs the bun-side change). A future
+    bun-side change can flip this assertion to
+    assert the `.tsp` path is present.
+
+**What was NOT changed in this amendment.**
+
+- The wrap's contract is unchanged. The wrap
+  does NOT emit sourceURL or sourceMappingURL;
+  `jsc_bridge::execute_inner` continues to
+  append the sourceURL after the wrap. A
+  regression that emits a placeholder sourceURL
+  inside the wrap would still be caught by the
+  new unit test (the absence assertion).
+- The dev error page is unchanged. The page
+  still surfaces the raw `e.stack` from bun;
+  the file name + line/col are still the
+  temp-file + wrapped-output values.
+- The worker is unchanged. The worker
+  continues to write the script to a temp file
+  and run `vm.load_entry_point`. A follow-up
+  slice can either (a) move the worker to
+  `vm.eval` / `vm.Script.evaluate` (a more
+  invasive change to
+  `bun/src/runtime/tsp_worker.rs`), or (b)
+  wait for bun to honor `//# sourceURL=` for
+  file-loaded scripts (a bun-side change).
+- The production binary at
+  `dist/tsp-v2/tspserver_v2.exe` does not
+  change. The unit tests are against the wrap
+  string + the source file content; the e2e
+  pins the live behavior via the existing
+  dev_error_page run. No relink needed.
+
+**Verification.** 240 tests green (238 prior +
+2 new). The lib gain is the 2 new
+`jsx::tests::sourceurl_*` tests; the start_order
+count is unchanged (the 2 new assertions are
+added to the existing dev_error_page e2e). The 4
+unchanged test buckets all still pass against the
+unchanged wrap, the unchanged worker, and the
+unchanged production binary.

@@ -49,3 +49,9 @@ bench-*.json
 .diag.py
 fix_services.py
 
+# One-off bun smoke scripts used to verify how bun
+# handles `//# sourceURL=` and `//# sourceMappingURL=`
+# for file-loaded scripts. Safe to delete.
+.bun-smoke.ts
+.smoke.ts
+

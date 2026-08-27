@@ -3662,6 +3662,27 @@ fn dev_error_page_renders_html_in_dev_mode_and_json_in_prod() {
         b_plain.contains("<pre>") && b_plain.contains("at GET"),
         "dev mode body must include the stack trace in a <pre> block; got: {b_plain:?}"
     );
+    // §32.2: the stack currently shows the worker's
+    // temp file (`tsp-embedded-worker-<pid>-<id>.tsx`),
+    // NOT the .tsp file. bun 1.4 honors
+    // `//# sourceURL=...` for in-line eval'd scripts
+    // but not for the file-loaded path the worker
+    // uses (the directive IS in the wrap; bun ignores
+    // it for file-loaded scripts). The line number
+    // is also the wrapped-output line, not the
+    // original .tsp line. Pin the current behavior
+    // so a future bun-side change that flips the
+    // file-loaded policy (or a follow-up slice that
+    // moves the worker to `vm.eval`) can flip this
+    // assertion.
+    assert!(
+        b_plain.contains("tsp-embedded-worker-"),
+        "dev mode stack must currently show the worker's temp file (bun does not honor sourceURL for file-loaded scripts); got: {b_plain:?}"
+    );
+    assert!(
+        !b_plain.contains("dev_error_demo.tsp"),
+        "dev mode stack must NOT show the .tsp path yet -- that requires a bun-side change (file-loaded script -> sourceURL honored, or worker -> vm.eval); got: {b_plain:?}"
+    );
     // The raw JSON envelope must NOT appear in the
     // HTML -- the page replaces the wire body.
     assert!(

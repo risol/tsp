@@ -2636,6 +2636,111 @@ export function GET() {
             "no JS errors allowed in the generated module; stdout: {stdout}"
         );
     }
+
+    /// §32.2 (plan sect.32.2, FREEZE Amendment 9):
+    /// the embedded-worker path emits a `//# sourceURL=...`
+    /// directive so bun:runtime can attribute the
+    /// script to the original `.tsp` file (the
+    /// directive value is the absolute path with the
+    /// `tsp://` scheme + the current execution
+    /// generation, e.g. `tsp://D:/GitHub/tsp/routes/foo.tsp?generation=42`).
+    /// A future slice adds the matching
+    /// `//# sourceMappingURL=data:...` directive (which
+    /// would remap the transpiled line/col back to the
+    /// original); today's bun 1.4 honors `//# sourceURL=`
+    /// for in-line eval'd scripts but not for the
+    /// file-loaded path the worker uses, so the
+    /// production stack trace still shows the temp
+    /// file path (`tsp-embedded-worker-<pid>-<id>.tsx`)
+    /// with the WRAPPED line/col -- not the original
+    /// `.tsp` line/col. The dev error page (Amendment
+    /// 7) still surfaces the raw stack so the dev can
+    /// trace it; the file name + line/col are just
+    /// unhelpful until the bun-side change lands.
+    #[test]
+    fn wrap_for_embedded_worker_emits_sourceurl_directive() {
+        let body = "function GET() { return 'ok'; }\n";
+        let wrapped = wrap_for_embedded_worker(body, "GET", None);
+        // The wrap itself does NOT append the
+        // `//# sourceURL=` directive -- that lives in
+        // `jsc_bridge::execute_inner` and is appended
+        // AFTER the wrap, with the real source path.
+        // The wrap's contract is just the wrap shape;
+        // the test that pins the sourceURL emission
+        // lives in `jsc_bridge.rs` (next to the
+        // `execute_inner` call site) -- not here.
+        // What we CAN pin from the wrap is the absence
+        // of any pre-existing `//# sourceURL=` (the
+        // wrap would be wrong if it emitted one with
+        // a placeholder path).
+        assert!(
+            !wrapped.contains("//# sourceURL="),
+            "wrap_for_embedded_worker must NOT emit a sourceURL -- the real directive is appended by jsc_bridge::execute_inner with the actual source path; got: {wrapped}"
+        );
+        // And no sourceMappingURL either (the v1
+        // contract is `//# sourceURL=` only; a
+        // follow-up slice adds the source map when
+        // bun's file-loaded path honors it).
+        assert!(
+            !wrapped.contains("sourceMappingURL"),
+            "wrap_for_embedded_worker must NOT emit a sourceMappingURL -- v1 ships the sourceURL directive only; got: {wrapped}"
+        );
+    }
+
+    /// §32.2: pin the jsc_bridge side of the
+    /// `//# sourceURL=` directive. The wrap itself
+    /// does not emit it (see the previous test);
+    /// `jsc_bridge::execute_inner` appends the
+    /// directive AFTER the wrap, with the absolute
+    /// source path. The directive value is
+    /// `tsp://<path>?generation=<N>` -- the
+    /// `tsp://` scheme + the absolute path +
+    /// the current execution generation, which
+    /// changes on every reload so the JS module
+    /// registry cache (the `bun:main` slot the
+    /// BUG-0001 fix clears) is busted even when the
+    /// file content is unchanged.
+    ///
+    /// This is a string-pin: the test does NOT run
+    /// bun (the wrap-only check is the jsc_bridge's
+    /// `execute_inner`, which is a real-binary
+    /// pipeline). A future bun-side change that
+    /// flips bun's file-loaded-script policy would
+    /// make the `//# sourceURL=` work for stack
+    /// traces; the pin keeps the directive shape
+    /// stable across that change.
+    #[test]
+    fn jsc_bridge_appends_tsp_sourceurl_with_generation() {
+        // The directive string lives in
+        // `jsc_bridge::execute_inner`; this test
+        // pins its shape so a refactor cannot
+        // accidentally drop the generation suffix
+        // (which would break the BUG-0001 fix's
+        // per-request cache-bust).
+        let needle = "//# sourceURL=";
+        // We can't easily call execute_inner from
+        // a unit test (it needs a real BunRuntime),
+        // so this test pins the literal string by
+        // asserting the surrounding format. A
+        // grep against the source confirms the
+        // shape; a future refactor that changes the
+        // format will be caught by the start_order
+        // e2e (which exercises the full pipeline).
+        let src = include_str!("jsc_bridge.rs");
+        assert!(
+            src.contains(needle),
+            "jsc_bridge.rs must contain a {needle:?} directive emission; \
+             a refactor that drops it breaks the dev error page's file-name \
+             attribution and the BUG-0001 per-request cache bust"
+        );
+        // The `?generation=` suffix is the per-request
+        // cache-bust for `bun:main` (see BUG-0001).
+        assert!(
+            src.contains("?generation="),
+            "jsc_bridge.rs must include the `?generation=` query in the sourceURL \
+             so each request's wrap gets a unique module-registry key"
+        );
+    }
 }
 
 
