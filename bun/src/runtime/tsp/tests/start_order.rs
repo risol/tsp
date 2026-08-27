@@ -3573,6 +3573,172 @@ fn config_file_hot_reload_replaces_services_without_master_restart() {
     let _ = std::fs::remove_dir_all(&temp_root);
 }
 
+// ---------------------------------------------------------------------------
+// §32.1 dev error page (plan §32.1, FREEZE Amendment 7)
+//
+// Pre-§32.1, a page that throws (other than
+// `HttpError`) caused the wrap to `console.error`
+// and `process.exit(1)`. The host saw a dead worker
+// and returned a generic 500. The §32.1 change makes
+// the inner wrap catch all errors and build a 500
+// response with a JSON body that carries the error
+// name, message, and stack. The host then:
+// - in `TSP_DEVELOPMENT=1` mode, renders a
+//   self-contained HTML error page (with the stack
+//   trace inside a `<pre>` and every user-controlled
+//   field HTML-escaped);
+// - in prod mode, returns the wire 500 with the JSON
+//   body unchanged (the application can log it; the
+//   user sees a generic 500).
+//
+// The e2e exercises both paths through the real
+// binary, plus a few throw shapes:
+//
+//   Round 1 (dev):
+//     GET /dev_error_demo?kind=plain  -> 500 HTML
+//     GET /dev_error_demo?kind=range  -> 500 HTML with
+//                                        RangeError name
+//     GET /dev_error_demo?kind=quiet  -> 500 HTML
+//                                        (string throw, no
+//                                        Error instance)
+//
+//   Round 2 (prod, no TSP_DEVELOPMENT):
+//     GET /dev_error_demo?kind=plain  -> 500 JSON
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dev_error_page_renders_html_in_dev_mode_and_json_in_prod() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-dev-error-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+    std::fs::write(
+        routes_dir.join("dev_error_demo.tsp"),
+        include_str!("../../../../../routes/dev_error_demo.tsp"),
+    )
+    .expect("dev_error_demo.tsp");
+
+    // --- Round 1: dev mode ---
+    let port_dev: u16 = 35_700 + (std::process::id() as u16 % 500);
+    let mut child_dev = std::process::Command::new(master)
+        .env("TSP_PORT", port_dev.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_DEVELOPMENT", "1")
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn (dev)");
+    wait_for_marker(&mut child_dev, "listening on", Duration::from_secs(10));
+
+    // Plain Error: HTML body with the error name +
+    // message + stack. The page is text/html; the
+    // e2e checks three anchor strings that uniquely
+    // identify a real dev error page.
+    let (s_plain, b_plain) =
+        http_get_status(port_dev, "/dev_error_demo?kind=plain", Duration::from_secs(10));
+    assert_eq!(s_plain, 500, "dev mode plain throw must 500, got {s_plain}");
+    assert!(
+        b_plain.contains("Dev Error"),
+        "dev mode body must be the dev error page; got: {b_plain:?}"
+    );
+    assert!(
+        b_plain.contains("plain boom from dev_error_demo"),
+        "dev mode body must carry the user-thrown message; got: {b_plain:?}"
+    );
+    assert!(
+        b_plain.contains("<pre>") && b_plain.contains("at GET"),
+        "dev mode body must include the stack trace in a <pre> block; got: {b_plain:?}"
+    );
+    // The raw JSON envelope must NOT appear in the
+    // HTML -- the page replaces the wire body.
+    assert!(
+        !b_plain.contains(r#""kind":"tsp_error""#),
+        "raw JSON envelope must not appear in dev mode HTML; got: {b_plain:?}"
+    );
+
+    // RangeError: same HTML shape, different error
+    // name. The wrap must serialize `e.name`
+    // correctly so a custom error class shows up.
+    let (s_range, b_range) = http_get_status(
+        port_dev,
+        "/dev_error_demo?kind=range&idx=42",
+        Duration::from_secs(10),
+    );
+    assert_eq!(s_range, 500, "dev mode range throw must 500, got {s_range}");
+    assert!(
+        b_range.contains("RangeError"),
+        "dev mode body must carry the RangeError class name; got: {b_range:?}"
+    );
+    assert!(
+        b_range.contains("index out of bounds: 42"),
+        "dev mode body must include the RangeError message; got: {b_range:?}"
+    );
+
+    // String throw (no Error instance): the wrap's
+    // inner catch must still build a 500 response.
+    // A regression here (e.g. `e.name` throws because
+    // the thrown value is not an Error) would surface
+    // as a host-side 500 from the worker dying.
+    let (s_quiet, b_quiet) =
+        http_get_status(port_dev, "/dev_error_demo?kind=quiet", Duration::from_secs(10));
+    assert_eq!(s_quiet, 500, "dev mode string throw must 500, got {s_quiet}");
+    assert!(
+        b_quiet.contains("string-throw-not-an-error"),
+        "dev mode body must carry the thrown string verbatim; got: {b_quiet:?}"
+    );
+
+    let _ = terminate(child_dev.id());
+    let _ = child_dev.wait();
+
+    // --- Round 2: prod mode (no TSP_DEVELOPMENT) ---
+    let port_prod: u16 = 35_800 + (std::process::id() as u16 % 500);
+    let mut child_prod = std::process::Command::new(master)
+        .env("TSP_PORT", port_prod.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        // Intentionally no TSP_DEVELOPMENT.
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn (prod)");
+    wait_for_marker(&mut child_prod, "listening on", Duration::from_secs(10));
+
+    let (s_prod, b_prod) =
+        http_get_status(port_prod, "/dev_error_demo?kind=plain", Duration::from_secs(10));
+    assert_eq!(s_prod, 500, "prod mode plain throw must 500, got {s_prod}");
+    // Prod: the wire body is the JSON envelope, NOT
+    // the HTML. The application can parse it; the
+    // user sees a generic 500.
+    assert!(
+        b_prod.contains(r#""kind":"tsp_error""#)
+            && b_prod.contains(r#""error":"Error""#)
+            && b_prod.contains(r#""message":"plain boom from dev_error_demo""#),
+        "prod mode body must be the JSON error envelope; got: {b_prod:?}"
+    );
+    assert!(
+        !b_prod.contains("Dev Error"),
+        "prod mode must NOT render the HTML dev page; got: {b_prod:?}"
+    );
+
+    let _ = terminate(child_prod.id());
+    let _ = child_prod.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
 
 // ---------------------------------------------------------------------------
 // Phase 11 tooling (plan §11) -- `tspserver_v2 typings` subcommand

@@ -1218,6 +1218,112 @@ fn resolve_request_timeout() -> u64 {
     }
 }
 
+/// §32.1: dev-mode flag. `TSP_DEVELOPMENT=1` switches the
+/// host from prod to dev: a 500 page-level error
+/// surfaces as a self-contained HTML error page
+/// (name, message, stack) instead of a JSON body. The
+/// page-level contract is unchanged -- the wire 500
+/// response is the same; only the rendered body
+/// changes between dev and prod. The flag is read on
+/// every request so a process restart is not required
+/// to flip modes (and so a single test can boot a
+/// master with `TSP_DEVELOPMENT=1` and a second with
+/// the default prod behavior).
+fn dev_mode() -> bool {
+    matches!(std::env::var("TSP_DEVELOPMENT").as_deref(), Ok("1"))
+}
+
+/// §32.1: render the self-contained HTML error page for
+/// `dev_mode()` requests. The input is the wrap's
+/// error envelope body (a JSON object with `kind`,
+/// `error`, `message`, `stack` fields) and the wire
+/// status line. The output is the page body and its
+/// `Content-Type`. The HTML is hand-rolled (no
+/// external CSS / JS, no template engine) and HTML-
+/// escapes every user-controlled field. A failed
+/// parse falls back to a minimal "<error>" body so
+/// the host never returns an empty 500.
+fn render_dev_error_page(body: &str, status_line: &str) -> (String, String) {
+    let (error, message, stack) = match parse_json(body) {
+        Some(JsonValue::Object(entries)) => {
+            let obj = JsonValue::Object(entries);
+            let error = obj
+                .get("error")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("Error")
+                .to_string();
+            let message = obj
+                .get("message")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("")
+                .to_string();
+            let stack = obj
+                .get("stack")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("")
+                .to_string();
+            (error, message, stack)
+        }
+        _ => (
+            "Error".to_string(),
+            body.to_string(),
+            String::new(),
+        ),
+    };
+    let mut html = String::with_capacity(1024 + stack.len());
+    html.push_str(
+        "<!doctype html>\n<html lang=\"en\">\n\
+         <head>\n\
+         <meta charset=\"utf-8\">\n\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
+         <title>TSP v2 \u{2014} Dev Error: ",
+    );
+    html_escape_into(&mut html, &error);
+    html.push_str("</title>\n<style>\n\
+         body { font-family: -apple-system, system-ui, 'Segoe UI', sans-serif; max-width: 960px; margin: 2em auto; padding: 0 1em; color: #222; line-height: 1.45; }\n\
+         h1 { color: #b00020; margin-bottom: 0.2em; font-size: 1.4em; }\n\
+         h2 { margin-top: 1.6em; font-size: 1em; color: #555; text-transform: uppercase; letter-spacing: 0.04em; }\n\
+         pre { background: #f5f5f5; padding: 0.8em 1em; border-radius: 4px; overflow-x: auto; font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace; font-size: 13px; line-height: 1.4; white-space: pre-wrap; word-break: break-word; }\n\
+         .error-name { font-weight: 600; color: #b00020; }\n\
+         .meta { color: #666; font-size: 0.85em; margin-top: 2em; padding-top: 1em; border-top: 1px solid #eee; }\n\
+         </style>\n</head>\n<body>\n\
+         <h1>TSP v2 \u{2014} Dev Error</h1>\n\
+         <div class=\"error-name\">",
+    );
+    html_escape_into(&mut html, &error);
+    html.push_str("</div>\n<pre class=\"error-message\">");
+    html_escape_into(&mut html, &message);
+    html.push_str("</pre>\n");
+    if !stack.is_empty() {
+        html.push_str("<h2>Stack trace</h2>\n<pre>");
+        html_escape_into(&mut html, &stack);
+        html.push_str("</pre>\n");
+    }
+    html.push_str("<div class=\"meta\">");
+    html.push_str(status_line);
+    html.push_str(" \u{2014} disable with `TSP_DEVELOPMENT=0` or unset.</div>\n</body>\n</html>\n");
+    (html, "text/html; charset=utf-8".to_string())
+}
+
+/// HTML-escape the input and append to `out`. Mirrors
+/// the JSX renderer's escape set (`&`, `<`, `>`, `"`,
+/// `'`) -- a smaller set than the full HTML5 escape
+/// table but enough for the dev error page where the
+/// only structural HTML we own is the `<pre>` /
+/// `<div>` wrapping.
+fn html_escape_into(out: &mut String, s: &str) {
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(ch),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum HostError {
     Bind(io::Error),
@@ -1661,20 +1767,55 @@ fn handle_connection(
                     // otherwise a method rejection would be served
                     // as 200 OK.
                     let use_envelope = outcome.kind != EnvelopeKind::Legacy;
+                    // §32.1: a page that throws (other than
+                    // HttpError) reaches the host as a 500 with
+                    // `x-tsp-error: page` and a JSON body
+                    // carrying the error name / message / stack.
+                    // In dev mode (`TSP_DEVELOPMENT=1`) the
+                    // host renders an HTML error page; in
+                    // prod the wire 500 with the JSON body is
+                    // returned as-is.
+                    let (body, content_type, headers) = if use_envelope
+                        && outcome
+                            .headers
+                            .iter()
+                            .any(|(k, v)| k.eq_ignore_ascii_case("x-tsp-error") && v == "page")
+                    {
+                        if dev_mode() {
+                            let (html_body, html_ct) =
+                                render_dev_error_page(&outcome.body, &outcome.status_line);
+                            (html_body, html_ct, Vec::new())
+                        } else {
+                            // Prod path: strip the internal
+                            // `x-tsp-error` header (the wire
+                            // body still carries the JSON; the
+                            // application can log it). The
+                            // content-type stays application/json.
+                            let filtered: Vec<(String, String)> = outcome
+                                .headers
+                                .iter()
+                                .filter(|(k, _)| !k.eq_ignore_ascii_case("x-tsp-error"))
+                                .cloned()
+                                .collect();
+                            (outcome.body.clone(), outcome.content_type.clone(), filtered)
+                        }
+                    } else {
+                        (
+                            outcome.body.clone(),
+                            outcome.content_type.clone(),
+                            outcome.headers.clone(),
+                        )
+                    };
                     (
                         if use_envelope {
                             outcome.status_line
                         } else {
                             _status_line
                         },
-                        if use_envelope {
-                            outcome.content_type
-                        } else {
-                            _ct.to_string()
-                        },
+                        content_type,
                         allow_header,
-                        outcome.body,
-                        outcome.headers,
+                        body,
+                        headers,
                     )
                 }
                 MatchResult::FoundHeadOverGet { route } => {
@@ -3017,6 +3158,72 @@ mod tests {
         for (code, want) in pairs {
             assert_eq!(code.code(), *want, "code = {code:?}");
         }
+    }
+
+    #[test]
+    fn dev_error_page_html_escapes_user_fields_and_renders_stack() {
+        // §32.1: a JSON error envelope from the wrap
+        // (e.g. `{"kind":"tsp_error","error":"RangeError",
+        // "message":"<bad> & 'quoted'","stack":"at GET (...)\n"})
+        // must produce a self-contained HTML page that
+        // (a) HTML-escapes every user-controlled field
+        // and (b) carries the stack trace inside a
+        // `<pre>` block. A regression here would either
+        // leak script-injection surface to the dev or
+        // strip the stack trace the operator needs.
+        let body = r#"{"kind":"tsp_error","error":"RangeError","message":"<bad> & 'quoted'","stack":"Error\n    at GET (routes/foo.tsp:5:7)\n"}"#;
+        let (html, ct) = render_dev_error_page(body, "HTTP/1.1 500 Internal Server Error");
+        assert_eq!(ct, "text/html; charset=utf-8");
+        // The HTML escapes `<`, `>`, `&`, and `'` in
+        // every field; a regression to plain
+        // interpolation would surface as a raw `<` in
+        // the body.
+        assert!(
+            html.contains("&lt;bad&gt; &amp; &#39;quoted&#39;"),
+            "error message must be HTML-escaped; got: {html}"
+        );
+        assert!(
+            html.contains("class=\"error-name\">RangeError<"),
+            "error name must render in the error-name slot; got: {html}"
+        );
+        assert!(
+            html.contains("Error\n    at GET (routes/foo.tsp:5:7)\n"),
+            "stack trace must be preserved verbatim (no escaping of newlines); got: {html}"
+        );
+        assert!(
+            html.contains("HTTP/1.1 500 Internal Server Error"),
+            "the status line must appear in the meta footer; got: {html}"
+        );
+        assert!(
+            html.contains("TSP_DEVELOPMENT=0"),
+            "the meta footer must tell the dev how to disable the page; got: {html}"
+        );
+        // The page must not leak the internal JSON
+        // envelope -- the HTML replaces the wire body.
+        assert!(
+            !html.contains(r#""kind":"tsp_error""#),
+            "the raw JSON envelope must not appear in the HTML; got: {html}"
+        );
+    }
+
+    #[test]
+    fn dev_error_page_handles_unparseable_body() {
+        // A wrap that somehow returns a non-JSON body
+        // (e.g. older wrap scripts that pre-date the
+        // slice's JSON convention) must not produce an
+        // empty page. The fallback wraps the body in a
+        // generic Error entry and shows it as the
+        // message so the dev still sees SOMETHING.
+        let (html, _ct) =
+            render_dev_error_page("not json at all", "HTTP/1.1 500 Internal Server Error");
+        assert!(
+            html.contains("class=\"error-name\">Error<"),
+            "fallback must render the literal name `Error`; got: {html}"
+        );
+        assert!(
+            html.contains("not json at all"),
+            "fallback must surface the unparseable body as the message; got: {html}"
+        );
     }
 
     #[test]

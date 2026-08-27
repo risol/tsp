@@ -1444,3 +1444,132 @@ tests) all still pass against the rebuilt
 binary, confirming the `RwLock` refactor did
 not regress any of the request-path
 semantics pinned by those tests.
+
+---
+
+### Amendment 7 (2026-08-27) — §32.1 dev error page
+
+Plan §32.1 ("Dev Error Page") is the dev-UX
+half of the Phase 11 tooling slice. Pre-§32.1,
+a page that throws (other than `HttpError`)
+caused the wrap to `console.error` and
+`process.exit(1)`. The host saw a dead worker
+and returned a generic 500 to the client --
+the developer had to read `tspserver_v2`'s
+stderr to see what went wrong, and the
+operator had to map the stderr back to the
+right request. The §32.1 change makes the
+error visible IN the response, with a
+dev-mode HTML page that the developer can read
+in their browser.
+
+**What changed in this amendment.**
+
+- **Wrap change (`jsx.rs`):** the inner catch
+  that previously only handled `HttpError` now
+  ALSO handles all other thrown values (Error
+  instances with custom classes, plain strings,
+  undefined, etc.) by building a 500 response
+  with a JSON body of shape
+  `{"kind":"tsp_error","error":"<class>",
+  "message":"<message>","stack":"<stack>"}` and
+  a `x-tsp-error: page` header. The outer IIFE
+  catch (the "wrap itself failed" path) is
+  unchanged -- it still `console.error`s the
+  stack and `process.exit(1)`s, because by the
+  time the outer catch fires, the wrap preamble
+  has already failed and we cannot build a
+  sane 500 envelope. The inner / outer split
+  means: page errors -> 500 with JSON; wrap
+  errors -> dead worker (a host-side 500 with
+  the same generic body).
+
+- **Host change (`host.rs`):**
+  - A new `TSP_DEVELOPMENT=1` env var flips a
+    `dev_mode()` helper to true. The flag is
+    read on every request (no boot-time cache)
+    so a single test can boot one master with
+    the dev flag and another without.
+  - The consumer of `EnvelopeOutcome` checks
+    for the `x-tsp-error: page` header. If
+    present AND `dev_mode()` is on, the host
+    replaces the wire body with a self-
+    contained HTML page (see below). If
+    present AND prod, the host strips the
+    `x-tsp-error` header (internal marker, not
+    a public surface) and returns the 500 with
+    the JSON body unchanged. The page-level
+    wire contract (status 500, headers, body)
+    is the same in both modes; only the
+    rendered body changes.
+  - A new `render_dev_error_page(body, status_line)`
+    helper parses the JSON envelope and emits
+    a hand-rolled HTML page. The page is
+    self-contained (no external CSS, no JS, no
+    template engine) and HTML-escapes every
+    user-controlled field (error name,
+    message, stack) so a malicious or
+    accidentally-weird stack trace cannot
+    inject `<script>` into the page. A failed
+    parse falls back to a minimal `<error>`
+    body so the host never returns an empty
+    500.
+
+- **Demo route `routes/dev_error_demo.tsp`**
+  exposes three throw shapes via `?kind=`:
+  - `plain` (`new Error("plain boom ...")`)
+  - `range` (`new RangeError("index out of
+    bounds: ...")` -- pins the `e.name`
+    serialization for custom error classes)
+  - `quiet` (a plain string throw -- pins the
+    "non-Error thrown value" path; a regression
+    where the wrap's `e.name` / `e.stack` access
+    throws because the thrown value is not an
+    Error would surface here as a host-side 500
+    from the worker dying)
+
+**What was NOT changed in this amendment.**
+
+- The page-level wire contract is unchanged.
+  The 500 response is the same in dev and
+  prod; only the rendered body differs. The
+  prod wire body IS the JSON envelope; the
+  application can log it (or pipe it to its
+  own monitoring) without parsing anything
+  extra. The dev HTML is a presentation
+  choice, not a contract change.
+- Source maps (plan §32.2). The stack trace
+  in the dev error page is whatever bun
+  emits; bun has native TS / TSX source-map
+  support, so the stack lines already point
+  at the original `.tsp` file / line. This
+  slice does not add a separate source-map
+  pass on top; it relies on bun's built-in
+  support. A future slice can add a "jump to
+  editor" link to each stack frame, but
+  that's editor-coupling work, not a
+  contract change.
+- The `Context.route: RouteInfo` runtime gap
+  is unchanged. Out of scope for this slice.
+- The `x-tsp-error: page` header is a
+  marker between the wrap and the host; it
+  is NEVER sent to the client. In prod mode
+  the host strips it before sending; in dev
+  mode the host replaces the wire body with
+  HTML, so the client never sees the JSON
+  envelope either.
+
+**Verification.** 252 tests green (215 lib +
+4 worker_integration + 15 process_model + 18 start_order
+e2e, the prior 17 plus
+`dev_error_page_renders_html_in_dev_mode_and_json_in_prod`).
+The lib gain is the 2 new
+`host::tests::dev_error_page_*` tests; the
+start_order e2e gain is the 1 new dev-error
+e2e. The new e2e runs the real
+`dist/tsp-v2/tspserver_v2.exe` binary
+twice -- once with `TSP_DEVELOPMENT=1` and
+once without -- and asserts the dev HTML
+(three different throw shapes) and the prod
+JSON envelope. The 4 unchanged test buckets
+all still pass against the rebuilt binary.

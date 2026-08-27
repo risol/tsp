@@ -987,7 +987,24 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
     if ctx_json.is_none() {
         out.push_str("const __tspContext = undefined;\n");
     }
-    out.push_str("const __tspResultPromise__ = Promise.resolve().then(() => __tspContext === undefined ? __tspHandler__() : __tspHandler__(__tspContext)).then(async (__result__) => typeof __result__ === 'object' && __result__ !== null && !(__result__ instanceof Response) ? await __tspRenderNode__(__result__, false) : __result__).catch((e) => { if (e && Number.isInteger(e.status)) return new Response(String(e.message || ''), {status: e.status, headers: e.headers || {}}); throw e; });\n");
+    // §32.1 dev error page: a non-HttpError throw inside
+    // the page handler no longer `throw e` to the outer
+    // IIFE (which would exit with 1 and lose the error
+    // body); the inner catch now builds a 500 response
+    // with a JSON body that names the error, message,
+    // and stack. The host reads this body and decides
+    // whether to expose the details to the client
+    // (`TSP_DEVELOPMENT=1` -> dev error page HTML;
+    // prod -> generic 500 with the wire body preserved
+    // for the application to log).
+    out.push_str(
+        "const __tspResultPromise__ = Promise.resolve().then(() => __tspContext === undefined ? __tspHandler__() : __tspHandler__(__tspContext)).then(async (__result__) => typeof __result__ === 'object' && __result__ !== null && !(__result__ instanceof Response) ? await __tspRenderNode__(__result__, false) : __result__).catch((e) => {\n\
+         \x20 if (e && Number.isInteger(e.status)) return new Response(String(e.message || ''), {status: e.status, headers: e.headers || {}});\n\
+         \x20 let __tspErrJson__;\n\
+         \x20 try { __tspErrJson__ = JSON.stringify({kind: 'tsp_error', error: (e && e.name) || 'Error', message: (e && e.message) || String(e), stack: (e && e.stack) || ''}); } catch { __tspErrJson__ = JSON.stringify({kind: 'tsp_error', error: 'Error', message: String(e), stack: ''}); }\n\
+         \x20 return new Response(__tspErrJson__, {status: 500, headers: {'content-type': 'application/json', 'x-tsp-error': 'page'}});\n\
+         });\n",
+    );
     // Slice 16f: the wrap preamble now (a) builds
     // `ctx.cookies` with read methods and a write-buffer
     // (`__tspCookieWrites`), and (b) emits the response
@@ -1222,6 +1239,47 @@ mod tests {
         );
         assert!(wrapped.contains("__tspHttpError__"), "got: {wrapped}");
         assert!(wrapped.contains("Promise.resolve().then"), "got: {wrapped}");
+    }
+
+    /// §32.1 dev error page: a non-HttpError throw inside
+    /// the page handler must NOT propagate to the outer
+    /// IIFE (which would `process.exit(1)` and lose the
+    /// error body). The inner catch must build a 500
+    /// response with a JSON body that carries the error
+    /// name, message, and stack so the host can render
+    /// the dev error page in `TSP_DEVELOPMENT=1` mode.
+    #[test]
+    fn wrap_emits_dev_error_page_500_for_non_http_errors() {
+        let wrapped = wrap_for_bun_cli(
+            "function GET() { throw new Error('boom'); }\n",
+            "GET",
+            None,
+        );
+        // The HttpError fast path is still present.
+        assert!(
+            wrapped.contains("e.status"),
+            "the HttpError fast path must be preserved; got: {wrapped}"
+        );
+        // The new fallback branch must serialize the
+        // error into a JSON body the host can parse.
+        assert!(
+            wrapped.contains("JSON.stringify({kind: 'tsp_error'"),
+            "non-HttpError catch must serialize a `tsp_error` JSON body; got: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("error: (e && e.name)"),
+            "the serialized body must carry the error name; got: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("stack: (e && e.stack)"),
+            "the serialized body must carry the stack; got: {wrapped}"
+        );
+        // The 500 response header signals dev-mode host
+        // dispatch.
+        assert!(
+            wrapped.contains("'x-tsp-error': 'page'"),
+            "the 500 response must carry `x-tsp-error: page` so the host recognizes the dev path; got: {wrapped}"
+        );
     }
 
     #[test]
