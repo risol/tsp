@@ -1969,6 +1969,272 @@ fn dynamic_segments_and_catch_all_route_to_pages_with_params() {
 }
 
 // ---------------------------------------------------------------------------
+// Multipart / form-data integration test (slice 16g)
+//
+// The TSP v2 wrap preamble decodes the request's `body_b64`
+// into a Uint8Array and feeds it to Bun's native `Request`
+// constructor as a `Blob` (not a bare Uint8Array -- Bun's
+// multipart parser needs the Blob's duplex half to read the
+// body). That gives pages the Web `Request` shape they expect,
+// so `await ctx.request.formData()` works for both
+// `multipart/form-data` and `application/x-www-form-urlencoded`
+// bodies, with binary-safe file parts.
+//
+// The integration test exercises the full page lifecycle
+// against the real binary:
+//
+//   1. POST /upload  multipart (text fields only)
+//                       -> formData() returns two strings
+//   2. POST /upload  multipart (1 text + 1 text/plain file)
+//                       -> formData() returns a File-like with
+//                          size and content-type intact
+//   3. POST /upload  multipart (UTF-8 file content)
+//                       -> byte-fidelity: emoji + CJK survive
+//                          the b64 -> Blob -> formData path
+//   4. POST /upload  url-encoded form
+//                       -> formData() parses key=value pairs
+//   5. POST /upload  plain text body (not a form)
+//                       -> formData() throws; page surfaces
+//                          the error as a 500 with the
+//                          `formData-error: ...` shape
+//
+// The page is the production `routes/upload.tsp` (a copy is
+// written into the temp routes dir to keep the test
+// self-contained). The body bytes for steps 1-3 are hand-
+// built to keep the test independent of any client library
+// and to pin the exact wire format Bun's parser sees.
+// ---------------------------------------------------------------------------
+
+const UPLOAD_TSP: &str = r#"
+// Mirror of `routes/upload.tsp` (slice 16g). The page reads
+// the request body via `await ctx.request.formData()`,
+// which Bun's native Request supports for both
+// `multipart/form-data` and `application/x-www-form-urlencoded`
+// request bodies. The wrap preamble wires the body bytes in
+// (slice 16g's raw-bytes transport, no UTF-8 lossy decode
+// on the host side) so file parts keep their byte fidelity.
+export async function POST(ctx) {
+  try {
+    const fd = await ctx.request.formData();
+    const lines = [];
+    for (const [name, value] of fd.entries()) {
+      if (typeof value === "string") {
+        lines.push(`${name}=${value}`);
+      } else {
+        // value is a File: include size + content-type so
+        // the e2e can assert byte-fidelity and MIME
+        // preservation through the body transport.
+        lines.push(
+          `${name}=file(${value.size} bytes, type=${value.type || "application/octet-stream"}, name=${value.name || ""})`
+        );
+      }
+    }
+    return new Response(lines.sort().join("; "), {
+      status: 200,
+      headers: { "x-demo": "slice16g", "content-type": "text/plain" },
+    });
+  } catch (e) {
+    // formData() throws when the body is not a parseable
+    // form (e.g. plain text or non-multipart binary).
+    // Surface the message in the response so the e2e
+    // shows it instead of hanging.
+    return new Response(`formData-error: ${e}`, {
+      status: 500,
+      headers: { "x-demo": "slice16g", "content-type": "text/plain" },
+    });
+  }
+}
+
+export function GET() {
+  return "POST a multipart/form-data body to /upload to see formData() parsed\n";
+}
+"#;
+
+#[test]
+fn multipart_form_data_round_trips_through_real_binary() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-upload-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+    std::fs::write(routes_dir.join("upload.tsp"), UPLOAD_TSP).expect("upload.tsp");
+
+    let port: u16 = 34_400 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    // helper: open a fresh stream, POST raw bytes, return (status, body).
+    fn post_raw(
+        port: u16,
+        body: &[u8],
+        content_type: &str,
+        label: &str,
+    ) -> (u16, String) {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("read timeout");
+        let req = format!(
+            "POST /upload HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        stream.write_all(req.as_bytes()).expect("write head");
+        stream.write_all(body).expect("write body");
+        let mut raw = String::new();
+        stream.read_to_string(&mut raw).expect("read");
+        let status: u16 = raw
+            .lines()
+            .next()
+            .and_then(|l| l.split_whitespace().nth(1))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let body = raw.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+        eprintln!("  [{label}] status={status} body={body:?}");
+        (status, body)
+    }
+
+    // 1. multipart with two text fields.
+    let boundary1 = "----WebKitFormBoundaryABC123";
+    let body1 = format!(
+        "--{boundary1}\r\n\
+         Content-Disposition: form-data; name=\"username\"\r\n\r\n\
+         alice\r\n\
+         --{boundary1}\r\n\
+         Content-Disposition: form-data; name=\"email\"\r\n\r\n\
+         alice@example.com\r\n\
+         --{boundary1}--\r\n"
+    )
+    .into_bytes();
+    let (s1, b1) = post_raw(
+        port,
+        &body1,
+        &format!("multipart/form-data; boundary={boundary1}"),
+        "step1 text",
+    );
+    assert_eq!(s1, 200, "step1 must 200; got {s1} body={b1:?}");
+    assert!(
+        b1.contains("email=alice@example.com") && b1.contains("username=alice"),
+        "step1 must echo both text fields; got {b1:?}"
+    );
+
+    // 2. multipart with a text field + a text/plain file.
+    let boundary2 = "----WebKitFormBoundaryDEF456";
+    let file_content = b"Hello, world!\n";
+    let mut body2 = Vec::new();
+    body2.extend_from_slice(format!("--{boundary2}\r\n").as_bytes());
+    body2.extend_from_slice(
+        b"Content-Disposition: form-data; name=\"kind\"\r\n\r\n",
+    );
+    body2.extend_from_slice(b"document\r\n");
+    body2.extend_from_slice(format!("--{boundary2}\r\n").as_bytes());
+    body2.extend_from_slice(
+        b"Content-Disposition: form-data; name=\"doc\"; filename=\"hello.txt\"\r\n\
+          Content-Type: text/plain\r\n\r\n",
+    );
+    body2.extend_from_slice(file_content);
+    body2.extend_from_slice(format!("\r\n--{boundary2}--\r\n").as_bytes());
+    let (s2, b2) = post_raw(
+        port,
+        &body2,
+        &format!("multipart/form-data; boundary={boundary2}"),
+        "step2 file",
+    );
+    assert_eq!(s2, 200, "step2 must 200; got {s2} body={b2:?}");
+    assert!(
+        b2.contains("kind=document"),
+        "step2 must echo the text field; got {b2:?}"
+    );
+    assert!(
+        b2.contains(&format!(
+            "doc=file({} bytes, type=text/plain;charset=utf-8, name=hello.txt)",
+            file_content.len()
+        )),
+        "step2 must surface file with size + type + name intact; got {b2:?}"
+    );
+
+    // 3. UTF-8 file content survives the b64 -> Blob -> formData
+    //    path. Emoji + CJK are the canonical byte-fidelity
+    //    canary because they are non-ASCII and their byte
+    //    representation is not stable under any lossy decode.
+    let boundary3 = "----WebKitFormBoundaryGHI789";
+    let utf8_content = "你好,世界! 🚀 café\n".as_bytes();
+    let mut body3 = Vec::new();
+    body3.extend_from_slice(format!("--{boundary3}\r\n").as_bytes());
+    body3.extend_from_slice(
+        b"Content-Disposition: form-data; name=\"greeting\"; filename=\"greet.txt\"\r\n\
+          Content-Type: text/plain; charset=utf-8\r\n\r\n",
+    );
+    body3.extend_from_slice(utf8_content);
+    body3.extend_from_slice(format!("\r\n--{boundary3}--\r\n").as_bytes());
+    let (s3, b3) = post_raw(
+        port,
+        &body3,
+        &format!("multipart/form-data; boundary={boundary3}"),
+        "step3 utf8",
+    );
+    assert_eq!(s3, 200, "step3 must 200; got {s3} body={b3:?}");
+    let expected_size = utf8_content.len();
+    assert!(
+        b3.contains(&format!(
+            "greeting=file({expected_size} bytes, type=text/plain;charset=utf-8, name=greet.txt)"
+        )),
+        "step3 must report the UTF-8 byte count (not a UTF-16 / U+FFFD substituted count); \
+         got {b3:?}"
+    );
+
+    // 4. application/x-www-form-urlencoded -- Bun's Request
+    //    also parses this through formData(). Two key=value
+    //    pairs.
+    let url_body = b"first=hello&second=world%21";
+    let (s4, b4) = post_raw(
+        port,
+        url_body,
+        "application/x-www-form-urlencoded",
+        "step4 urlencoded",
+    );
+    assert_eq!(s4, 200, "step4 must 200; got {s4} body={b4:?}");
+    assert!(
+        b4.contains("first=hello") && b4.contains("second=world!"),
+        "step4 must parse url-encoded fields; got {b4:?}"
+    );
+
+    // 5. Plain text body (not a form) -> formData() throws;
+    //    the page returns 500 with the `formData-error:` prefix.
+    let (s5, b5) = post_raw(port, b"this is not a form", "text/plain", "step5 nonform");
+    assert_eq!(s5, 500, "step5 must 500 (not a parseable form); got {s5}");
+    assert!(
+        b5.contains("formData-error:"),
+        "step5 must surface the formData error in the body; got {b5:?}"
+    );
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+// ---------------------------------------------------------------------------
 // bun:sql runtime integration test (slice 17d)
 //
 // The TSP v2 wrap preamble surfaces bun's native SQL client

@@ -287,6 +287,17 @@ they ride on the handler signature. The contract for them is:
 
 ```text
 ctx.request       Web `Request` (read body, json, formData, etc.)
+                  - body is delivered as a `Blob` so
+                    `await ctx.request.formData()` works for
+                    both `multipart/form-data` and
+                    `application/x-www-form-urlencoded`;
+                    binary file parts keep byte fidelity
+                    (Bun's multipart parser sees the raw
+                    body bytes; no UTF-8 lossy decode)
+                  - `formData()` throws on non-parseable
+                    bodies (e.g. plain text or missing
+                    boundary); the page is expected to
+                    `try/catch` and surface the error
 ctx.url           URL parsed from the request path + query
 ctx.params        Route parameters (spec sect.11.3 / 11.4)
                   - `Record<string, string>` for one-segment
@@ -650,6 +661,26 @@ trailing-slash-on-no-index). Spec sect.11.6 priority rule
 (static > dynamic > catch-all) and the `TSP1004`
 ambiguous-route refusal are part of the contract.
 
+**Multipart / form data (slice 16g).** Slice 16g shipped
+the raw-body-bytes transport: the host serializes the
+request body as base64, the wrap preamble atob-decodes
+back to a `Uint8Array` and feeds it to Bun's native
+`Request` constructor as a `Blob` (not a bare `Uint8Array`
+— Bun's multipart parser needs the Blob's duplex half to
+read the body). The e2e test
+`multipart_form_data_round_trips_through_real_binary`
+in `tests/start_order.rs` exercises 5 scenarios: text-only
+multipart, multipart with a text field + a text/plain
+file (size + content-type + filename surface intact),
+UTF-8 file content (emoji + CJK survive byte-fidelity at
+26 bytes for "你好,世界! 🚀 café\n"), url-encoded
+form bodies, and the failure shape (`formData()` throws
+`ERR_FORMDATA_PARSE_ERROR` on non-parseable bodies; the
+production `routes/upload.tsp` page wraps the call in
+`try/catch` and returns a 500 with the
+`formData-error: <message>` body so the e2e can assert on
+the failure shape rather than timing out on a hang).
+
 **High-risk bun builtins explicitly excluded.** `Bun.serve`,
 `Bun.spawn`, `Bun.FFI`, `Bun.S3Client`, `Bun.connect`, `Bun.mmap`,
 `Bun.Cookie`, `Bun.Transpiler` are deliberately **not** exposed.
@@ -672,8 +703,8 @@ in at JSX-expansion time. No code that shipped on or before the
 v2.0 sign-off imported these names, so this is a documentation
 correction rather than a behaviour change.
 
-**Verification.** 231 tests green as of this amendment
-(202 lib + 4 worker_integration + 15 process_model + 10 start_order
+**Verification.** 232 tests green as of this amendment
+(202 lib + 4 worker_integration + 15 process_model + 11 start_order
 e2e, including `util_namespace_surfaces_bun_builtins_for_pages` for
 the new `util` namespace, `zod_runtime_compiled_into_wrap_serves_validated_schemas`
 for `zod`, `password_runtime_through_bun_password_serves_hashed_passwords`
@@ -683,6 +714,8 @@ for the nanoid family, and — added with this amendment —
 `cookies_runtime_parses_request_and_emits_set_cookie_on_write` for
 `ctx.cookies` (slice 16f),
 `session_runtime_mints_regenerates_and_destroys_session_id` for
-`ctx.session` (slice 16k/l), and
+`ctx.session` (slice 16k/l),
 `dynamic_segments_and_catch_all_route_to_pages_with_params` for
-dynamic route segments + catch-all (slice 16e)).
+dynamic route segments + catch-all (slice 16e), and
+`multipart_form_data_round_trips_through_real_binary` for
+`ctx.request.formData()` (slice 16g)).
