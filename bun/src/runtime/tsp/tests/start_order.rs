@@ -3339,6 +3339,242 @@ fn extract_token(url: &str) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
+// §22.3 config hot reload (plan §22.3)
+//
+// Today (pre-§22.3), the host reads `tsp.config.json` ONCE
+// at boot; every config change requires a master restart.
+// The §22.3 watcher re-reads the file on every poll, and
+// when the content hash changes, calls
+// `ServiceRegistry::apply_config_snapshot` under a write
+// lock. The new state is observed on the NEXT request
+// (the registry's runtime state is the source of truth,
+// not a per-generation copy).
+//
+// The e2e exercises the full path through the real binary:
+//
+//   1. Boot master with config A (counter `hits` initial=0,
+//      kv `config` with one entry, plus a feature_flag
+//      `flags` with one entry).
+//   2. GET /counter -> 1 (counter post-increments)
+//   3. GET /kv?key=foo -> "bar"
+//   4. GET /flags?check=beta -> true
+//   5. Modify config: counter initial=100, kv entries
+//      changes (remove foo, add qux), feature_flag
+//      (drop beta, add v2).
+//   6. Wait for the "config reloaded" marker in stderr.
+//   7. GET /counter -> 101 (counter RESET to 100, then
+//      post-incremented to 101 on this request).
+//   8. GET /kv?key=foo -> null (foo dropped from the
+//      fresh snapshot).
+//   9. GET /kv?key=qux -> "baz" (new entry in the
+//      fresh snapshot).
+//  10. GET /flags?check=beta -> null (flag dropped).
+//  11. GET /flags?check=v2 -> true (new flag).
+//  12. GET /counter again -> 102 (state survives across
+//      requests; the reload happened BEFORE this request).
+//
+// Step 6 is the only step that is timing-sensitive: the
+// watcher polls the config file at the same interval as
+// the routes poll (500ms by default), so the e2e waits
+// up to 5s. The reload marker is what the bin's
+// `on_config_reload` callback logs on success.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn config_file_hot_reload_replaces_services_without_master_restart() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-config-reload-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+
+    // Use the production-shape demo routes from the repo so
+    // the assertion is the same shape as a real project
+    // would see. `include_str!` at the 5-up level resolves
+    // to `D:\GitHub\tsp\routes\`.
+    std::fs::write(
+        routes_dir.join("counter.tsp"),
+        include_str!("../../../../../routes/counter.tsp"),
+    )
+    .expect("counter.tsp");
+    std::fs::write(
+        routes_dir.join("kv.tsp"),
+        include_str!("../../../../../routes/kv.tsp"),
+    )
+    .expect("kv.tsp");
+    std::fs::write(
+        routes_dir.join("flags.tsp"),
+        include_str!("../../../../../routes/flags.tsp"),
+    )
+    .expect("flags.tsp");
+
+    let config_path = temp_root.join("tsp.config.json");
+    // Boot-time config: counter starts at 0, kv has one
+    // entry `foo=bar`, flags has one entry `beta=true`.
+    std::fs::write(
+        &config_path,
+        "{\n  \"services\": {\n    \"hits\":   { \"kind\": \"counter\", \"initial\": 0 },\n    \"config\": { \"kind\": \"kv\",\n      \"entries\": { \"foo\": \"bar\" }\n    },\n    \"flags\":  { \"kind\": \"feature_flag\",\n      \"flags\": { \"beta\": true }\n    }\n  }\n}\n",
+    )
+    .expect("config A");
+
+    let port: u16 = 35_500 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_CONFIG", &config_path)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    // --- Round 1: original config ---
+    let (s_c1, b_c1) = http_get_status(port, "/counter", Duration::from_secs(10));
+    assert_eq!(s_c1, 200, "GET /counter must 200, got {s_c1} body={b_c1:?}");
+    assert!(
+        b_c1.contains("\"hits\":1"),
+        "counter must be 1 on the first request after boot; got {b_c1:?}"
+    );
+
+    let (_, b_k1) = http_get_status(
+        port,
+        "/kv?key=foo",
+        Duration::from_secs(10),
+    );
+    assert!(
+        b_k1.contains("\"value\":\"bar\""),
+        "GET /kv?key=foo must return bar; got {b_k1:?}"
+    );
+
+    let (_, b_f1) = http_get_status(
+        port,
+        "/flags?check=beta",
+        Duration::from_secs(10),
+    );
+    assert!(
+        b_f1.contains("\"value\":true"),
+        "GET /flags?check=beta must return true; got {b_f1:?}"
+    );
+
+    // --- Modify the config on disk ---
+    // The watcher's poll is the same as the routes poll
+    // (500ms by default). The reload marker is logged
+    // synchronously inside the watcher thread; the e2e
+    // gives it up to 5s to react (10x the poll interval
+    // is enough for a CI runner under load).
+    std::fs::write(
+        &config_path,
+        "{\n  \"services\": {\n    \"hits\":   { \"kind\": \"counter\", \"initial\": 100 },\n    \"config\": { \"kind\": \"kv\",\n      \"entries\": { \"qux\": \"baz\" }\n    },\n    \"flags\":  { \"kind\": \"feature_flag\",\n      \"flags\": { \"v2\": true }\n    }\n  }\n}\n",
+    )
+    .expect("config B");
+
+    wait_for_marker(&mut child, "config reloaded", Duration::from_secs(5));
+
+    // --- Round 2: post-reload ---
+    // Counter is RESET to 100, then the first GET
+    // post-increments to 101. The reload's reset is the
+    // observable contract; the post-increment is the
+    // existing wire semantic.
+    let (s_c2, b_c2) = http_get_status(port, "/counter", Duration::from_secs(10));
+    assert_eq!(s_c2, 200, "GET /counter after reload must 200, got {s_c2}");
+    assert!(
+        b_c2.contains("\"hits\":101"),
+        "counter must reset to 100 and then post-increment to 101 on the first request after reload; got {b_c2:?}"
+    );
+
+    // `foo` was removed in the new snapshot; the kv
+    // service no longer carries it.
+    let (_, b_k2) = http_get_status(
+        port,
+        "/kv?key=foo",
+        Duration::from_secs(10),
+    );
+    assert!(
+        b_k2.contains("\"value\":null"),
+        "GET /kv?key=foo after reload must return null (foo dropped from the fresh snapshot); got {b_k2:?}"
+    );
+
+    // `qux` is the new entry in the fresh snapshot.
+    let (_, b_k3) = http_get_status(
+        port,
+        "/kv?key=qux",
+        Duration::from_secs(10),
+    );
+    assert!(
+        b_k3.contains("\"value\":\"baz\""),
+        "GET /kv?key=qux after reload must return baz; got {b_k3:?}"
+    );
+
+    // `beta` was removed; the feature_flag service no
+    // longer reports it.
+    let (_, b_f2) = http_get_status(
+        port,
+        "/flags?check=beta",
+        Duration::from_secs(10),
+    );
+    assert!(
+        b_f2.contains("\"value\":null"),
+        "GET /flags?check=beta after reload must return null; got {b_f2:?}"
+    );
+
+    // `v2` is the new flag.
+    let (_, b_f3) = http_get_status(
+        port,
+        "/flags?check=v2",
+        Duration::from_secs(10),
+    );
+    assert!(
+        b_f3.contains("\"value\":true"),
+        "GET /flags?check=v2 after reload must return true; got {b_f3:?}"
+    );
+
+    // A second counter GET must be > 101, proving the
+    // counter is the SAME instance across requests (not
+    // a fresh one per request) and that the post-reload
+    // state persists. The exact value depends on how many
+    // intermediate requests happened (each request
+    // snapshots `ctx.services`, which post-increments
+    // the counter), so we assert on the LOWER bound only.
+    let (s_c3, b_c3) = http_get_status(port, "/counter", Duration::from_secs(10));
+    assert_eq!(s_c3, 200);
+    // The first post-reload counter GET was 101. Every
+    // subsequent request that builds a `ctx.services`
+    // snapshot bumps the counter (the counter is
+    // `is_request_varying()`, so the page is rebuilt on
+    // every request and `describe_json` post-increments).
+    // The kv / flags checks above each add at least one
+    // bump, so 102 is the safe lower bound.
+    let counter_after: u64 = b_c3
+        .split("\"hits\":")
+        .nth(1)
+        .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    assert!(
+        counter_after >= 102,
+        "counter must keep ticking (>= 102 on the second request after reload); got {b_c3:?}"
+    );
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+
+// ---------------------------------------------------------------------------
 // Phase 11 tooling (plan §11) -- `tspserver_v2 typings` subcommand
 //
 // The host ships a `typings` subcommand (plan §11

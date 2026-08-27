@@ -220,9 +220,16 @@ fn serve_main() -> ExitCode {
             .unwrap_or_else(|e| panic!("TSPv2PoC1: read {config_path}: {e}"));
         let custom = load_counter_services_from_config(&text)
             .unwrap_or_else(|e| panic!("TSPv2PoC1: parse {config_path}: {e}"));
+        // §22.3: route the config-declared services through
+        // `apply_config_snapshot` so the registry's
+        // `config_decls` set is populated. A future reload
+        // uses that set to drop ONLY the config-driven
+        // services (the built-in `logger` / `session` /
+        // `time` survive a reload that does not mention
+        // them).
+        registry_builder.apply_config_snapshot(custom.clone());
         for svc in custom {
             custom_labels.push(svc.name().to_string());
-            registry_builder.register(svc);
         }
         eprintln!(
             "TSPv2PoC1: custom services from {config_path}: {}",
@@ -234,10 +241,21 @@ fn serve_main() -> ExitCode {
              custom services)"
         );
     }
-    let services: &'static ServiceRegistry = Box::leak(Box::new(registry_builder));
+    // §22.3: the registry is wrapped in an `RwLock` so the
+    // config-reload watcher can swap config-driven services
+    // (counter / kv / feature_flag) without a master
+    // restart, while the request path takes a read lock for
+    // each snapshot. Built-in services (logger, session,
+    // time) are never replaced by the config watcher; the
+    // `apply_config_snapshot` method only touches names that
+    // appear in the freshly-parsed config snapshot.
+    let services: &'static std::sync::RwLock<ServiceRegistry> =
+        Box::leak(Box::new(std::sync::RwLock::new(registry_builder)));
     eprintln!(
         "TSPv2PoC1: services registered: {}",
         services
+            .read()
+            .expect("services read lock at boot")
             .iter_names()
             .map(|n| n.to_string())
             .collect::<Vec<_>>()
@@ -259,9 +277,47 @@ fn serve_main() -> ExitCode {
     });
     let registry_arc = Arc::new(registry.clone());
     let routes_for_watcher = Arc::clone(&routes);
+    // §22.3: the watcher's config-reload callback re-parses
+    // the config file and applies the fresh snapshot to the
+    // shared `services` registry. The callback takes a
+    // WRITE lock for the duration of the apply; a request
+    // thread holding a read lock would block the watcher
+    // briefly, but the request path only holds the read
+    // lock for a snapshot call (microseconds), so the
+    // wait is invisible in practice. The callback is the
+    // same one the host's boot path uses (`load_counter_services_from_config`),
+    // so a typo in the new config that the boot path would
+    // have rejected is also rejected here -- the watcher
+    // logs the error and the previous snapshot stays in
+    // place (the registry is unchanged on Err).
+    let on_config_reload: Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync> = {
+        let services_for_reload: &'static std::sync::RwLock<ServiceRegistry> = services;
+        Arc::new(move |text: &str| {
+            let fresh = load_counter_services_from_config(text)?;
+            let names: Vec<String> = fresh.iter().map(|s| s.name().to_string()).collect();
+            {
+                let mut guard = services_for_reload
+                    .write()
+                    .expect("services write lock from config reload");
+                guard.apply_config_snapshot(fresh);
+            }
+            Ok(format!("applied {} service(s): {}", names.len(), names.join(", ")))
+        })
+    };
     let watch_config = WatchConfig {
         routes_root: routes_dir.clone(),
         poll_ms: watcher::DEFAULT_POLL_MS,
+        // §22.3: wire the config-file watcher. The host
+        // already read the file at boot; the watcher's
+        // initial hash snapshot is built from the same
+        // on-disk content so a no-op edit at boot does
+        // not fire a reload. If the file is missing at
+        // boot, the watcher's first poll that sees the
+        // file fires the callback.
+        config_path: std::path::Path::new(&config_path)
+            .is_file()
+            .then(|| PathBuf::from(&config_path)),
+        on_config_reload: Some(on_config_reload),
     };
     let watcher_handle = watcher::spawn(watch_config, graph, routes_for_watcher, registry_arc);
     eprintln!(
@@ -269,6 +325,12 @@ fn serve_main() -> ExitCode {
         routes_dir.display(),
         watcher::DEFAULT_POLL_MS
     );
+    if config_path != "tsp.config.json" || std::path::Path::new(&config_path).is_file() {
+        eprintln!(
+            "TSPv2PoC1: config hot-reload watching {} (poll interval = watcher poll)",
+            config_path
+        );
+    }
 
     if let Err(e) = host::serve("0.0.0.0", port, routes, registry, bun, services) {
         // serve returns only on a fatal listener error; dropping

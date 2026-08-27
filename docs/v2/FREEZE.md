@@ -1298,3 +1298,149 @@ adds a name to the wrap without updating
 `tsp-server.d.ts` would fail the
 `tsp_server_declares_every_wrap_prelude_name`
 unit test).
+
+---
+
+### Amendment 6 (2026-08-27) — §22.3 config-file hot reload
+
+Plan §22.3 ("Optional eager reload") and the slice
+22 follow-up's deferred-work list both flag the
+config-file hot reload as the next gap. Pre-§22.3,
+the host reads `tsp.config.json` ONCE at boot; every
+config change requires a master restart. The slice
+22 family (counter / kv / feature_flag) is the
+use case: today an operator who wants to add a new
+kv entry must bounce the master.
+
+This slice closes the gap end-to-end. The
+existing `tsp.config.json`-driven service kinds
+(`counter` / `kv` / `feature_flag`) can now be
+edited on disk and take effect on the next request,
+without a master restart.
+
+**What changed in this amendment.**
+
+- **`ServiceRegistry::apply_config_snapshot(fresh)`.**
+  A new method that takes a freshly-parsed `Vec<Arc<dyn Service>>`
+  and atomically replaces the previous
+  config-declared set. Semantics:
+  - Every name in `fresh` is registered (last-wins
+    for duplicate names within `fresh`).
+  - The previous config-declared set is dropped
+    before the new entries are added; this gives
+    `counter` / `kv` / `feature_flag` a clean
+    reset to the new config (state is replaced,
+    not merged -- a counter's `hits` reset to the
+    new `initial`, a kv's `entries` replaced, etc.).
+  - Built-in services (`logger` / `session` /
+    `time`) are preserved across reloads. The
+    registry tracks config-declared names in a
+    `BTreeSet<String>` field; the retain / insert
+    loop only touches that set, leaving the
+    built-in entries untouched.
+  - A config that re-declares a built-in name
+    (e.g. `logger: {kind: "kv", ...}`) replaces
+    the built-in, matching the existing
+    `register()` last-wins semantic.
+
+- **`ServiceRegistry` wrapped in `RwLock` for the
+  host's request path.** Pre-§22.3 the bin
+  leaked `&'static ServiceRegistry`; the request
+  path borrowed it immutably. With hot reload,
+  the watcher thread mutates the registry while
+  the request path reads it. The bin now leaks
+  `&'static RwLock<ServiceRegistry>`; the
+  request path takes a read lock per
+  `services.snapshot(&[])` / `services.get(...)`
+  call. The lock is held for microseconds, so
+  the watcher's write-lock brief wait is
+  invisible in practice. The `host::serve` and
+  `handle_connection` signatures changed to
+  `&'static RwLock<ServiceRegistry>` /
+  `&RwLock<ServiceRegistry>`; all five
+  call-sites in `host.rs` use `.read().unwrap()`.
+
+- **`WatchConfig` accepts a config-file watcher.**
+  Two new fields:
+  - `config_path: Option<PathBuf>` -- the file to
+    poll (the bin passes `tsp.config.json` or
+    the `TSP_CONFIG` env override when the file
+    exists at boot).
+  - `on_config_reload: Option<Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>>`
+    -- the callback invoked with the new file
+    text when the content hash changes.
+  The watcher thread's poll loop gained a
+  `poll_config_once` step (per-tick stat + read
+  + content-hash diff). On a hash change, the
+  callback is invoked and the result is logged
+  to stderr (`config reloaded from <path>: <summary>`
+  on success, `config reload apply failed: <err>`
+  on failure). The bin's callback takes a write
+  lock on the registry, calls
+  `apply_config_snapshot`, and returns a summary
+  string.
+
+- **Bin wires up the callback.** The bin's
+  `serve_main` reads the config at boot as
+  before, but now routes the parsed services
+  through `apply_config_snapshot` (so the
+  registry's `config_decls` set is populated).
+  The same callback is registered with the
+  watcher. The bin's boot log gained a
+  `config hot-reload watching <path> (poll
+  interval = watcher poll)` line so the
+  operator can see the watcher is active.
+
+**What was NOT changed in this amendment.**
+
+- The config parser (`load_counter_services_from_config`)
+  is unchanged. The boot path and the reload
+  path use the same parser; a typo in the new
+  config that the boot path would have
+  rejected is also rejected on reload, and the
+  watcher logs the error and the previous
+  snapshot stays in place (the registry is
+  unchanged on Err).
+- The `register()` method's last-wins semantic
+  is preserved for non-config code paths. The
+  bin's built-in registration
+  (`ServiceRegistry::with_backends`) still uses
+  `register()`; the new `apply_config_snapshot`
+  is the only entry-point that touches
+  `config_decls`.
+- The watcher's routes-file polling is
+  unchanged. The config-file poll is a second
+  `poll_config_once` call inside the same
+  watch-loop iteration; the two polls are
+  independent.
+- No new dependency. `RwLock` is in `std::sync`
+  and was already imported elsewhere in
+  `host.rs`.
+- The host's `serve` / `serve_with_public_root`
+  signatures changed (`&'static ServiceRegistry`
+  -> `&'static RwLock<ServiceRegistry>`) but
+  the bin is the only caller, and the change
+  is internal to the runtime crate.
+
+**Verification.** 248 tests green (212 lib +
+4 worker_integration + 15 process_model + 17 start_order
+e2e, the prior 16 plus
+`config_file_hot_reload_replaces_services_without_master_restart`).
+The lib gain is the 2 new
+`services::apply_config_snapshot_tests::*` tests;
+the start_order e2e gain is the 1 new
+config-reload e2e. The new e2e runs the real
+`dist/tsp-v2/tspserver_v2.exe` binary with a
+`tsp.config.json` declared in a temp dir, modifies
+the file mid-run, waits for the `config reloaded`
+marker in stderr, and asserts the new state is
+visible on the next request (counter reset to
+the new `initial`, kv `entries` replaced,
+feature_flag `flags` replaced, built-in `logger`
+preserved). The 4 unchanged test buckets
+(`worker_integration` / `process_model` / the
+prior 15 start_order e2e / the 210 prior lib
+tests) all still pass against the rebuilt
+binary, confirming the `RwLock` refactor did
+not regress any of the request-path
+semantics pinned by those tests.

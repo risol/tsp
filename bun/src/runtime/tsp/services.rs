@@ -127,12 +127,20 @@ pub trait Service: Send + Sync + Any {
 /// connection thread. Never owned by a generation.
 pub struct ServiceRegistry {
     runtime: BTreeMap<String, Arc<dyn Service>>,
+    /// Names of services that came from a config-driven
+    /// snapshot (`apply_config_snapshot`). The watcher
+    /// uses this set to drop ONLY the config-declared
+    /// services on a reload; built-in services
+    /// (`logger`, `session`, `time`) are not in this
+    /// set and survive every reload.
+    config_decls: std::collections::BTreeSet<String>,
 }
 
 impl ServiceRegistry {
     pub fn new() -> Self {
         ServiceRegistry {
             runtime: BTreeMap::new(),
+            config_decls: std::collections::BTreeSet::new(),
         }
     }
 
@@ -236,11 +244,231 @@ impl ServiceRegistry {
         }
         forwarded
     }
+
+    /// §22.3: apply a freshly-parsed config snapshot. The
+    /// watcher calls this when `tsp.config.json` (or the
+    /// `TSP_CONFIG` override) changes on disk. Semantics:
+    ///
+    /// - Every name in `fresh` is registered (last-wins for
+    ///   duplicate names within `fresh` itself -- the
+    ///   `load_counter_services_from_config` parser already
+    ///   rejects duplicates at the config-parse layer).
+    /// - Every name currently in the registry that is also
+    ///   in `fresh` is dropped before the new entry is
+    ///   added; this gives `counter` / `kv` / `feature_flag`
+    ///   a clean reset to the new config (state is replaced,
+    ///   not merged -- a counter's `hits` reset to the new
+    ///   `initial`, a kv's `entries` replaced, etc.).
+    /// - Every name currently in the registry that is NOT
+    ///   in `fresh` is preserved. This is the right call
+    ///   for built-in services (`logger`, `session`,
+    ///   `time`) which the config parser never declares;
+    ///   a config that does not mention them leaves them
+    ///   untouched.
+    /// - Built-in services that ARE mentioned in `fresh`
+    ///   (e.g. a config that re-declares `logger`) ARE
+    ///   replaced, matching the boot-time last-wins
+    ///   semantic of [`register`].
+    pub fn apply_config_snapshot(&mut self, fresh: Vec<Arc<dyn Service>>) {
+        // Drop the previous config-declared set. Anything
+        // not in `config_decls` is a built-in and is
+        // preserved.
+        let prev_config_decls = std::mem::take(&mut self.config_decls);
+        for name in &prev_config_decls {
+            self.runtime.remove(name);
+        }
+        // Register the fresh snapshot, recording each new
+        // name in `config_decls` so a subsequent reload
+        // can drop them.
+        for svc in fresh {
+            let name = svc.name().to_string();
+            self.runtime.insert(name.clone(), svc);
+            self.config_decls.insert(name);
+        }
+    }
 }
 
 impl Default for ServiceRegistry {
     fn default() -> Self {
         ServiceRegistry::new()
+    }
+}
+
+#[cfg(test)]
+mod apply_config_snapshot_tests {
+    use super::*;
+    use crate::services::{CounterService, FeatureFlagService, KvService, LoggerService};
+
+    /// Pin the §22.3 hot-reload contract:
+    ///
+    /// 1. A service whose name is in the fresh snapshot is
+    ///    REPLACED (counter `initial` is the new value,
+    ///    not the running value).
+    /// 2. A service whose name is NOT in the fresh snapshot
+    ///    is PRESERVED (built-ins like `logger` stay across
+    ///    a config reload that does not mention them).
+    /// 3. A name that was in the previous snapshot but not
+    ///    in the fresh one is REMOVED (counter dropped
+    ///    from the config -> no longer in the registry).
+    /// 4. Re-apply the same snapshot is idempotent (no
+    ///    double-register, no panic).
+    #[test]
+    fn applies_config_snapshot_replacing_preserving_and_dropping() {
+        let mut reg = ServiceRegistry::with_defaults();
+        // Boot: counter `hits` starts at 0.
+        reg.register(Arc::new(CounterService::new("hits".to_string(), 0)));
+        // Bump `hits` twice (each `describe_json` call
+        // post-increments the counter) so we can see
+        // whether the reload RESETS to the new `initial`
+        // (the right semantic) or MERGES (the wrong
+        // semantic). The final value before the reload
+        // is 2; the reload sets it back to 10.
+        reg.get("hits")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<CounterService>()
+            .unwrap()
+            .describe_json();
+        reg.get("hits")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<CounterService>()
+            .unwrap()
+            .describe_json();
+        let before = reg
+            .get("hits")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<CounterService>()
+            .unwrap()
+            .peek();
+        assert_eq!(before, 2, "counter must be 2 after two snapshots");
+
+        // Fresh snapshot: replace `hits` with initial=10,
+        // add a new `kv` service, drop nothing.
+        let mut kv = std::collections::BTreeMap::new();
+        kv.insert("support_email".to_string(), "help@example.com".to_string());
+        let fresh: Vec<Arc<dyn Service>> = vec![
+            Arc::new(CounterService::new("hits".to_string(), 10)),
+            Arc::new(KvService::new("config".to_string(), kv)),
+        ];
+        reg.apply_config_snapshot(fresh);
+
+        // (1) `hits` is reset to 10 (replacement semantic).
+        // Use `peek()` to read the internal value WITHOUT
+        // post-incrementing (which would mask the
+        // reload-time reset behind another +1).
+        let after = reg
+            .get("hits")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<CounterService>()
+            .unwrap()
+            .peek();
+        assert_eq!(
+            after, 10,
+            "reload must reset `hits` to the new `initial` (10)"
+        );
+
+        // (2) `logger` (built-in) is preserved.
+        assert!(
+            reg.get("logger").is_some(),
+            "built-in `logger` must survive a config reload that does not mention it"
+        );
+
+        // (3) `kv` is added.
+        let kv_descriptor = reg
+            .get("config")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<KvService>()
+            .unwrap()
+            .describe_json();
+        assert!(
+            kv_descriptor.contains("\"support_email\":\"help@example.com\""),
+            "new kv `config` must expose the entries from the fresh snapshot; got {kv_descriptor}"
+        );
+
+        // (4) Idempotency: applying the same fresh snapshot
+        // again is a no-op (the counter resets to 10 again
+        // because the same replacement rule fires, but the
+        // registry size does not double).
+        let fresh2: Vec<Arc<dyn Service>> = vec![
+            Arc::new(CounterService::new("hits".to_string(), 10)),
+            Arc::new(KvService::new("config".to_string(), {
+                let mut m = std::collections::BTreeMap::new();
+                m.insert("support_email".to_string(), "help@example.com".to_string());
+                m
+            })),
+        ];
+        reg.apply_config_snapshot(fresh2);
+        assert!(
+            reg.get("config").is_some() && reg.get("hits").is_some(),
+            "re-apply must not double-register or drop services"
+        );
+
+        // (5) Drop semantic: a fresh snapshot that does NOT
+        // mention `hits` removes it; `config` is added.
+        let mut flags = std::collections::BTreeMap::new();
+        flags.insert("beta".to_string(), true);
+        let fresh3: Vec<Arc<dyn Service>> = vec![
+            Arc::new(FeatureFlagService::new("flags".to_string(), flags)),
+        ];
+        reg.apply_config_snapshot(fresh3);
+        assert!(
+            reg.get("hits").is_none(),
+            "`hits` not in the fresh snapshot must be removed"
+        );
+        assert!(
+            reg.get("config").is_none(),
+            "`config` not in the fresh snapshot must be removed"
+        );
+        assert!(
+            reg.get("flags").is_some(),
+            "`flags` in the fresh snapshot must be added"
+        );
+        assert!(
+            reg.get("logger").is_some(),
+            "built-in `logger` must STILL survive a fresh snapshot that does not mention it"
+        );
+
+        // (6) Empty fresh snapshot drops ALL config-declared
+        // services but leaves built-ins alone.
+        reg.apply_config_snapshot(vec![]);
+        assert!(reg.get("flags").is_none());
+        assert!(
+            reg.get("logger").is_some(),
+            "built-in `logger` must survive even an empty config reload"
+        );
+    }
+
+    /// Pin the boot path: a config snapshot that re-declares
+    /// a built-in name (e.g. `logger`) replaces the built-in.
+    /// This matches the existing `register()` last-wins
+    /// semantic; §22.3 does not change it.
+    #[test]
+    fn config_snapshot_replaces_built_in_with_same_name() {
+        let mut reg = ServiceRegistry::with_defaults();
+        assert!(reg.get("logger").is_some());
+        let mut m = std::collections::BTreeMap::new();
+        m.insert("k".to_string(), "v".to_string());
+        let fresh: Vec<Arc<dyn Service>> = vec![Arc::new(KvService::new(
+            "logger".to_string(),
+            m,
+        ))];
+        reg.apply_config_snapshot(fresh);
+        // The new entry is a `KvService`, not a `LoggerService`.
+        assert!(
+            reg.get("logger")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<KvService>()
+                .is_some(),
+            "a config that re-declares `logger` as a kv must replace the built-in logger"
+        );
+        // Touch the LoggerService import so the test does
+        // not warn about unused imports in this module.
+        let _ = LoggerService::new();
     }
 }
 

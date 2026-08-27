@@ -41,6 +41,7 @@ use crate::services::{
     SessionWrite,
 };
 use std::sync::Arc;
+use std::sync::RwLock;
 
 /// Stable error codes for development diagnostics
 /// (spec sect.6.3 / sect.37). The full set lives in
@@ -1291,7 +1292,7 @@ pub fn serve(
     routes: Arc<RouteTable>,
     registry: &'static PageRegistry,
     bun: &'static BunRuntime,
-    services: &'static ServiceRegistry,
+    services: &'static RwLock<ServiceRegistry>,
 ) -> Result<(), HostError> {
     serve_with_public_root(
         host,
@@ -1312,7 +1313,7 @@ pub fn serve_with_public_root(
     routes: Arc<RouteTable>,
     registry: &'static PageRegistry,
     bun: &'static BunRuntime,
-    services: &'static ServiceRegistry,
+    services: &'static RwLock<ServiceRegistry>,
     public_root: Option<std::path::PathBuf>,
 ) -> Result<(), HostError> {
     let addr = format!("{host}:{port}");
@@ -1363,7 +1364,7 @@ fn handle_connection(
     routes: &Arc<RouteTable>,
     registry: &PageRegistry,
     bun: &BunRuntime,
-    services: &ServiceRegistry,
+    services: &RwLock<ServiceRegistry>,
     public_root: Option<&std::path::Path>,
 ) -> Result<(), HostError> {
     // Slice 16d: read the full request (header block up to
@@ -1504,7 +1505,7 @@ fn handle_connection(
             // session; unknown / destroyed sid -> also
             // fresh (spec 16.4 makes the destroyed session
             // no longer usable).
-            let session_resolve = services.get(BUILTIN_SESSION).and_then(|svc_arc| {
+            let session_resolve = services.read().unwrap().get(BUILTIN_SESSION).and_then(|svc_arc| {
                 svc_arc
                     .as_any()
                     .downcast_ref::<SessionService>()
@@ -1530,7 +1531,7 @@ fn handle_connection(
                 // Slice 16j: `ctx.services` snapshot from the
                 // runtime-scoped registry (spec sect.17). The
                 // request-scoped list is empty in 16j.
-                services: services.snapshot(&[]),
+                services: services.read().unwrap().snapshot(&[]),
                 // Slice 16k: `ctx.session` view the page
                 // reads (spec sect.16). `None` only when the
                 // SessionService is not registered (the
@@ -1573,7 +1574,7 @@ fn handle_connection(
                     // logger's `total_lines`) makes every render
                     // request-dependent -- the cache would replay a
                     // stale service-state snapshot.
-                    || services.any_request_varying();
+                    || services.read().unwrap().any_request_varying();
                     let (_status_line, _ct, allow_header, body) = if per_request {
                         render_per_request(
                             &route,
@@ -1610,7 +1611,7 @@ fn handle_connection(
                     // back-channel). The flush lands BEFORE this
                     // response is written, so the next request's
                     // snapshot observes it.
-                    services.flush_log_lines(&outcome.service_logs);
+                    services.read().unwrap().flush_log_lines(&outcome.service_logs);
                     // Slice 16k: apply the page's session writes
                     // (spec sect.16). The new id may be empty
                     // (destroyed) or different (regenerate /
@@ -1622,7 +1623,7 @@ fn handle_connection(
                     let mut outcome = outcome;
                     let mut new_session_sid: Option<String> = None;
                     if let Some(current) = &ctx.session {
-                        if let Some(svc_arc) = services.get(BUILTIN_SESSION) {
+                        if let Some(svc_arc) = services.read().unwrap().get(BUILTIN_SESSION) {
                             if let Some(svc) = svc_arc.as_any().downcast_ref::<SessionService>() {
                                 // Apply the page's writes against
                                 // the session's CURRENT id (the

@@ -63,12 +63,48 @@ pub const DEFAULT_POLL_MS: u64 = 500;
 
 /// The watcher thread's view of the routes root. It owns nothing
 /// mutable; it reads files and writes `mark_dirty` results.
-#[derive(Debug)]
+///
+/// `Debug` is implemented manually (no `#[derive(Debug)]`) because
+/// the `on_config_reload` callback is a `dyn Fn` which does not
+/// implement `Debug`; the manual impl omits the callback from
+/// the printed shape.
 pub struct WatchConfig {
     /// Directory to watch (routes/ root + its recursive subdirs).
     pub routes_root: PathBuf,
     /// Poll interval in milliseconds.
     pub poll_ms: u64,
+    /// §22.3: optional config file to watch for hot reload.
+    /// When the file's content hash changes, the watcher
+    /// calls `on_config_reload` with the new text. The
+    /// callback parses + applies the snapshot; the
+    /// watcher just logs the result. A `None` value
+    /// disables config watching (e.g. when the host
+    /// has no config-driven services).
+    pub config_path: Option<PathBuf>,
+    /// §22.3: callback invoked with the new config text
+    /// when the watched config file's content hash
+    /// changes. The callback returns a human-readable
+    /// summary (e.g. `"applied 3 services: hits, kv,
+    /// flags"`) on success, or an error message on
+    /// failure. The watcher logs both to stderr; the
+    /// callback is responsible for any state mutation
+    /// (typically `ServiceRegistry::apply_config_snapshot`
+    /// under a write lock).
+    pub on_config_reload: Option<Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>>,
+}
+
+impl std::fmt::Debug for WatchConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WatchConfig")
+            .field("routes_root", &self.routes_root)
+            .field("poll_ms", &self.poll_ms)
+            .field("config_path", &self.config_path)
+            .field(
+                "on_config_reload",
+                &self.on_config_reload.as_ref().map(|_| "<callback>"),
+            )
+            .finish()
+    }
 }
 
 /// Shared handle for the host to stop the watcher thread on
@@ -507,6 +543,42 @@ fn poll_once_with_index(
     stats
 }
 
+/// §22.3 config-file poll helper. Reads the file at
+/// `path` and computes its content hash; if the hash
+/// differs from `last_hash`, returns `Ok(Some(text))`
+/// (the new content) and updates `last_hash`. A missing
+/// file is treated as "no change" (the host's
+/// `TSP_CONFIG` env may legitimately point at a
+/// non-existent path that the operator later creates;
+/// the first poll that sees the file fires the
+/// callback). A read error returns `Err(...)` so the
+/// watcher can log it but retain the previous state.
+///
+/// The caller is responsible for invoking the
+/// `on_config_reload` callback when this function
+/// returns `Some(text)`.
+fn poll_config_once(
+    path: &Path,
+    last_hash: &mut Option<SourceHash>,
+) -> Result<Option<String>, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        // ENOENT is not an error here -- the operator
+        // may add a config file later. Any other error
+        // (permission denied, etc.) is reported to the
+        // caller for logging; the registry's state is
+        // preserved.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("read {}: {e}", path.display())),
+    };
+    let new_hash = SourceHash::compute(&text);
+    if last_hash.as_ref() == Some(&new_hash) {
+        return Ok(None);
+    }
+    *last_hash = Some(new_hash);
+    Ok(Some(text))
+}
+
 /// Recursively collect all source files under `root` into
 /// `current`, computing their content hash. Non-source files
 /// (`.git`, node_modules, binary) are skipped.
@@ -642,6 +714,24 @@ pub fn spawn(
             // graph representation.
             let _graph = graph;
 
+            // §22.3: per-config-file state. `last_config_hash` is
+            // `None` until the first poll sees a file (or stays
+            // `None` forever if the host has no config-driven
+            // services). On every tick we re-stat + re-read the
+            // file; a content-hash change fires the callback.
+            let mut last_config_hash: Option<SourceHash> = None;
+            // Initial sync so the first poll only reports
+            // CHANGES, not the boot-time state. If the file
+            // exists at boot, the host already loaded it via
+            // `load_counter_services_from_config`; we just
+            // record its current hash so a no-op edit does
+            // not fire a reload.
+            if let Some(path) = &config.config_path {
+                if let Ok(text) = std::fs::read_to_string(path) {
+                    last_config_hash = Some(SourceHash::compute(&text));
+                }
+            }
+
             while !stop_in_thread.load(Ordering::Acquire) {
                 let guard = wake_in_thread.0.lock().expect("watcher wake lock poisoned");
                 let _ = wake_in_thread
@@ -698,6 +788,34 @@ pub fn spawn(
                         "TSPv2PoC1: watch: source snapshot incomplete ({} error(s)); retaining previous snapshot",
                         changed.snapshot_errors
                     );
+                }
+
+                // §22.3 config hot reload. A missing or
+                // unparsable file is a NO-OP (the host's
+                // boot-time read would have surfaced a
+                // hard error; the watcher's only job is to
+                // react to a SUCCESSFUL parse-then-apply
+                // sequence, which the callback returns
+                // summary text for).
+                if let (Some(path), Some(callback)) =
+                    (&config.config_path, &config.on_config_reload)
+                {
+                    match poll_config_once(path, &mut last_config_hash) {
+                        Ok(Some(text)) => match callback(&text) {
+                            Ok(summary) => eprintln!(
+                                "TSPv2PoC1: config reloaded from {}: {}",
+                                path.display(),
+                                summary
+                            ),
+                            Err(error) => eprintln!(
+                                "TSPv2PoC1: config reload apply failed: {error}"
+                            ),
+                        },
+                        Ok(None) => {}
+                        Err(error) => eprintln!(
+                            "TSPv2PoC1: config reload read failed: {error} (retaining previous snapshot)"
+                        ),
+                    }
                 }
             }
         })
@@ -992,6 +1110,13 @@ mod tests {
             WatchConfig {
                 routes_root: dir.clone(),
                 poll_ms: 100,
+                // §22.3: tests that don't exercise config
+                // hot reload leave both fields at their
+                // default `None`. The watcher skips both
+                // the routes poll AND the config poll
+                // when nothing is set.
+                config_path: None,
+                on_config_reload: None,
             },
             graph,
             Arc::new(RouteTable::empty()),
