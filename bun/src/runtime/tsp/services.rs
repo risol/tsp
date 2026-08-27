@@ -786,14 +786,177 @@ impl Service for CounterService {
     }
 }
 
+// =====================================================================
+// KvService -- read-only in-memory key-value store backed by
+// the host's `TSP_CONFIG` file (slice 22 follow-up). The page
+// reads the snapshot via `ctx.services.<name>.entries.<key>`;
+// the page cannot mutate the map (the descriptor is frozen).
+// Mutations are config-driven: change the file, restart the
+// master, the new values ship. This is the v2 surface for
+// host-supplied configuration values a page needs to read
+// (rate limits, feature gates, support emails, internal
+// service URLs, etc.) without leaking the whole process
+// environment (compare with the `util.env` wrapper, which
+// also hides `Bun.env.toJSON`).
+// =====================================================================
+
+pub struct KvService {
+    name: String,
+    entries: std::collections::BTreeMap<String, String>,
+}
+
+impl KvService {
+    pub fn new(name: impl Into<String>, entries: std::collections::BTreeMap<String, String>) -> Self {
+        Self {
+            name: name.into(),
+            entries,
+        }
+    }
+
+    /// Test hook: snapshot the current entries without going
+    /// through the wire.
+    pub fn entries(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.entries
+    }
+}
+
+impl Service for KvService {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn scope(&self) -> ServiceScope {
+        ServiceScope::Runtime
+    }
+
+    fn is_request_varying(&self) -> bool {
+        // The values do not change between requests (the
+        // host's config file is the source of truth and
+        // is only re-read on master restart), so a
+        // generation cache that replays the snapshot is
+        // correct. Pages that need live config can opt
+        // out via their own page-level
+        // `is_request_varying()` -- the service itself is
+        // cacheable.
+        false
+    }
+
+    fn describe_json(&self) -> String {
+        // Hand-roll the entries object so we do not pull
+        // in `serde`. Keys are escaped via the existing
+        // `json_string_field`; values are escaped the same
+        // way (the plan does not constrain value types
+        // beyond "string"; the v2 prototype sticks to
+        // string for the same reason `Bun.env` is a
+        // string map).
+        let mut out = String::with_capacity(64 + self.entries.len() * 32);
+        out.push_str("{\"kind\":\"kv\",\"name\":");
+        out.push_str(&json_string_field(&self.name));
+        out.push_str(",\"entries\":{");
+        let mut first = true;
+        for (k, v) in &self.entries {
+            if !first {
+                out.push(',');
+            }
+            first = false;
+            out.push_str(&json_string_field(k));
+            out.push(':');
+            out.push_str(&json_string_field(v));
+        }
+        out.push_str("}}");
+        out
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+// =====================================================================
+// FeatureFlagService -- boolean flag set, same load-time
+// config-driven shape as `kv`. The page reads via
+// `ctx.services.<name>.flags.<flag>` (true / false) and
+// uses the value to gate code paths (new checkout flow,
+// beta UI, A/B test bucket assignment, etc.). The flag set
+// is a `BTreeMap<String, bool>` so the wire format is
+// deterministic (stable key order) and so a typo'd
+// duplicate-key in the config file cannot silently
+// shadow a real one.
+// =====================================================================
+
+pub struct FeatureFlagService {
+    name: String,
+    flags: std::collections::BTreeMap<String, bool>,
+}
+
+impl FeatureFlagService {
+    pub fn new(
+        name: impl Into<String>,
+        flags: std::collections::BTreeMap<String, bool>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            flags,
+        }
+    }
+
+    pub fn flags(&self) -> &std::collections::BTreeMap<String, bool> {
+        &self.flags
+    }
+}
+
+impl Service for FeatureFlagService {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn scope(&self) -> ServiceScope {
+        ServiceScope::Runtime
+    }
+
+    fn is_request_varying(&self) -> bool {
+        // Same as KvService: the flag set is config-driven
+        // and only changes on master restart, so the
+        // generation cache can replay the snapshot safely.
+        false
+    }
+
+    fn describe_json(&self) -> String {
+        let mut out = String::with_capacity(64 + self.flags.len() * 16);
+        out.push_str("{\"kind\":\"feature_flag\",\"name\":");
+        out.push_str(&json_string_field(&self.name));
+        out.push_str(",\"flags\":{");
+        let mut first = true;
+        for (k, v) in &self.flags {
+            if !first {
+                out.push(',');
+            }
+            first = false;
+            out.push_str(&json_string_field(k));
+            out.push(':');
+            out.push_str(if *v { "true" } else { "false" });
+        }
+        out.push_str("}}");
+        out
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
 /// Hand-rolled config loader for the host-side services
 /// registry. Reads a small JSON file with the shape
 ///
 /// ```json
 /// {
 ///   "services": {
-///     "hits":  { "kind": "counter", "initial": 0 },
-///     "views": { "kind": "counter", "initial": 100 }
+///     "hits":   { "kind": "counter",     "initial": 0 },
+///     "views":  { "kind": "counter",     "initial": 100 },
+///     "config": { "kind": "kv",
+///                 "entries": { "support_email": "help@example.com" } },
+///     "flags":  { "kind": "feature_flag",
+///                 "flags": { "beta_ui": true, "new_checkout": false } }
 ///   }
 /// }
 /// ```
@@ -801,38 +964,30 @@ impl Service for CounterService {
 /// and returns a list of `Arc<dyn Service>` ready to hand
 /// to `ServiceRegistry::register`. The parser is
 /// intentionally minimal (objects with string keys +
-/// string / number leaves only) because the supported
+/// string / number / bool leaves) because the supported
 /// service set is small. Unknown `kind` values are a
 /// hard error so a typo'd config does not silently
 /// register a phantom service.
+///
+/// (Function name kept as
+/// `load_counter_services_from_config` for now -- it
+/// was the only kind in slice 22. A follow-up can
+/// rename to `load_services_from_config` if the call
+/// sites stay short; the function body is generic.)
 pub fn load_counter_services_from_config(
     text: &str,
 ) -> Result<Vec<Arc<dyn Service>>, String> {
     let mut services: Vec<Arc<dyn Service>> = Vec::new();
-    // Locate the `"services"` object. The minimal parser
-    // is "find the next quoted key, then the next quoted
-    // value (an object)"; good enough for the v2
-    // prototype.
     let services_start = find_top_level_object_for_key(text, "services")
         .ok_or_else(|| "config: missing top-level `\"services\"` object".to_string())?;
     let services_obj = &text[services_start.0..services_start.1];
-    // Skip the opening `{` of the services object so
-    // `parse_quoted_string` sees a key as the first
-    // meaningful token. The closing `}` is the
-    // `services_obj` boundary; the pair walk stops when
-    // no more keys can be found.
     let mut cursor = if services_obj.starts_with('{') { 1 } else { 0 };
     cursor = skip_ws(services_obj, cursor);
-    // Walk key/value pairs inside `services_obj`. Each
-    // entry must be `"<name>": { ... }`; the inner
-    // object must contain `"kind": "counter"` and an
-    // optional `"initial": <number>` (default 0).
     loop {
         let (key, after_key) = match parse_quoted_string(services_obj, cursor) {
             Some((k, p)) => (k, p),
             None => break,
         };
-        // Skip whitespace and the colon.
         let mut p = skip_ws(services_obj, after_key);
         if p >= services_obj.len() || services_obj.as_bytes()[p] != b':' {
             return Err(format!("config: expected `:` after `{}`", key));
@@ -849,14 +1004,22 @@ pub fn load_counter_services_from_config(
         let kind = find_string_field(inner_obj, "kind").ok_or_else(|| {
             format!("config: service `{}` missing `\"kind\"` field", key)
         })?;
-        let initial = find_number_field(inner_obj, "initial").unwrap_or(0);
         match kind.as_str() {
             "counter" => {
+                let initial = find_number_field(inner_obj, "initial").unwrap_or(0);
                 services.push(Arc::new(CounterService::new(key.clone(), initial)));
+            }
+            "kv" => {
+                let entries = parse_string_map(inner_obj, "entries", &key)?;
+                services.push(Arc::new(KvService::new(key.clone(), entries)));
+            }
+            "feature_flag" => {
+                let flags = parse_bool_map(inner_obj, "flags", &key)?;
+                services.push(Arc::new(FeatureFlagService::new(key.clone(), flags)));
             }
             other => {
                 return Err(format!(
-                    "config: service `{}` has unknown kind `{}` (supported: counter)",
+                    "config: service `{}` has unknown kind `{}` (supported: counter, kv, feature_flag)",
                     key, other
                 ));
             }
@@ -868,6 +1031,137 @@ pub fn load_counter_services_from_config(
         }
     }
     Ok(services)
+}
+
+/// Parse `{ "k1": "v1", "k2": "v2" }` inside `obj` (the
+/// `key` field name). Returns a `BTreeMap` so the wire
+/// format is deterministic. Both keys and values must be
+/// JSON strings; a non-string value is a hard error
+/// because the page wire format also types them as
+/// strings.
+fn parse_string_map(
+    obj: &str,
+    key: &str,
+    service: &str,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let (map_start, map_end) = find_top_level_object_for_key(obj, key).ok_or_else(|| {
+        format!(
+            "config: service `{service}` kind `kv` missing `\"{key}\"` object"
+        )
+    })?;
+    let map_text = &obj[map_start..map_end];
+    let mut out: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let mut cursor = if map_text.starts_with('{') { 1 } else { 0 };
+    cursor = skip_ws(map_text, cursor);
+    loop {
+        let (k, after_key) = match parse_quoted_string(map_text, cursor) {
+            Some((s, p)) => (s, p),
+            None => break,
+        };
+        let mut p = skip_ws(map_text, after_key);
+        if p >= map_text.len() || map_text.as_bytes()[p] != b':' {
+            return Err(format!(
+                "config: kv `{}` field `{}` expected `:` after key",
+                service, k
+            ));
+        }
+        p = skip_ws(map_text, p + 1);
+        let v = match parse_quoted_string(map_text, p) {
+            Some((s, _)) => s,
+            None => {
+                return Err(format!(
+                    "config: kv `{}` field `{}` value must be a JSON string",
+                    service, k
+                ));
+            }
+        };
+        out.insert(k, v);
+        cursor = skip_ws(map_text, p);
+        // advance past the value-quote
+        cursor = skip_ws(map_text, advance_past_quoted_string(map_text, cursor));
+        if cursor < map_text.len() && map_text.as_bytes()[cursor] == b',' {
+            cursor += 1;
+        }
+    }
+    Ok(out)
+}
+
+/// Same shape as `parse_string_map` but values are
+/// `true` / `false` (JSON booleans). Used for
+/// `feature_flag`.
+fn parse_bool_map(
+    obj: &str,
+    key: &str,
+    service: &str,
+) -> Result<std::collections::BTreeMap<String, bool>, String> {
+    let (map_start, map_end) = find_top_level_object_for_key(obj, key).ok_or_else(|| {
+        format!(
+            "config: service `{service}` kind `feature_flag` missing `\"{key}\"` object"
+        )
+    })?;
+    let map_text = &obj[map_start..map_end];
+    let mut out: std::collections::BTreeMap<String, bool> = std::collections::BTreeMap::new();
+    let mut cursor = if map_text.starts_with('{') { 1 } else { 0 };
+    cursor = skip_ws(map_text, cursor);
+    loop {
+        let (k, after_key) = match parse_quoted_string(map_text, cursor) {
+            Some((s, p)) => (s, p),
+            None => break,
+        };
+        let mut p = skip_ws(map_text, after_key);
+        if p >= map_text.len() || map_text.as_bytes()[p] != b':' {
+            return Err(format!(
+                "config: feature_flag `{}` field `{}` expected `:` after key",
+                service, k
+            ));
+        }
+        p = skip_ws(map_text, p + 1);
+        // value must be `true` or `false`
+        if p + 4 <= map_text.len() && &map_text[p..p + 4] == "true" {
+            out.insert(k, true);
+            cursor = p + 4;
+        } else if p + 5 <= map_text.len() && &map_text[p..p + 5] == "false" {
+            out.insert(k, false);
+            cursor = p + 5;
+        } else {
+            return Err(format!(
+                "config: feature_flag `{}` field `{}` value must be `true` or `false`",
+                service, k
+            ));
+        }
+        cursor = skip_ws(map_text, cursor);
+        if cursor < map_text.len() && map_text.as_bytes()[cursor] == b',' {
+            cursor += 1;
+        }
+    }
+    Ok(out)
+}
+
+/// Skip past a parsed quoted string -- given a cursor
+/// right after the opening quote, return the cursor
+/// position just after the closing quote. This is a
+/// small helper to avoid tracking the position twice in
+/// `parse_string_map` (the inner `parse_quoted_string`
+/// already returns the post-close position, but the
+/// loop re-scans for the next pair comma and needs the
+/// same position).
+fn advance_past_quoted_string(s: &str, mut p: usize) -> usize {
+    // Expect opening quote; skip it.
+    if p < s.len() && s.as_bytes()[p] == b'"' {
+        p += 1;
+    }
+    while p < s.len() {
+        let c = s.as_bytes()[p];
+        if c == b'\\' && p + 1 < s.len() {
+            p += 2;
+            continue;
+        }
+        if c == b'"' {
+            return p + 1;
+        }
+        p += 1;
+    }
+    p
 }
 
 fn skip_ws(s: &str, mut p: usize) -> usize {

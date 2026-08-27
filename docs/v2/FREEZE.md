@@ -772,8 +772,8 @@ in at JSX-expansion time. No code that shipped on or before the
 v2.0 sign-off imported these names, so this is a documentation
 correction rather than a behaviour change.
 
-**Verification.** 234 tests green as of this amendment
-(202 lib + 4 worker_integration + 15 process_model + 13 start_order
+**Verification.** 235 tests green as of this amendment
+(202 lib + 4 worker_integration + 15 process_model + 14 start_order
 e2e, including `util_namespace_surfaces_bun_builtins_for_pages` for
 the new `util` namespace, `zod_runtime_compiled_into_wrap_serves_validated_schemas`
 for `zod`, `password_runtime_through_bun_password_serves_hashed_passwords`
@@ -789,9 +789,12 @@ dynamic route segments + catch-all (slice 16e),
 `multipart_form_data_round_trips_through_real_binary` for
 `ctx.request.formData()` (slice 16g),
 `config_driven_counter_service_increments_across_requests` for
-config-driven custom services (slice 22 prototype), and
+config-driven custom services (slice 22 prototype),
 `body_size_cap_rejects_oversized_requests_with_413` for the
-`TSP_MAX_BODY_BYTES` cap and 413 path (spec sect.14.2)).
+`TSP_MAX_BODY_BYTES` cap and 413 path (spec sect.14.2), and
+`config_driven_kv_and_feature_flag_kinds_are_readable_by_pages`
+for the `kind: kv` and `kind: feature_flag` extension
+(slice 22 follow-up)).
 
 ### Amendment 2 (2026-08-27) — `password` merged into `util`
 
@@ -886,8 +889,8 @@ to maintain).
   e2e test, just routed through `util.password`
   instead of the top-level `password`.
 
-**Verification.** Same 234 tests green (202 lib +
-4 worker_integration + 15 process_model + 13 start_order
+**Verification.** Same 235 tests green (202 lib +
+4 worker_integration + 15 process_model + 14 start_order
 e2e). The 3 password unit tests in `jsx.rs` change
 contract (one now asserts a negative -- the rewriter
 rejects the old shape) but they still cover the same
@@ -896,3 +899,152 @@ reachable from a page through the namespace and the
 result is a real bcrypt / argon2id hash. The
 `password_runtime_through_bun_password_serves_hashed_passwords`
 e2e is unchanged in name and intent.
+
+### Amendment 3 (2026-08-27) — `kind: kv` and `kind: feature_flag` added to the config-driven services
+
+**What changed.** The slice 22 prototype shipped
+`kind: counter` as the only custom service kind. This
+amendment extends the parser and `Service` registry
+with two more kinds so the config-driven surface can
+host real application state without a new
+`Service` trait impl per kind:
+
+```text
+{
+  "services": {
+    "hits":   { "kind": "counter",     "initial": 0 },
+    "config": { "kind": "kv",
+                "entries": {
+                  "support_email":  "help@example.com",
+                  "max_upload_size": "10485760"
+                } },
+    "flags":  { "kind": "feature_flag",
+                "flags": {
+                  "beta_ui":      true,
+                  "new_checkout": false
+                } }
+  }
+}
+```
+
+**`kind: kv`** holds a `BTreeMap<String, String>`
+keyed by name, surfaced to the page as
+`ctx.services.<name>.entries.<key>`. The map is a
+frozen snapshot (read-only on the page side); the
+source of truth is `tsp.config.json` and changes
+ship on master restart. This is the v2 surface for
+host-supplied configuration values a page needs to
+read (rate limits, support emails, internal service
+URLs, non-secret feature knobs) without leaking the
+whole process environment (compare with the
+`util.env` wrapper, which also hides
+`Bun.env.toJSON`).
+
+**`kind: feature_flag`** holds a
+`BTreeMap<String, bool>`, surfaced to the page as
+`ctx.services.<name>.flags.<flag>`. Same frozen-
+snapshot semantics as `kv`. The flag set gates
+code paths (new checkout flow, beta UI, A/B test
+bucket assignment) from a single host-controlled
+config.
+
+Both kinds use `BTreeMap` internally so the wire
+format is deterministic (stable key order across
+runs / OSes) and a typo'd duplicate key in the
+config file cannot silently shadow a real one.
+
+**What changed in code.**
+
+- `bun/src/runtime/tsp/services.rs`:
+  - `KvService` -- a new `Service` impl holding a
+    `BTreeMap<String, String>`. `describe_json()`
+    returns
+    `{"kind":"kv","name":"<n>","entries":{...}}`
+    (hand-rolled, no `serde`). `is_request_varying()`
+    is `false` because the values do not change
+    between requests; the generation cache can
+    replay the snapshot safely.
+  - `FeatureFlagService` -- a new `Service` impl
+    holding a `BTreeMap<String, bool>`. Same shape
+    (hand-rolled, `is_request_varying()` is
+    `false`).
+  - `load_counter_services_from_config` gains two
+    more match arms. The function name was kept
+    (slice 22 was the only kind at the time) -- a
+    follow-up can rename to
+    `load_services_from_config` if the call sites
+    stay short.
+  - New helpers: `parse_string_map` (string ->
+    string `BTreeMap` for `kv` entries) and
+    `parse_bool_map` (string -> bool `BTreeMap`
+    for `feature_flag` flags). Both reuse the
+    existing minimal JSON walker; `parse_bool_map`
+    only accepts the literal `true` / `false`
+    tokens, so a typo like `yes` is a hard error
+    at boot rather than a silent `false`.
+  - The "unknown kind" error message now lists
+    the supported set:
+    `(supported: counter, kv, feature_flag)`.
+
+- `bun/src/runtime/tsp/tests/start_order.rs`:
+  - New e2e
+    `config_driven_kv_and_feature_flag_kinds_are_readable_by_pages`.
+    Writes a temp config declaring all three kinds
+    at once (counter + kv + feature_flag),
+    asserts the boot log lists the three custom
+    service names, then hits:
+    - `GET /counter`         (hits = 1)
+    - `GET /kv?key=support_email`
+    - `GET /kv`              (whole-map dump)
+    - `GET /flags?check=beta_ui`    (true)
+    - `GET /flags?check=new_checkout` (false)
+    - `GET /flags`           (whole-map dump)
+    - `GET /kv?key=missing`  (null)
+    - `GET /flags?check=missing` (null)
+    Then a second round spawns a fresh master
+    without `TSP_CONFIG` and asserts the kv /
+    feature_flag / counter names are all `null`
+    (the page falls back to "not present" for
+    every missing service name). The whole-map
+    assertions pin the exact key order (BTreeMap
+    iteration order = alphabetical) so a future
+    refactor that switches to a different map
+    type would fail the e2e with a clear diff.
+
+- `routes/kv.tsp` and `routes/flags.tsp` -- two
+  new demo routes mirroring the production-shape
+  `routes/counter.tsp` style. Each just echoes
+  the requested slice of the snapshot; the
+  `x-demo: slice22-kv` / `x-demo: slice22-flags`
+  response headers let the e2e distinguish "the
+  page actually ran" (200) from "the host
+  rejected" (4xx).
+
+**What was NOT changed in this amendment.**
+
+- No new `serde` dep. `KvService` and
+  `FeatureFlagService` hand-roll the wire format
+  the same way `CounterService` does, reusing
+  the existing `json_string_field` helper.
+- No migration of `counter` callers. The slice 22
+  `kind: counter` shape is unchanged; the only
+  difference is that the parser now accepts two
+  more `kind` values.
+- The two new services are read-only on the page
+  side. A future slice may add a write-back
+  path through `ctx.session` or a dedicated
+  mutation envelope field; for the v2 prototype,
+  changes ship on master restart (a 1-second
+  blip), which is the right semantics for
+  non-secret feature knobs.
+
+**Verification.** 235 tests green (202 lib +
+4 worker_integration + 15 process_model + 14 start_order
+e2e, the prior 13 plus
+`config_driven_kv_and_feature_flag_kinds_are_readable_by_pages`).
+The 4 e2e tests in the slice 22 family (counter, kv,
+feature_flag, body cap) all run against the same real
+binary with the same dist/tsp-v2/tspserver_v2.exe
+production shape, so a regression that breaks one
+config-driven kind would surface as a failure in the
+e2e that exercises it.

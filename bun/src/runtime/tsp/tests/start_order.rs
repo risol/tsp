@@ -2543,6 +2543,242 @@ fn body_size_cap_rejects_oversized_requests_with_413() {
 }
 
 // ---------------------------------------------------------------------------
+// Config-driven `kv` and `feature_flag` kinds (slice 22 follow-up)
+//
+// The slice 22 prototype shipped `kind: counter` as the
+// only custom service kind. This slice extends the parser
+// and `Service` registry with two more kinds so the
+// config-driven surface can host real application state:
+//
+//   kind: kv             in-memory string -> string map
+//                        (host config -- rate limits, support
+//                        emails, internal service URLs,
+//                        non-secret feature knobs). The page
+//                        reads via
+//                        `ctx.services.<name>.entries.<key>`.
+//                        The map is a frozen snapshot (page
+//                        cannot mutate; the source of truth
+//                        is `tsp.config.json` and changes ship
+//                        on master restart).
+//
+//   kind: feature_flag   boolean flag set
+//                        (new checkout flow, beta UI, A/B
+//                        test bucket assignment). The page
+//                        reads via
+//                        `ctx.services.<name>.flags.<flag>`.
+//                        Same frozen-snapshot semantics as
+//                        `kv`.
+//
+// Both kinds use `BTreeMap` internally so the wire format
+// is deterministic (stable key order) and a typo'd
+// duplicate key in the config file cannot silently shadow
+// a real one.
+//
+// The integration test runs the real binary against a
+// temp routes dir with all three kinds declared at once
+// (counter + kv + feature_flag) so a single config file
+// exercises the full cross-kind surface:
+//
+//   1. GET /counter                 -> hits=1
+//   2. GET /kv?key=support_email    -> value from entries
+//   3. GET /kv                      -> all entries
+//   4. GET /flags?check=beta_ui     -> true
+//   5. GET /flags                   -> all flags
+//   6. GET /kv?key=missing          -> null (key not in
+//                                       config)
+//   7. GET /flags?check=missing     -> null (flag not in
+//                                       config)
+//
+// A second round spawns a fresh master without `TSP_CONFIG`
+// and asserts the kv / feature_flag / counter names are
+// all `null` (the page falls back to "not present" for
+// every missing service name).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn config_driven_kv_and_feature_flag_kinds_are_readable_by_pages() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-kv-flags-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+    // The slice 22 e2e inlines its fixtures; we use
+    // `include_str!` for the new routes so the test
+    // stays in sync with the production-shape pages.
+    std::fs::write(
+        routes_dir.join("counter.tsp"),
+        include_str!("../../../../../routes/counter.tsp"),
+    )
+    .expect("counter.tsp");
+    std::fs::write(
+        routes_dir.join("kv.tsp"),
+        include_str!("../../../../../routes/kv.tsp"),
+    )
+    .expect("kv.tsp");
+    std::fs::write(
+        routes_dir.join("flags.tsp"),
+        include_str!("../../../../../routes/flags.tsp"),
+    )
+    .expect("flags.tsp");
+
+    // All three kinds at once. The counter proves the
+    // pre-existing surface is unchanged; the kv + flag
+    // entries prove the new parser branches and the
+    // frozen-descriptor wire format work end-to-end.
+    let config_path = temp_root.join("tsp.config.json");
+    std::fs::write(
+        &config_path,
+        "{\n  \"services\": {\n    \"hits\":   { \"kind\": \"counter\", \"initial\": 0 },\n    \"config\": { \"kind\": \"kv\",\n      \"entries\": {\n        \"support_email\": \"help@example.com\",\n        \"max_upload_size\": \"10485760\",\n        \"feature_beta_url\": \"https://beta.example.com\"\n      }\n    },\n    \"flags\":  { \"kind\": \"feature_flag\",\n      \"flags\": {\n        \"beta_ui\": true,\n        \"new_checkout\": false,\n        \"ab_test_v2\": true\n      }\n    }\n  }\n}\n",
+    )
+    .expect("config");
+
+    // --- Round 1: all three kinds live. ---
+    let port: u16 = 34_800 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_CONFIG", &config_path)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    // Sanity: counter is still 1 (slice 22 is unchanged).
+    let (s_hits, b_hits) = http_get_status(port, "/counter", Duration::from_secs(10));
+    assert_eq!(s_hits, 200, "GET /counter must 200, got {s_hits} body={b_hits:?}");
+    assert!(
+        b_hits.contains("\"hits\":1"),
+        "counter must be 1 on the first request after a fresh boot; got {b_hits:?}"
+    );
+
+    // Single-key kv lookup.
+    let (s_k1, b_k1) = http_get_status(
+        port,
+        "/kv?key=support_email",
+        Duration::from_secs(10),
+    );
+    assert_eq!(s_k1, 200, "GET /kv?key=support_email must 200, got {s_k1} body={b_k1:?}");
+    assert!(
+        b_k1.contains("\"key\":\"support_email\"")
+            && b_k1.contains("\"value\":\"help@example.com\""),
+        "single-key kv lookup must echo the configured value; got {b_k1:?}"
+    );
+
+    // Whole-map kv dump. Keys are emitted in BTreeMap
+    // order (alphabetical) so the e2e can pin the exact
+    // shape without a JSON-key-iteration-order hazard.
+    let (s_k2, b_k2) = http_get_status(port, "/kv", Duration::from_secs(10));
+    assert_eq!(s_k2, 200, "GET /kv must 200, got {s_k2} body={b_k2:?}");
+    let expected_kv = r#""feature_beta_url":"https://beta.example.com","max_upload_size":"10485760","support_email":"help@example.com""#;
+    assert!(
+        b_k2.contains(expected_kv),
+        "whole-map kv dump must contain all three keys in BTreeMap order; got {b_k2:?}"
+    );
+
+    // Single-flag lookup (true).
+    let (s_f1, b_f1) = http_get_status(
+        port,
+        "/flags?check=beta_ui",
+        Duration::from_secs(10),
+    );
+    assert_eq!(s_f1, 200, "GET /flags?check=beta_ui must 200, got {s_f1} body={b_f1:?}");
+    assert!(
+        b_f1.contains("\"flag\":\"beta_ui\"") && b_f1.contains("\"value\":true"),
+        "feature_flag `beta_ui` must read true; got {b_f1:?}"
+    );
+
+    // Single-flag lookup (false).
+    let (s_f2, b_f2) = http_get_status(
+        port,
+        "/flags?check=new_checkout",
+        Duration::from_secs(10),
+    );
+    assert_eq!(
+        s_f2, 200,
+        "GET /flags?check=new_checkout must 200, got {s_f2} body={b_f2:?}"
+    );
+    assert!(
+        b_f2.contains("\"value\":false"),
+        "feature_flag `new_checkout` must read false; got {b_f2:?}"
+    );
+
+    // Whole-flag-set dump.
+    let (s_f3, b_f3) = http_get_status(port, "/flags", Duration::from_secs(10));
+    assert_eq!(s_f3, 200, "GET /flags must 200, got {s_f3} body={b_f3:?}");
+    let expected_flags = r#""ab_test_v2":true,"beta_ui":true,"new_checkout":false"#;
+    assert!(
+        b_f3.contains(expected_flags),
+        "whole-map flag dump must contain all three flags in BTreeMap order; got {b_f3:?}"
+    );
+
+    // Negative lookups: missing key / missing flag must
+    // both report null (the page distinguishes "not
+    // present" from `undefined` because the wire snapshot
+    // is a plain object -- `hasOwnProperty` is the
+    // check the page does, not `value !== undefined`).
+    let (s_k3, b_k3) = http_get_status(port, "/kv?key=missing", Duration::from_secs(10));
+    assert_eq!(s_k3, 200, "GET /kv?key=missing must 200, got {s_k3}");
+    assert!(
+        b_k3.contains("\"value\":null"),
+        "missing kv key must report null; got {b_k3:?}"
+    );
+    let (s_f4, b_f4) = http_get_status(port, "/flags?check=missing", Duration::from_secs(10));
+    assert_eq!(s_f4, 200, "GET /flags?check=missing must 200, got {s_f4}");
+    assert!(
+        b_f4.contains("\"value\":null"),
+        "missing feature_flag must report null; got {b_f4:?}"
+    );
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+
+    // --- Round 2: no config; the custom-service names
+    // are all absent. The page reports `null` for each.
+    let port2: u16 = 34_900 + (std::process::id() as u16 % 500);
+    let mut child2 = std::process::Command::new(master)
+        .env("TSP_PORT", port2.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        // Intentionally no TSP_CONFIG.
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn (no config)");
+
+    wait_for_marker(&mut child2, "listening on", Duration::from_secs(10));
+
+    let (_, b_nc_kv) = http_get_status(port2, "/kv?key=support_email", Duration::from_secs(10));
+    assert!(
+        b_nc_kv.contains("\"value\":null"),
+        "no-config /kv must report null value; got {b_nc_kv:?}"
+    );
+    let (_, b_nc_flag) = http_get_status(port2, "/flags?check=beta_ui", Duration::from_secs(10));
+    assert!(
+        b_nc_flag.contains("\"value\":null"),
+        "no-config /flags must report null value; got {b_nc_flag:?}"
+    );
+
+    let _ = terminate(child2.id());
+    let _ = child2.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+// ---------------------------------------------------------------------------
 // bun:sql runtime integration test (slice 17d)
 //
 // The TSP v2 wrap preamble surfaces bun's native SQL client
