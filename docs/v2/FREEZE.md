@@ -1573,3 +1573,145 @@ once without -- and asserts the dev HTML
 (three different throw shapes) and the prod
 JSON envelope. The 4 unchanged test buckets
 all still pass against the rebuilt binary.
+
+---
+
+### Amendment 8 (2026-08-27) — `kind: rate_limit` added to the config-driven services
+
+Amendment 3 added `kind: kv` and `kind: feature_flag`
+to the slice 22 `load_counter_services_from_config`
+parser; this amendment extends the same surface
+with `kind: rate_limit` so the v2 prototype can
+ship a fixed-window rate limit without writing a
+single line of host Rust. The page reads the
+snapshot via `ctx.services.<name>.{count,limit,
+window_ms,window_start_ms,remaining}` and uses
+the value to gate code paths (return 429 with a
+`retry-after` header, show a quota in the UI,
+back off an upstream call, etc.).
+
+**What changed in this amendment.**
+
+- **New `RateLimitService`** in
+  `bun/src/runtime/tsp/services.rs`. The service
+  holds `(name, limit, window_ms, Mutex<Inner>)`
+  where `Inner = {count: u64, window_start_ms: u64}`.
+  Every `describe_json()` call (i.e. every request
+  that snapshots `ctx.services`) takes a brief
+  write lock and:
+  1. If `now - window_start_ms >= window_ms` (or
+     `window_start_ms == 0`, the uninitialized
+     state at construction), reset `count = 1`
+     and `window_start_ms = now`.
+  2. Otherwise increment `count` by 1.
+  3. Serialize `{kind, name, count, limit,
+     window_ms, window_start_ms, remaining}`
+     where `remaining = saturating_sub(limit, count)`
+     (clamped to 0 -- the page compares `count > limit`
+     for the over-limit case rather than relying on
+     a negative `remaining`).
+  The service reports `is_request_varying() = true`
+  so the generation cache never replays a stale
+  count and silently lets a flood past the limit.
+
+- **`load_counter_services_from_config` accepts
+  `kind: rate_limit`.** The new match arm reads
+  `limit` (required) and `window_seconds` (defaults
+  to 60) and constructs the service. A missing
+  `limit` is a hard error -- the operator must
+  declare the bucket size explicitly. The
+  unknown-kind error message now lists
+  `rate_limit` in the supported set.
+
+- **Demo route `routes/rate_limit.tsp`** exposes
+  a `/rate_limit` endpoint that returns 200 with
+  the snapshot when `count <= limit` and 429 with
+  a `retry-after: 60` header when `count > limit`.
+  A `?kind=info` query parameter bypasses the
+  gate so the e2e can read the post-over-limit
+  count without redirecting through the 429.
+
+- **`tsp-server.d.ts` `ServiceDescriptor` union**
+  grew a `rate_limit` variant with the wire
+  shape above so the page's TypeScript type-check
+  sees the new fields.
+
+- **4 new unit tests** in
+  `bun/src/runtime/tsp/services.rs`:
+  - `rate_limit_post_increments_with_remaining_under_limit`
+    pins the basic counter / remaining arithmetic.
+  - `rate_limit_remaining_clamps_to_zero_when_over_limit`
+    pins the over-limit `remaining = 0` clamp.
+  - `rate_limit_window_resets_after_window_ms_elapses`
+    pins the lazy window-reset semantic.
+  - `config_parser_handles_rate_limit_kind` pins
+    the parser (happy path + `window_seconds`
+    default + missing-`limit` error message).
+
+- **1 new e2e**
+  `config_driven_rate_limit_kind_gates_requests_with_a_fixed_window`
+  in `bun/src/runtime/tsp/tests/start_order.rs`.
+  Runs the real binary with `limit=2` and
+  exercises the full 1 -> 2 -> over-limit -> info
+  sequence, then hot-reloads the config to
+  `limit=10` and asserts the count resets to 1
+  on the new service instance. The hot-reload
+  round-trip is the same path Amendment 6 added
+  for `counter` / `kv` / `feature_flag`.
+
+**What was NOT changed in this amendment.**
+
+- Per-IP / per-user / per-API-key bucketing.
+  The v1 service is single-bucket; every snapshot
+  increments the same counter. A per-key bucket
+  would need the host to derive the key from the
+  request (IP, session id, an API-key header)
+  and call `service.tick(key)` before the page
+  runs. The interface is designed to extend
+  cleanly (`Inner` is already a `BTreeMap`-shaped
+  field waiting to grow), but the slice stays
+  focused on the single-bucket primitive.
+
+- The config parser is still named
+  `load_counter_services_from_config`. The name
+  has been misleading since Amendment 3 added
+  `kv` + `feature_flag`; this amendment makes
+  the name three kinds out of date. A follow-up
+  slice can rename it to `load_config_services`
+  -- the function body is generic and the
+  only caller is the bin. The rename is left
+  for a future slice so this commit stays
+  focused on the new kind.
+
+- `is_request_varying()` is `true` for
+  `RateLimitService`. Same as `CounterService`:
+  every request bumps the count, so a generation
+  cache that replays a stale snapshot would
+  under-count and let a flood past the limit.
+  The trade-off is the same -- no cache -- and
+  acceptable for a runtime-owned singleton.
+
+- The page wire contract is unchanged. The
+  page's `ctx.services.<name>` shape is
+  `{kind, name, count, limit, window_ms,
+  window_start_ms, remaining}`; this is a new
+  variant of the existing `ServiceDescriptor`
+  union (typed as `kind: "rate_limit"` in
+  the .d.ts). No new wrap-prelude code -- the
+  existing JSON hydrator in the wrap preamble
+  handles the new fields automatically.
+
+**Verification.** 257 tests green (219 lib +
+4 worker_integration + 15 process_model + 19 start_order
+e2e, the prior 18 plus
+`config_driven_rate_limit_kind_gates_requests_with_a_fixed_window`).
+The lib gain is the 4 new
+`services::tests::rate_limit_*` and
+`services::tests::config_parser_handles_rate_limit_kind`
+tests; the start_order e2e gain is the 1 new
+rate-limit e2e. The 4 unchanged test buckets all
+still pass against the rebuilt binary, confirming
+the parser change (the unknown-kind error
+message now lists `rate_limit`) and the snapshot
+serializer change do not regress any of the
+prior 18 e2e scenarios.

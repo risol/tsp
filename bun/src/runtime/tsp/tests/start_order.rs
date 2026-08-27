@@ -3739,6 +3739,182 @@ fn dev_error_page_renders_html_in_dev_mode_and_json_in_prod() {
     let _ = std::fs::remove_dir_all(&temp_root);
 }
 
+// ---------------------------------------------------------------------------
+// `kind: rate_limit` config service (slice 22 + Amendment 8)
+//
+// Adds a fourth kind to `load_counter_services_from_config`:
+// `rate_limit` with `{limit, window_seconds}`. The page
+// reads the snapshot via `ctx.services.rate.{count,limit,
+// window_ms,window_start_ms,remaining}` and gates the
+// response on `count > limit` (HTTP 429 with `retry-after`).
+//
+// The e2e exercises the full surface end-to-end:
+//
+//   Round 1 (limit=2):
+//     GET /rate_limit          -> 200, count=1, remaining=1
+//     GET /rate_limit          -> 200, count=2, remaining=0
+//     GET /rate_limit          -> 429, count=3 (over limit)
+//     GET /rate_limit?kind=info -> 200, count=4 (post-inc)
+//                                  (info mode bypasses the
+//                                   429 gate so the e2e can
+//                                   read the post-over-limit
+//                                   count without a redirect
+//                                   loop)
+//
+//   Round 2 (hot reload, limit=10):
+//     Modify the config to a fresh limit. Wait for
+//     the `config reloaded` marker (the same hot
+//     reload path Amendment 6 added for counter /
+//     kv / feature_flag). After the reload:
+//     GET /rate_limit?kind=info -> 200, count=1
+//     (the new `RateLimitService` instance starts
+//      with `count=0`; the snapshot post-increments
+//      to 1 on the first request). A second GET
+//      -> count=2; `count < 10` -> 200 with the
+//      gate response (not 429).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn config_driven_rate_limit_kind_gates_requests_with_a_fixed_window() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-rate-limit-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+    std::fs::write(
+        routes_dir.join("rate_limit.tsp"),
+        include_str!("../../../../../routes/rate_limit.tsp"),
+    )
+    .expect("rate_limit.tsp");
+
+    // Boot config: limit=2, window=60s. The window
+    // is long enough that the e2e never hits a
+    // reset; the second round (hot reload) is what
+    // resets the count.
+    let config_path = temp_root.join("tsp.config.json");
+    std::fs::write(
+        &config_path,
+        "{\n  \"services\": {\n    \"rate\": { \"kind\": \"rate_limit\", \"limit\": 2, \"window_seconds\": 60 }\n  }\n}\n",
+    )
+    .expect("config");
+
+    let port: u16 = 35_900 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_CONFIG", &config_path)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    // (1) First request: count=1, remaining=1, 200.
+    let (s1, b1) = http_get_status(port, "/rate_limit", Duration::from_secs(10));
+    assert_eq!(s1, 200, "first GET must 200, got {s1} body={b1:?}");
+    assert!(
+        b1.contains("\"count\":1") && b1.contains("\"remaining\":1"),
+        "first GET must carry count=1, remaining=1; got {b1:?}"
+    );
+
+    // (2) Second request: count=2, remaining=0, 200.
+    let (s2, b2) = http_get_status(port, "/rate_limit", Duration::from_secs(10));
+    assert_eq!(s2, 200, "second GET must 200, got {s2} body={b2:?}");
+    assert!(
+        b2.contains("\"count\":2") && b2.contains("\"remaining\":0"),
+        "second GET must carry count=2, remaining=0; got {b2:?}"
+    );
+
+    // (3) Third request: count=3 > limit=2 -> 429.
+    // Use `http_get_raw` so the e2e can also check
+    // the `retry-after` header (the body alone doesn't
+    // carry it -- the page emits it as a `Response`
+    // header which the host forwards as an HTTP wire
+    // line).
+    let (s3, raw3) = http_get_raw(port, "/rate_limit", Duration::from_secs(10));
+    assert_eq!(s3, 429, "third GET must 429 (over limit), got {s3}");
+    let body3 = raw3.split("\r\n\r\n").nth(1).unwrap_or("");
+    assert!(
+        body3.contains("\"over_limit\":true") && body3.contains("\"count\":3"),
+        "third GET body must carry over_limit=true + count=3; got {body3:?}"
+    );
+    assert!(
+        raw3.to_ascii_lowercase().contains("retry-after: 60"),
+        "429 response must carry a `retry-after: 60` header; got: {raw3:?}"
+    );
+
+    // (4) Fourth request via `kind=info` (bypasses
+    // the 429 gate so the e2e can read the
+    // post-over-limit count without redirecting
+    // through the gate).
+    let (s4, b4) = http_get_status(
+        port,
+        "/rate_limit?kind=info",
+        Duration::from_secs(10),
+    );
+    assert_eq!(s4, 200, "info mode must 200, got {s4} body={b4:?}");
+    assert!(
+        b4.contains("\"count\":4"),
+        "fourth GET must carry count=4; got {b4:?}"
+    );
+
+    // --- Round 2: hot reload, limit=10 ---
+    // The hot reload path (Amendment 6) creates a
+    // fresh `RateLimitService` with `count=0`. The
+    // first request after the reload post-increments
+    // to count=1 and the gate response (not 429)
+    // because count=1 < limit=10.
+    std::fs::write(
+        &config_path,
+        "{\n  \"services\": {\n    \"rate\": { \"kind\": \"rate_limit\", \"limit\": 10, \"window_seconds\": 60 }\n  }\n}\n",
+    )
+    .expect("config reload");
+    wait_for_marker(&mut child, "config reloaded", Duration::from_secs(5));
+
+    // (5) First GET after reload: count=1 (fresh
+    // service), limit=10 (new limit), 200 (gate).
+    let (s5, b5) = http_get_status(
+        port,
+        "/rate_limit?kind=info",
+        Duration::from_secs(10),
+    );
+    assert_eq!(s5, 200, "post-reload GET must 200, got {s5} body={b5:?}");
+    assert!(
+        b5.contains("\"count\":1") && b5.contains("\"limit\":10"),
+        "post-reload count must reset to 1 and limit to 10; got {b5:?}"
+    );
+    assert!(
+        b5.contains("\"remaining\":9"),
+        "post-reload remaining must be 9 (limit=10, count=1); got {b5:?}"
+    );
+
+    // (6) Second GET after reload: count=2,
+    // gate path returns 200 (count < limit).
+    let (s6, b6) = http_get_status(port, "/rate_limit", Duration::from_secs(10));
+    assert_eq!(s6, 200, "second post-reload gate must 200, got {s6} body={b6:?}");
+    assert!(
+        b6.contains("\"count\":2") && b6.contains("\"remaining\":8"),
+        "second post-reload gate must carry count=2, remaining=8; got {b6:?}"
+    );
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
 
 // ---------------------------------------------------------------------------
 // Phase 11 tooling (plan §11) -- `tspserver_v2 typings` subcommand

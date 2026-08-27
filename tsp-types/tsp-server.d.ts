@@ -80,15 +80,17 @@ declare module "tsp:server" {
 
   /** A service descriptor the page reads from `ctx.services`
    * (plan §17). The runtime ships a small set of known kinds
-   * (counter, kv, feature_flag, logger, session, time); the
-   * host's `load_counter_services_from_config` (slice 22 +
-   * Amendment 3) can also surface user-declared kinds. Use
-   * a kind-narrowing `if ("hits" in svc)` guard before
-   * reading kind-specific fields. */
+   * (counter, kv, feature_flag, rate_limit, logger, session,
+   * time); the host's `load_counter_services_from_config`
+   * (slice 22 + Amendment 3 + Amendment 8) can also surface
+   * user-declared kinds. Use a kind-narrowing guard
+   * (`if ("hits" in svc)` etc.) before reading kind-specific
+   * fields. */
   export type ServiceDescriptor =
     | { readonly kind: "counter"; readonly hits: number; readonly [k: string]: unknown }
     | { readonly kind: "kv"; readonly entries: Readonly<Record<string, string>>; readonly [k: string]: unknown }
     | { readonly kind: "feature_flag"; readonly flags: Readonly<Record<string, boolean>>; readonly [k: string]: unknown }
+    | { readonly kind: "rate_limit"; readonly count: number; readonly limit: number; readonly window_ms: number; readonly window_start_ms: number; readonly remaining: number; readonly [k: string]: unknown }
     | { readonly kind: "logger"; info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void; error: (...args: unknown[]) => void; debug: (...args: unknown[]) => void; readonly [k: string]: unknown }
     | { readonly kind: "session"; readonly [k: string]: unknown }
     | { readonly kind: "time"; readonly iso: string; readonly unix_ms: number; readonly [k: string]: unknown }

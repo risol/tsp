@@ -1173,6 +1173,134 @@ impl Service for FeatureFlagService {
     }
 }
 
+// =====================================================================
+// RateLimitService -- fixed-window request counter for a single
+// bucket. The page reads via
+// `ctx.services.<name>.{count,limit,window_ms,window_start_ms,remaining}`
+// and uses the snapshot to gate code paths (return 429 when
+// over limit, show a quota in the UI, etc.). The v1 service
+// is single-bucket: every snapshot increments the same
+// counter. Per-IP / per-user bucketing is a follow-up (the
+// host would need to derive the bucket key from the request
+// and call `service.tick(key)` before the page runs).
+//
+// The window resets lazily on the FIRST request after
+// `window_ms` has elapsed since `window_start_ms`. The snapshot
+// exposes the window's start so the page can show
+// "resets in X seconds" without hard-coding the window.
+//
+// Config shape:
+// ```json
+// "rate": { "kind": "rate_limit", "limit": 100, "window_seconds": 60 }
+// ```
+// `window_seconds` defaults to 60; `limit` is required.
+// =====================================================================
+
+pub struct RateLimitService {
+    name: String,
+    limit: u64,
+    window_ms: u64,
+    inner: std::sync::Mutex<RateLimitInner>,
+}
+
+struct RateLimitInner {
+    count: u64,
+    window_start_ms: u64,
+}
+
+impl RateLimitService {
+    pub fn new(name: impl Into<String>, limit: u64, window_ms: u64) -> Self {
+        Self {
+            name: name.into(),
+            limit,
+            window_ms,
+            // Initial window starts at the Unix epoch so
+            // the FIRST request triggers a window reset
+            // (count -> 1, window_start_ms = now). This
+            // is the right call for a "limit per X
+            // minutes from now" semantic; a deploy-time
+            // window-start would have a free first
+            // window which the operator would have to
+            // reason about.
+            inner: std::sync::Mutex::new(RateLimitInner {
+                count: 0,
+                window_start_ms: 0,
+            }),
+        }
+    }
+
+    /// Test hook: read the inner state without going
+    /// through the wire. Used by the unit tests to pin
+    /// the post-increment + window-reset contract.
+    pub fn peek(&self) -> (u64, u64) {
+        let guard = self.inner.lock().expect("rate limit mutex poisoned");
+        (guard.count, guard.window_start_ms)
+    }
+}
+
+impl Service for RateLimitService {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn scope(&self) -> ServiceScope {
+        ServiceScope::Runtime
+    }
+
+    fn is_request_varying(&self) -> bool {
+        // Every request observes a new count (post-increment)
+        // -- a replay from the generation cache would
+        // under-count and let a flood past the limit. Same
+        // semantic as `CounterService`.
+        true
+    }
+
+    fn describe_json(&self) -> String {
+        // Lock + lazy window reset + post-increment. The
+        // count the page reads is the value AFTER this
+        // request bumped it (matches `CounterService`'s
+        // semantic so a page can do
+        // `if (count > limit) return 429`).
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let (count, window_start_ms) = {
+            let mut guard = self.inner.lock().expect("rate limit mutex poisoned");
+            if guard.window_start_ms == 0
+                || now_ms.saturating_sub(guard.window_start_ms) >= self.window_ms
+            {
+                // Window expired (or this is the first
+                // request ever): start a fresh window.
+                guard.window_start_ms = now_ms;
+                guard.count = 1;
+            } else {
+                guard.count = guard.count.saturating_add(1);
+            }
+            (guard.count, guard.window_start_ms)
+        };
+        // `remaining` is unsigned; clamp to 0 when
+        // `count > limit` (a "negative remaining" is
+        // confusing in the wire format -- the page
+        // compares `count > limit` for the over-limit
+        // case).
+        let remaining = self.limit.saturating_sub(count);
+        format!(
+            "{{\"kind\":\"rate_limit\",\"name\":{},\
+             \"count\":{count},\"limit\":{},\
+             \"window_ms\":{},\"window_start_ms\":{window_start_ms},\
+             \"remaining\":{remaining}}}",
+            json_string_field(&self.name),
+            self.limit,
+            self.window_ms,
+        )
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
 /// Hand-rolled config loader for the host-side services
 /// registry. Reads a small JSON file with the shape
 ///
@@ -1245,9 +1373,28 @@ pub fn load_counter_services_from_config(
                 let flags = parse_bool_map(inner_obj, "flags", &key)?;
                 services.push(Arc::new(FeatureFlagService::new(key.clone(), flags)));
             }
+            "rate_limit" => {
+                // `limit` is required; `window_seconds`
+                // defaults to 60 (the canonical "100 per
+                // minute" rate limit). A missing `limit`
+                // is a hard error -- the operator must
+                // declare the bucket size explicitly.
+                let limit = find_number_field(inner_obj, "limit").ok_or_else(|| {
+                    format!(
+                        "config: service `{key}` kind `rate_limit` missing `\"limit\"` field"
+                    )
+                })?;
+                let window_seconds = find_number_field(inner_obj, "window_seconds").unwrap_or(60);
+                let window_ms = window_seconds.saturating_mul(1000);
+                services.push(Arc::new(RateLimitService::new(
+                    key.clone(),
+                    limit,
+                    window_ms,
+                )));
+            }
             other => {
                 return Err(format!(
-                    "config: service `{}` has unknown kind `{}` (supported: counter, kv, feature_flag)",
+                    "config: service `{}` has unknown kind `{}` (supported: counter, kv, feature_flag, rate_limit)",
                     key, other
                 ));
             }
@@ -2021,5 +2168,133 @@ mod tests {
         let _pr = crate::generation::PageRegistry::new();
         let v = svc.lookup(&sid).unwrap();
         assert_eq!(v.data.get("k").unwrap(), &sv("v"));
+    }
+
+    // -- RateLimitService --
+
+    /// Pin the basic post-increment + remaining
+    /// arithmetic. The first request sets `count=1`
+    /// and `window_start_ms=now`; the second request
+    /// increments to `count=2`. `remaining` is the
+    /// unsigned `max(0, limit - count)` so it can
+    /// never read negative in the wire format (a page
+    /// compares `count > limit` for the over-limit
+    /// case).
+    #[test]
+    fn rate_limit_post_increments_with_remaining_under_limit() {
+        let svc = RateLimitService::new("rate", 3, 60_000);
+        let _ = svc.describe_json();
+        let _ = svc.describe_json();
+        let s = svc.describe_json();
+        assert!(s.contains("\"kind\":\"rate_limit\""), "got: {s}");
+        assert!(s.contains("\"name\":\"rate\""), "got: {s}");
+        assert!(s.contains("\"count\":3"), "got: {s}");
+        assert!(s.contains("\"limit\":3"), "got: {s}");
+        assert!(s.contains("\"window_ms\":60000"), "got: {s}");
+        assert!(s.contains("\"remaining\":0"), "got: {s}");
+        let (count, _window_start_ms) = svc.peek();
+        assert_eq!(count, 3);
+    }
+
+    /// Pin the over-limit case. `count=4` with
+    /// `limit=3`: `remaining` is clamped to 0 (NOT
+    /// negative), and the page can read `count > limit`
+    /// to gate the request.
+    #[test]
+    fn rate_limit_remaining_clamps_to_zero_when_over_limit() {
+        let svc = RateLimitService::new("rate", 3, 60_000);
+        for _ in 0..5 {
+            let _ = svc.describe_json();
+        }
+        let s = svc.describe_json();
+        assert!(s.contains("\"count\":6"), "got: {s}");
+        assert!(s.contains("\"remaining\":0"), "got: {s}");
+    }
+
+    /// Pin the window reset. After `window_ms`
+    /// elapses since `window_start_ms`, the next
+    /// request resets `count=1` and updates
+    /// `window_start_ms` to the new "now". The
+    /// `window_ms=1` choice is the smallest value
+    /// the parser accepts (1 ms) -- it lets the
+    /// test sleep just past the window without
+    /// slowing the suite down by 60 seconds.
+    #[test]
+    fn rate_limit_window_resets_after_window_ms_elapses() {
+        let svc = RateLimitService::new("rate", 5, 1);
+        // First request: count=1, window_start_ms=t0.
+        let _ = svc.describe_json();
+        let (count_before, ws_before) = svc.peek();
+        assert_eq!(count_before, 1);
+        // Wait just past the window.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        // Next request: count=1 (reset), window_start_ms=t1.
+        let _ = svc.describe_json();
+        let (count_after, ws_after) = svc.peek();
+        assert_eq!(count_after, 1, "window must reset count to 1");
+        assert!(
+            ws_after > ws_before,
+            "window_start_ms must advance after the window expires"
+        );
+    }
+
+    /// Pin the config parser: a `kind: rate_limit`
+    /// service with `limit` + `window_seconds` is
+    /// registered as a `RateLimitService`. A missing
+    /// `limit` is a hard error. The supported-kinds
+    /// error message lists `rate_limit` (a future
+    /// slice would crash on a typo'd kind if the
+    /// parser was the only place to find it; the
+    /// message string is the operator's debug
+    /// surface).
+    #[test]
+    fn config_parser_handles_rate_limit_kind() {
+        // Happy path.
+        let text = r#"{
+          "services": {
+            "rate": { "kind": "rate_limit", "limit": 100, "window_seconds": 60 }
+          }
+        }"#;
+        let svcs = load_counter_services_from_config(text).expect("parse");
+        assert_eq!(svcs.len(), 1);
+        assert_eq!(svcs[0].name(), "rate");
+        let downcast = svcs[0]
+            .as_any()
+            .downcast_ref::<RateLimitService>()
+            .expect("downcast");
+        let (count, _) = downcast.peek();
+        assert_eq!(count, 0, "fresh service must start at 0");
+
+        // `window_seconds` defaults to 60 when missing.
+        let text2 = r#"{
+          "services": {
+            "rate": { "kind": "rate_limit", "limit": 10 }
+          }
+        }"#;
+        let svcs2 = load_counter_services_from_config(text2).expect("parse");
+        let s = svcs2[0]
+            .as_any()
+            .downcast_ref::<RateLimitService>()
+            .expect("downcast");
+        // The wire exposes `window_ms=60000`.
+        let wire = s.describe_json();
+        assert!(
+            wire.contains("\"window_ms\":60000"),
+            "missing `window_seconds` must default to 60; got: {wire}"
+        );
+
+        // Missing `limit` is a hard error.
+        let text3 = r#"{
+          "services": {
+            "rate": { "kind": "rate_limit" }
+          }
+        }"#;
+        match load_counter_services_from_config(text3) {
+            Err(err) => assert!(
+                err.contains("missing `\"limit\"` field"),
+                "error message must name the missing field; got: {err}"
+            ),
+            Ok(_) => panic!("missing limit must be a hard error"),
+        }
     }
 }
