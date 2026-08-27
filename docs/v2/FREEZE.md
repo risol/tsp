@@ -183,23 +183,22 @@ A fragment is a reusable page subtree reachable via an internal URL:
 ```ts
 import { fragment } from "tsp:server";
 
-export const list = fragment({
-  method: "GET",
-  async handler(ctx) {
-    const users = await ctx.services.users.list();
-    return <UserList users={users} />;
-  },
+export const list = fragment(async (ctx) => {
+  const users = await ctx.services.users.list();
+  return <UserList users={users} />;
 });
 
 // Inside a handler:
 ctx.fragment("list");
-// -> "/_tsp/fragment/<route-id>/list" (or equivalent -- shape is
-//    host-defined; the application MUST NOT rely on the path layout)
+// -> "/__tsp/fragment?route=...&name=list&token=<capability>"
+//    (or equivalent -- shape is host-defined; the application
+//     MUST NOT rely on the path layout)
 ```
 
-Default method is `GET` (plan §14.4). The v2.0 shape is `fragment(handler)`
-or `fragment({ method, handler })`; the latter is the recommended form
-for explicit declaration.
+The v2.0.0 shape is `fragment(handler)` with default method `GET`
+(plan §14.4). The `{ method, handler }` form that earlier drafts of
+this item mentioned is **deferred** to a follow-up slice -- see
+Amendment 4. The v2.0.0 contract is the single-arg form only.
 
 What this freezes for application code:
 - Fragments are declared via the `fragment()` helper; they live as named
@@ -207,8 +206,13 @@ What this freezes for application code:
 - The fragment URL is opaque to the application -- never hard-code a
   path, always go through `ctx.fragment("name")` or the future
   `fragmentUrl(name)` helper.
+- v2.0.0 fragments are always reachable via `GET`. The application
+  reads the URL with `ctx.fragment("name")` and uses it as a
+  `fetch` / `hx-get` / `<a href>` target. The `{ method: "POST" }`
+  form lands in a follow-up.
 
-Evidence: `tsp-v2-specification.md` §14, `tsp-v2-plan.md` §14.
+Evidence: `tsp-v2-specification.md` §14, `tsp-v2-plan.md` §14,
+`Amendment 4` below.
 
 ### 8. `tsp:*` builtin module naming
 
@@ -1048,3 +1052,127 @@ binary with the same dist/tsp-v2/tspserver_v2.exe
 production shape, so a regression that breaks one
 config-driven kind would surface as a failure in the
 e2e that exercises it.
+
+---
+
+### Amendment 4 (2026-08-27) — Phase 9 fragments slice closed end-to-end
+
+Phase 9 (plan §14 / FREEZE item 7) is the last architecture
+slice the v2.0 contract froze but no e2e exercise had pinned
+yet. The `fragment()` helper, `ctx.fragment(name, params?)`,
+the wrap-prelude registry, the host's `fragment_target`
+parser, the per-process capability token, and the
+`/__tsp/fragment?route=...&name=...&token=...` URL shape
+were all in place from earlier slices; this amendment
+closes the slice with a demo route, an end-to-end test,
+and a narrow refinement of the FREEZE contract.
+
+**What changed in this amendment.**
+
+- The fragment v1 contract is `fragment(handler)` only.
+  The `{ method, handler }` form that the original
+  FREEZE item 7 mentioned is **deferred** to a follow-up
+  slice. The deferred form needs a real host-side
+  fragment-method validation step (currently the host
+  uses the route table's method check, which means a
+  POST to a default-GET fragment falls through to 405
+  rather than a host-level "fragment does not accept
+  POST"). v1 ships with default GET only; the demo
+  route mirrors that.
+
+- New demo: `routes/fragments.tsp` exposes two named
+  fragments (`userList` and `echo`). The parent page
+  returns both URLs through `ctx.fragment("name")` so
+  the e2e can pin the URL builder, the dispatch
+  round-trip, the `params?` arg flow, the
+  client-side-param passthrough, and the per-process
+  capability check end-to-end.
+
+- New e2e:
+  `fragment_runtime_exposes_opaque_url_and_renders_subtree`
+  in `bun/src/runtime/tsp/tests/start_order.rs`. It
+  runs against the real `dist/tsp-v2/tspserver_v2.exe`
+  binary and pins six scenarios:
+  1. `GET /fragments` returns 200 with the `userList`
+     and `echo` URLs inlined.
+  2. The parsed `userList` URL returns the JSON
+     fragment body (alice / bob / carol) -- proving
+     the host dispatches back to the right page +
+     the right fragment name.
+  3. The parsed `echo` URL reflects the parent's
+     baked `msg=hi` -- proving `ctx.fragment("name",
+     params?)` survives the round trip.
+  4. Adding a `&client=hello` query param to the
+     fragment URL surfaces a `client: "hello"` field
+     in the body -- proving the fragment handler
+     reads the full request query, not just the
+     parent's intent.
+  5. `GET /__tsp/fragment?route=...&name=userList&token=wrong`
+     returns 404 -- proving the per-process capability
+     check rejects a token that does not match
+     `host::fragment_token()`.
+  6. `GET /__tsp/fragment?name=userList&token=<correct>`
+     returns 404 -- proving a missing `route=` param
+     falls through to the route table (no route at
+     `/__tsp/fragment` -> 404).
+
+- New unit tests in `bun/src/runtime/tsp/jsx.rs`:
+  - `rewrite_fragment_exports_injects_name_as_first_arg`:
+    `export const X = fragment(handler)` is rewritten
+    to `const X = fragment("X", handler)`, so the
+    wrap-prelude registry can store the handler
+    under the name the host will look up.
+  - `rewrite_fragment_exports_does_not_touch_other_exports`:
+    pin that `export function GET()` and
+    `export const plain = 5` are not touched.
+  - `wrap_emits_fragment_registry_and_dispatch`:
+    pin that the wrap preamble declares the
+    `__tspFragments` map, the `__tspFragment__`
+    registry function, the dispatch from
+    `__tspContext.__tsp_fragment` to the right
+    handler, the `ctx.fragment(name, params?)` URL
+    builder, and the `__tspServer.fragment`
+    export.
+  - `wrap_context_fragment_url_bakes_token_route_and_extra_params`:
+    pin that the URL builder reads the parent path,
+    the fragment name, the per-process token (from
+    the context, not a hard-coded value), and the
+    user's extra params.
+
+**What was NOT changed in this amendment.**
+
+- The fragment implementation itself. The rewriter,
+  the `__tspFragment__` registry, the
+  `ctx.fragment()` URL builder, the host's
+  `fragment_target` parser, the capability token,
+  and the dispatch all stay exactly as they were;
+  this amendment only adds the demo, the e2e, and
+  the unit-test pins.
+- The FREEZE contract shape. The Application
+  Protocol surface (item 7) keeps the same
+  description; the narrowing to `fragment(handler)`
+  only is documented under this amendment's
+  "What changed" rather than as a new contract
+  clause, because the deferred `{ method, handler }`
+  form was not yet exercised by application code.
+- No new `serde` dep, no new npm module, no
+  watch / reloader changes. The fragment URL is
+  not persisted across restarts; the per-process
+  token rotates on every master boot, so a
+  long-lived client tab that holds a fragment URL
+  will need to re-fetch the parent page after a
+  restart to refresh the URL. This is the same
+  staleness model the existing session id uses
+  (per-process, not durable).
+
+**Verification.** 240 tests green (206 lib +
+4 worker_integration + 15 process_model + 15 start_order
+e2e, the prior 14 plus
+`fragment_runtime_exposes_opaque_url_and_renders_subtree`).
+The lib gain is the 4 new `jsx::tests::fragment_*`
+tests; the worker_integration and process_model counts
+are unchanged. The new e2e exercises the real
+`dist/tsp-v2/tspserver_v2.exe` binary with the
+production-shape demo route, so a regression in the
+fragment dispatch or capability check would surface
+as a hard failure on `cargo test --test start_order`.

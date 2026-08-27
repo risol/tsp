@@ -1378,6 +1378,136 @@ mod tests {
     }
 
     #[test]
+    fn rewrite_fragment_exports_injects_name_as_first_arg() {
+        // Phase 9 (plan §14): `export const X = fragment(handler)`
+        // declares a fragment. The rewriter injects the export
+        // name as the first arg so the wrap-prelude's
+        // `__tspFragment__` registry function can store the
+        // handler under the name the host will look up. Without
+        // this rewrite, the wrap sees `fragment(handler)` and
+        // has no way to map a request's `name=...` query back
+        // to the right handler.
+        let out = rewrite_fragment_exports(
+            "export const userList = fragment(async (ctx) => '<ul></ul>');\n",
+        );
+        assert!(
+            out.contains("const userList = fragment(\"userList\", async (ctx) => '<ul></ul>');"),
+            "rewriter must insert the export name as the first fragment arg; got: {out}"
+        );
+        assert!(
+            !out.contains("export const userList = fragment("),
+            "the `export` keyword must be stripped (the re-emit is plain `const` so the runtime \
+             can register before the wrap selects a handler); got: {out}"
+        );
+    }
+
+    #[test]
+    fn rewrite_fragment_exports_does_not_touch_other_exports() {
+        // The rewriter only fires on the line-shape
+        // `export const X = fragment(` -- `export function GET(...)`
+        // and `export const plain = 5` must pass through unchanged
+        // (a regression here would break every other page route).
+        let src = "\
+export function GET() { return 'x'; }\n\
+export const plain = 5;\n\
+export const frag = fragment(() => null);\n\
+";
+        let out = rewrite_fragment_exports(src);
+        assert!(out.contains("export function GET()"), "got: {out}");
+        assert!(
+            out.contains("export const plain = 5;"),
+            "non-fragment const exports must not be rewritten; got: {out}"
+        );
+        assert!(
+            out.contains("const frag = fragment(\"frag\", () => null);"),
+            "the fragment line must be rewritten; got: {out}"
+        );
+        assert!(
+            !out.contains("export const frag = fragment("),
+            "the fragment line's `export` must be stripped; got: {out}"
+        );
+    }
+
+    #[test]
+    fn wrap_emits_fragment_registry_and_dispatch() {
+        // Phase 9 (plan §14.2): the wrap preamble installs
+        // (a) the `__tspFragments` map, (b) the `__tspFragment__`
+        // registry function, (c) the dispatch that picks a
+        // fragment by name from `__tspContext.__tsp_fragment`,
+        // and (d) the `ctx.fragment(name, params)` URL builder.
+        // The `__tspServer` freeze also exposes the user-facing
+        // `fragment` name. All five shapes must show up.
+        let body =
+            "function GET(ctx) { return ctx.fragment('userList'); }\nexport const userList = fragment(() => null);\n";
+        let json = r#"{"method":"GET","path":"/fragments","query":"","headers":{}}"#;
+        let wrapped = wrap_for_bun_cli(body, "GET", Some(json));
+        assert!(
+            wrapped.contains("const __tspFragments = new Map();"),
+            "wrap must declare the fragment registry map; got: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("function __tspFragment__(__name__, __handler__)"),
+            "wrap must define the fragment registry function; got: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("__tspFragments.set(__name__, __handler__);"),
+            "registry function must store the handler under the export name; got: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("__tspFragmentName__ = typeof __tspContext"),
+            "wrap must read the per-request fragment selector from the context; got: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("__tspHandler__ = __tspFragments.get(__tspFragmentName__)"),
+            "wrap must dispatch to the fragment handler when a fragment selector is present; got: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("__tspContext.fragment ="),
+            "wrap must expose `ctx.fragment(name, params?)` to the page; got: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("'/__tsp/fragment?'"),
+            "fragment URL builder must point at the internal fragment endpoint; got: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("fragment: __tspFragment__"),
+            "__tspServer.fragment must be the registry function; got: {wrapped}"
+        );
+    }
+
+    #[test]
+    fn wrap_context_fragment_url_bakes_token_route_and_extra_params() {
+        // Phase 9: `ctx.fragment("echo", { msg: "hi" })` must
+        // produce a URL whose query string carries the parent
+        // page's path (`route`), the fragment name (`name`),
+        // the per-process capability (`token`), and the user's
+        // extra params (`msg=hi`). The wrap must NOT bake the
+        // token from a hard-coded value -- it must read it from
+        // `__tspContext.__tsp_fragment_token` so the host can
+        // rotate the token per process.
+        let body = "function GET(ctx) { return ctx.fragment('echo', { msg: 'hi' }); }\n";
+        let json = r#"{"method":"GET","path":"/fragments","query":"","headers":{}}"#;
+        let wrapped = wrap_for_bun_cli(body, "GET", Some(json));
+        assert!(
+            wrapped.contains("new URLSearchParams({route: __tspContext.path"),
+            "URL builder must read the parent path from the context; got: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("name: String(__name__)"),
+            "URL builder must use the fragment name; got: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("token: __tspContext.__tsp_fragment_token"),
+            "URL builder must read the token from the per-process context, not a hard-coded value; got: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("...(__params__ || {})"),
+            "URL builder must spread the user's extra params; got: {wrapped}"
+        );
+    }
+
+
+    #[test]
     fn wrap_hydrates_ctx_session() {
         // Slice 16k: the preamble hydrates `ctx.session`
         // (spec sect.16) with id + read methods + a

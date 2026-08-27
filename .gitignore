@@ -30,3 +30,8 @@ output/
 
 # bench output (smoke benchmark JSON)
 bench-*.json
+
+# one-off debug logs from manual `Start-Process` runs of the
+# production binary (e.g. when reproducing a master crash). Not
+# committed; the canonical capture is `tsp.sh dev` / `tsp.sh test`.
+.frag-*.log

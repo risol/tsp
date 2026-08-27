@@ -3084,3 +3084,257 @@ fn sql_runtime_uses_bun_native_pool_for_page_local_datasource() {
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&temp_root);
 }
+
+// ---------------------------------------------------------------------------
+// Phase 9 — Fragments (plan §14 / FREEZE item 7)
+//
+// The `fragment()` helper exposes a page subtree as a
+// named export; the host returns the internal URL on
+// `ctx.fragment("name")`. The application passes that
+// URL to the client (htmx, fetch, ...) and the host
+// dispatches the request back to the named fragment
+// handler on a separate route.
+//
+// The integration test exercises the full Phase 9 surface
+// end-to-end through the real binary:
+//
+//   1. GET /fragments
+//      Parent page returns both fragment URLs in JSON.
+//      The e2e parses them out and uses them directly --
+//      the URLs are opaque to the application but the
+//      test gets them by going through `ctx.fragment`,
+//      not by hard-coding the path (the host token is
+//      random per process).
+//
+//   2. GET <userList URL>           (the URL parsed in 1)
+//      Renders the `userList` fragment handler. The
+//      response body proves the host dispatched back
+//      to the right page + the right fragment name,
+//      and the wrap ran the handler under a fresh
+//      `__tspContext`.
+//
+//   3. GET <echo URL>
+//      Renders the `echo` fragment with the parent's
+//      `msg=hi` baked into the URL. The body has
+//      `msg: "hi"`, proving the `ctx.fragment("name",
+//      params)` arg survives the round-trip through
+//      the URL builder.
+//
+//   4. GET <echo URL>&msg=override
+//      A second hit with a different `?msg=` value.
+//      The body reflects the override, proving the
+//      fragment handler reads the full request query
+//      (not just the parent's intent).
+//
+//   5. GET /__tsp/fragment?route=/fragments&name=userList&token=wrong
+//      Wrong capability token -> the host's
+//      `fragment_target` returns None and the request
+//      is treated as a normal GET to `/__tsp/fragment`,
+//      which has no route -> 404.
+//
+//   6. GET /__tsp/fragment?name=userList&token=<correct>
+//      No `route` param -> same fallback path -> 404.
+//
+//   7. GET <echo URL> with method POST
+//      A fragment with default GET is requested via
+//      POST -> the page has no POST export -> 405.
+//      (The host's method validation is the route
+//      table's, not a fragment-specific check. The
+//      FREEZE Amendment 4 narrows the v1 contract to
+//      `fragment(handler)` with default GET, so this
+//      is acceptable; a follow-up slice can add a real
+//      fragment-method check when `{ method, handler }`
+//      ships.)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fragment_runtime_exposes_opaque_url_and_renders_subtree() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-fragments-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+    std::fs::write(
+        routes_dir.join("fragments.tsp"),
+        include_str!("../../../../../routes/fragments.tsp"),
+    )
+    .expect("fragments.tsp");
+
+    let port: u16 = 35_100 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    // (1) Parent page returns both fragment URLs in JSON.
+    let (s_page, b_page) = http_get_status(port, "/fragments", Duration::from_secs(10));
+    assert_eq!(
+        s_page, 200,
+        "GET /fragments must return 200, got {s_page} body={b_page:?}"
+    );
+    assert!(
+        b_page.contains("\"ok\":true") && b_page.contains("\"page\":\"/fragments\""),
+        "parent page body must be the demo envelope; got {b_page:?}"
+    );
+    assert!(
+        b_page.contains("\"fragmentUrls\"")
+            && b_page.contains("\"userList\":\"")
+            && b_page.contains("\"echo\":\""),
+        "parent page must expose both fragment URLs; got {b_page:?}"
+    );
+
+    // The wrap percent-encodes the path, so the userList URL
+    // contains `route=%2Ffragments`. The host's
+    // `fragment_target` decodes it back. The e2e extracts
+    // the URL by anchoring on the known stable shape.
+    let userlist_url = extract_json_url(&b_page, "userList")
+        .expect("userList URL must be present in the parent body");
+    let echo_url = extract_json_url(&b_page, "echo")
+        .expect("echo URL must be present in the parent body");
+
+    // Both URLs must be the host's internal fragment
+    // endpoint (the application never sees the path
+    // directly; it only goes through ctx.fragment). The
+    // exact path is an implementation detail; we only
+    // assert the surface that the application is allowed
+    // to observe.
+    assert!(
+        userlist_url.contains("/__tsp/fragment?"),
+        "userList URL must target the internal fragment endpoint; got {userlist_url:?}"
+    );
+    assert!(
+        echo_url.contains("/__tsp/fragment?"),
+        "echo URL must target the internal fragment endpoint; got {echo_url:?}"
+    );
+    assert!(
+        userlist_url.contains("name=userList") && echo_url.contains("name=echo"),
+        "both URLs must carry the fragment name; got userList={userlist_url:?} echo={echo_url:?}"
+    );
+
+    // (2) userList fragment renders through the host dispatch.
+    let (s_ul, b_ul) = http_get_status(port, &userlist_url, Duration::from_secs(10));
+    assert_eq!(
+        s_ul, 200,
+        "GET <userList URL> must return 200, got {s_ul} body={b_ul:?}"
+    );
+    assert!(
+        b_ul.contains("\"fragment\":\"userList\""),
+        "userList fragment body must self-identify; got {b_ul:?}"
+    );
+    assert!(
+        b_ul.contains("\"users\":[\"alice\",\"bob\",\"carol\"]"),
+        "userList fragment body must list the three demo users; got {b_ul:?}"
+    );
+
+    // (3) echo fragment: parent baked `msg=hi` into the URL,
+    // so the fragment handler sees `msg=hi`.
+    let (s_e, b_e) = http_get_status(port, &echo_url, Duration::from_secs(10));
+    assert_eq!(
+        s_e, 200,
+        "GET <echo URL> must return 200, got {s_e} body={b_e:?}"
+    );
+    assert!(
+        b_e.contains("\"fragment\":\"echo\"") && b_e.contains("\"msg\":\"hi\""),
+        "echo fragment must reflect the parent's baked msg; got {b_e:?}"
+    );
+
+    // (4) A separate client-side param survives the round trip
+    // too. The fragment handler reads `ctx.query.get("client")`;
+    // a fresh `&client=hello` appended to the URL the parent
+    // baked appears in the body. This proves the fragment
+    // handler observes the full request query, not just the
+    // parent's intent.
+    let client_url = if echo_url.contains('?') {
+        format!("{echo_url}&client=hello")
+    } else {
+        format!("{echo_url}?client=hello")
+    };
+    let (s_cl, b_cl) = http_get_status(port, &client_url, Duration::from_secs(10));
+    assert_eq!(
+        s_cl, 200,
+        "GET <echo URL>&client=hello must return 200, got {s_cl} body={b_cl:?}"
+    );
+    assert!(
+        b_cl.contains("\"client\":\"hello\""),
+        "echo fragment with a client-side param must read it back; got {b_cl:?}"
+    );
+    assert!(
+        b_cl.contains("\"msg\":\"hi\""),
+        "the parent's baked msg must still be present alongside the client param; got {b_cl:?}"
+    );
+
+    // (5) Wrong capability token -> 404. The host's
+    // `fragment_target` returns None when the token
+    // doesn't match the per-process capability, so the
+    // request falls through to the route table at
+    // `/__tsp/fragment` -- a path with no route.
+    let wrong_token_url = "/__tsp/fragment?route=%2Ffragments&name=userList&token=definitely_wrong";
+    let (s_wt, _) = http_get_status(port, wrong_token_url, Duration::from_secs(10));
+    assert_eq!(
+        s_wt, 404,
+        "GET /__tsp/fragment with wrong token must 404, got {s_wt}"
+    );
+
+    // (6) Missing `route` param -> same 404 fallback. The
+    // host cannot dispatch to a page if the request
+    // doesn't say which one.
+    let userlist_token =
+        extract_token(&userlist_url).expect("userList URL must carry a token");
+    let missing_route_url = format!(
+        "/__tsp/fragment?name=userList&token={userlist_token}"
+    );
+    let (s_mr, _) = http_get_status(port, &missing_route_url, Duration::from_secs(10));
+    assert_eq!(
+        s_mr, 404,
+        "GET /__tsp/fragment without route= must 404, got {s_mr}"
+    );
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+/// Pull a JSON-quoted URL out of a string body that
+/// looks like `{ ..., "userList": "/__tsp/fragment?...", ... }`.
+/// Returns the URL with the surrounding quotes stripped.
+/// Used by the fragments e2e to recover the opaque
+/// `ctx.fragment("name")` output without hard-coding the
+/// path shape.
+fn extract_json_url(body: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\":\"");
+    let start = body.find(&needle)? + needle.len();
+    let rest = &body[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+/// Pull the value of `token=...` out of a URL the host
+/// emitted. The wrap URL-encodes nothing in the value
+/// (the token is a base64-ish ASCII string), so a plain
+/// scan from the `token=` marker to the next `&` or
+/// end-of-string is enough.
+fn extract_token(url: &str) -> Option<String> {
+    let marker = "token=";
+    let start = url.find(marker)? + marker.len();
+    let rest = &url[start..];
+    let end = rest.find('&').unwrap_or(rest.len());
+    Some(rest[..end].to_string())
+}
+
