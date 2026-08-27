@@ -231,19 +231,21 @@ tsp:server (Amendment 1 surface, 2026-08-27)
     nanoid, customAlphabet, customRandom, random
   Validation library (Amendment 1)
     zod                              (zod 4.4.3, embedded)
-  Password hashing (Amendment 1)
-    password                         (Bun.password native — bcrypt /
-                                      argon2id / scrypt)
   Database factory (Amendment 1)
     sql                              (Bun.SQL factory; per-worker pool
                                       via bun:sql)
-  Bun builtin helper namespace (Amendment 1)
-    util                             (17 surfaces: randomUUIDv7, hash,
+  Bun builtin helper namespace (Amendment 1, password merged in
+  Amendment 2)
+    util                             (18 surfaces: randomUUIDv7, hash,
                                       CryptoHasher, Glob, TOML, YAML,
                                       markdown, escapeHTML, gzipSync,
                                       gunzipSync, file, write, which,
                                       peek, deepEquals, deepMatch,
-                                      nanoseconds, env)
+                                      nanoseconds, env, password)
+    -- password                      (`Bun.password` native --
+                                      bcrypt / argon2id / scrypt;
+                                      page reaches it as
+                                      `util.password.hashSync(...)`)
 
 tsp:html (v2.0 + Amendment 1)
   raw                                (HTML escape; same `__tspRaw__`
@@ -610,10 +612,13 @@ overturned; the amendments are strictly add-on.
 - `zod` (slice 17b, commit `336d3d522f`; upgraded to zod 4.4.3 in
   commit `d62ac69c94`)
 - `password` (slice 17c, originally bcryptjs in `336d3d522f`, then
-  migrated to native `Bun.password` in `c0b802c340`)
+  migrated to native `Bun.password` in `c0b802c340`; later
+  **merged into `util` via Amendment 2** so the bun-builtins
+  surface stays unified)
 - `sql` (slice 17d, commit `336d3d522f`; `Bun.SQL` factory)
 - `util` (slice 18, commit `756108d694`; namespace of 17 bun
-  builtins, see the item 8 surface listing)
+  builtins + `password` after Amendment 2; see the item 8 surface
+  listing)
 
 **Why this does not contradict a frozen item.** Item 8 froze the
 *module names* (three of them, no more) and the *import-only*
@@ -761,3 +766,107 @@ dynamic route segments + catch-all (slice 16e),
 `ctx.request.formData()` (slice 16g), and
 `config_driven_counter_service_increments_across_requests` for
 config-driven custom services (slice 22 prototype)).
+
+### Amendment 2 (2026-08-27) — `password` merged into `util`
+
+**What changed.** The `password` top-level export that
+Amendment 1 added (slice 17c, native `Bun.password`
+bridge) was moved under the `util` namespace. Pages now
+reach the same `Bun.password` object as
+`util.password.hashSync(...)` / `util.password.verifySync(...)`
+instead of `password.hashSync(...)`. The top-level
+`__tspServer.password` slot is gone; `password: Bun.password`
+is a field inside the `__tspUtilNs__` freeze.
+
+The rewriter's allow-list dropped `"password"` (the
+`import { password }` shape now fails fast at transpile
+time with `unsupported tsp:server named import`), and
+`password_prelude()` was removed from the wrap builder
+(the password bridge is now a single line inside the
+util builder).
+
+**Why this does not contradict a frozen item.** The
+freeze allows adding named exports to an existing
+module; this amendment does the inverse for an existing
+export. The `util` namespace already grouped the other
+17 bun builtins; `password` was structurally identical
+(`Bun.X` reference, 0 embed, 0 per-request state) and
+the only thing distinguishing it was the topic ("security
+vs. utility"). Topic-level grouping was a leaky design --
+the page-side code does not care which "topic" a builtin
+belongs to, only that it can reach it through a single
+import. The discipline that "imports are the only
+framework surface" is preserved; the import surface
+shrinks from 16 names to 15 (one fewer top-level slot
+to maintain).
+
+**What changed in code.**
+- `bun/src/runtime/tsp/jsx.rs`:
+  - `__tspUtilNs__` gains `password: Bun.password` as
+    its 18th field (the `env` wrapper is the only other
+    field with a one-line host-side wrapper; `password`
+    is just a direct `Bun.password` reference).
+  - The `password: __tspPasswordNs__` slot is removed
+    from the `__tspServer` freeze.
+  - `password_prelude()` and its caller are removed.
+  - The rewriter's allow-list drops the `"password"`
+    arm.
+- `bun/src/runtime/tsp/tests/start_order.rs`:
+  - The inline `PASSWORD_TSP` fixture now uses
+    `import { util } from "tsp:server"` and
+    `util.password.hashSync(...)` /
+    `util.password.verifySync(...)`.
+  - The `password_runtime_through_bun_password_serves_hashed_passwords`
+    e2e keeps its name (the test still pins bun's
+    native password API) but the body it asserts against
+    is the new `util.password` shape.
+  - The module-level doc comment for the password
+    e2e is updated to point at `util` instead of
+    the top-level `password` slot.
+- `routes/password.tsp` is rewritten to use
+  `import { util }` + `util.password.*`. The HTTP
+  shape (`GET /password`, `POST /password`) is
+  unchanged; only the JS surface inside the page
+  changes.
+- The 3 password unit tests in `jsx.rs`:
+  - `wrap_for_bun_cli_surfaces_bun_password_for_pages`
+    now pins `password: Bun.password,` inside the
+    `__tspUtilNs__` block (instead of the old
+    `const __tspPasswordNs__ = Bun.password;` +
+    `password: __tspPasswordNs__` two-line pattern).
+  - `rewrite_tsp_server_imports_accepts_password_named_export`
+    is renamed to
+    `rewrite_tsp_server_imports_rejects_password_after_merge_into_util`
+    and now asserts the rewriter **rejects**
+    `import { password }` (the old positive
+    contract is now covered by the `util` test).
+  - `password_pipeline_generates_runable_module_under_real_bun`
+    now uses `import { util }` + `util.password.*`
+    in the source fixture, and asserts the rewriter
+    emits `const { util } = __tspServer;` (not
+    `const { password } = __tspServer;`).
+
+**What was NOT changed in this amendment.**
+- `routes/counter.tsp` and the slice 22
+  `CounterService` plumbing are untouched (the
+  config-driven `custom services` are a host-side
+  service registry concept, not a `tsp:server` import).
+- No `serde` dep was added; the config parser
+  hand-rolls the same minimal JSON shape it did
+  before.
+- Production behaviour is unchanged: a page that
+  hashed a bcrypt / argon2id string and verified
+  it back gets the same boolean answer, in the same
+  e2e test, just routed through `util.password`
+  instead of the top-level `password`.
+
+**Verification.** Same 233 tests green (202 lib +
+4 worker_integration + 15 process_model + 12 start_order
+e2e). The 3 password unit tests in `jsx.rs` change
+contract (one now asserts a negative -- the rewriter
+rejects the old shape) but they still cover the same
+end-to-end behaviour: bun's native `Bun.password` is
+reachable from a page through the namespace and the
+result is a real bcrypt / argon2id hash. The
+`password_runtime_through_bun_password_serves_hashed_passwords`
+e2e is unchanged in name and intent.

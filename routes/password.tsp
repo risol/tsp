@@ -1,11 +1,9 @@
-// Slice 17c demo: bun's native `Bun.password` (exposed as
-// `tsp:server.password`) for password hashing + verification.
+// Slice 17c demo: bun's native `Bun.password` (merged into
+// the `util` namespace in the slice 22 follow-up so the
+// "bun builtins via util" surface stays unified) for
+// password hashing + verification.
 //
-// Two endpoints that exercise the page-side API and a third
-// that flips the algorithm to demonstrate that
-// `__tspServer.password` is just `Bun.password` re-exported,
-// so any future `Bun.password.*` API surface is automatically
-// available to the page without a v2 release.
+// Three endpoints that exercise the page-side API:
 //
 //   GET  /password                    -> bcrypt round=4 hash of
 //                                        the literal "hello" + a
@@ -33,7 +31,7 @@
 //                                        bcrypt. argon2id is
 //                                        the bun default and the
 //                                        OWASP 2024+
-                                        recommendation for new
+//                                        recommendation for new
 //                                        password storage;
 //                                        bcrypt remains here
 //                                        for verifying legacy
@@ -45,11 +43,11 @@
 // test runs in well under a second; production should use
 // `round=10-12` for bcrypt or `argon2id` with sane parameters
 // (config knob in v2.5+).
-import { password } from "tsp:server";
+import { util } from "tsp:server";
 
 export async function GET(ctx) {
   const algo = ctx.query.get("algo") || "bcrypt";
-  const hash = password.hashSync("hello", { algorithm: algo, cost: 4 });
+  const hash = util.password.hashSync("hello", { algorithm: algo, cost: 4 });
   return new Response(
     JSON.stringify({
       ok: true,
@@ -82,7 +80,7 @@ export async function POST(ctx) {
       { status: 400, headers: { "content-type": "application/json" } }
     );
   }
-  const matches = password.verifySync(parsed.pw, parsed.hash);
+  const matches = util.password.verifySync(parsed.pw, parsed.hash);
   if (!matches) {
     return new Response(JSON.stringify({ ok: false, matches: false }), {
       status: 400,

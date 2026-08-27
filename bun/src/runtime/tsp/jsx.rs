@@ -445,7 +445,6 @@ fn rewrite_tsp_server_imports(source: &str) -> Result<String, JsxError> {
                             | "customRandom"
                             | "random"
                             | "zod"
-                            | "password"
                             | "sql"
                             | "util"
                     )
@@ -684,48 +683,6 @@ fn zod_prelude() -> String {
     )
 }
 
-/// Build the prelude that surfaces bun's native `Bun.password`
-/// to the page as `__tspServer.password`. The page reaches the
-/// password API via
-/// `import { password } from "tsp:server"`; the rewriter emits
-/// `const { password } = __tspServer;` and the page uses it as
-/// `password.hashSync("hello", { algorithm: "bcrypt", cost: 4 })`
-/// or `password.verifySync("hello", hash)` or
-/// `password.hashSync("hello", { algorithm: "argon2id" })`.
-///
-/// The page-side API is **not** wrapped to look like v1's
-/// `bcrypt.hashSync(pw, salt)` shape; the previous wrap of
-/// bcryptjs (slice 17c first attempt) was abandoned in favour
-/// of the direct `Bun.password` surface once we confirmed the
-/// builtin supports bcrypt / argon2id / scrypt with native
-/// performance. Pages write the bun-native API directly; the
-/// only added value of the namespace is satisfying plan §16.4
-/// (no `globalThis.Bun` leakage) and giving the rewriter a
-/// single point to gate which builtin surfaces the page can
-/// reach (`password` is whitelisted; `Bun` itself is not).
-///
-/// Cost notes: `Bun.password` is a native Rust implementation
-/// (no JS-side parse per request, no per-call allocations from
-/// a pre-bundled npm library). The page handler's first call
-/// triggers algorithm-key + salt generation inside bun; once
-/// warm the per-hash latency is well under 1 ms for bcrypt at
-/// cost=4. Production deployments should prefer `argon2id`
-/// (the bun default) over `bcrypt` per OWASP 2024+ guidance;
-/// bcrypt remains here for legacy hash format interop
-/// (verifying existing user passwords stored as `$2b$...`).
-fn password_prelude() -> String {
-    // Forward Bun.password through the frozen `__tspServer`
-    // object. No `require`, no `include_str!` -- bun's
-    // `Bun.password` is already in the host binary, and the
-    // synthetic `bun:main` evaluation context exposes it via
-    // the global `Bun` object. The rewriter hands the page
-    // `__tspServer.password` which IS the same `Bun.password`
-    // instance, so any future `Bun.password.*` API surface
-    // (e.g. `Bun.password.options`) is automatically available
-    // to the page without a v2 release.
-    "const __tspPasswordNs__ = Bun.password;\n".to_string()
-}
-
 /// `ctx_json` is the JSON-serialised `Context` (spec
 /// sect.13). If `Some`, the preamble parses it and passes
 /// the resulting object as the page handler's only
@@ -736,8 +693,7 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
         transformed.len()
             + 1024
             + nanoid_prelude().len()
-            + zod_prelude().len()
-            + password_prelude().len(),
+            + zod_prelude().len(),
     );
     // Compile nanoid 5.1.6 into the wrap preamble so pages can call
     // `nanoid()` / `customAlphabet()` / `random()` / `customRandom()`
@@ -750,17 +706,6 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
     // entry has no module resolver for arbitrary npm packages, same
     // constraint as nanoid). See `zod_prelude` for the build pipeline.
     out.push_str(&zod_prelude());
-    // Slice 17c (revised): surface bun's native `Bun.password` as
-    // `tsp:server.password` so pages can call
-    // `password.hashSync("...", { algorithm: "bcrypt", cost: 4 })`
-    // or `password.verifySync("...", hash)`. No `include_str!` or
-    // pre-bundle: bun's builtin is already in the host binary, and
-    // the page reaches it through the global `Bun` object. The
-    // first attempt (bcryptjs embed, slice 17c) was abandoned when
-    // we confirmed `Bun.password` covers bcrypt / argon2id / scrypt
-    // with native performance and zero per-request parse cost. See
-    // `password_prelude` for the binding contract.
-    out.push_str(&password_prelude());
     // Slice 17d: surface bun's native SQL client (`Bun.SQL` /
     // `require("bun").SQL`) as `tsp:server.sql` so pages can do
     // `await sql\`mysql://...\`` for MySQL/PG/SQLite access. No
@@ -824,6 +769,15 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
          \x20 // deliberately omitted so the page cannot dump the\n\
          \x20 // whole process environment in one call\n\
          \x20 env: Object.freeze({ get: (k) => Bun.env[k], has: (k) => k in Bun.env }),\n\
+         \x20 // password hashing (bcrypt / argon2id / scrypt). bun's\n\
+         \x20 // native Rust implementation -- the page reuses\n\
+         \x20 // Bun.password directly through this namespace. No\n\
+         \x20 // vendored bcryptjs; no per-request JS-side parse.\n\
+         \x20 // Production deployments should prefer argon2id\n\
+         \x20 // (bun's default) over bcrypt per OWASP 2024+\n\
+         \x20 // guidance; bcrypt is here for legacy hash interop\n\
+         \x20 // (verifying existing user passwords stored as $2b$...).\n\
+         \x20 password: Bun.password,\n\
          });\n\
          "
     );
@@ -872,7 +826,7 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
          class __tspHttpError__ extends Error {\n\
          \x20 constructor(__status__, __message__, __init__) { super(__message__); this.name = 'HttpError'; this.status = __status__; this.headers = new Headers((__init__ || {}).headers || {}); }\n\
          }\n\
-         const __tspServer = Object.freeze({json: __tspJson__, redirect: __tspRedirect__, text: __tspText__, html: __tspHtml__, notFound: __tspNotFound__, HttpError: __tspHttpError__, fragment: __tspFragment__, raw: __tspRaw__, nanoid: __tspNanoid, customAlphabet: __tspNanoidCustomAlphabet, customRandom: __tspNanoidCustomRandom, random: __tspNanoidRandom, zod: __tspZodNs__, password: __tspPasswordNs__, sql: __tspSqlNs__, util: __tspUtilNs__});\n"
+         const __tspServer = Object.freeze({json: __tspJson__, redirect: __tspRedirect__, text: __tspText__, html: __tspHtml__, notFound: __tspNotFound__, HttpError: __tspHttpError__, fragment: __tspFragment__, raw: __tspRaw__, nanoid: __tspNanoid, customAlphabet: __tspNanoidCustomAlphabet, customRandom: __tspNanoidCustomRandom, random: __tspNanoidRandom, zod: __tspZodNs__, sql: __tspSqlNs__, util: __tspUtilNs__});\n"
     );
     out.push_str(
         "function __tspEscape__(__value__) {\n\
@@ -2274,26 +2228,51 @@ export async function GET(ctx) {
 
     #[test]
     fn wrap_for_bun_cli_surfaces_bun_password_for_pages() {
-        // Slice 17c (revised): the `password` namespace in
-        // `__tspServer` is `Bun.password` itself, surfaced
-        // through the wrap preamble with a single
-        // `const __tspPasswordNs__ = Bun.password;` binding
-        // (no `include_str!`, no IIFE -- the page reuses bun's
-        // native Rust-backed password API directly). This test
-        // pins the wrap-string shape so a refactor that
-        // accidentally drops the `Bun.password` bridge (or
-        // renames `__tspServer.password`) is caught at unit-test
-        // time, without spinning the real binary.
-        let body = "function GET() { return password.hashSync('hello', { algorithm: 'bcrypt', cost: 4 }); }";
+        // Slice 22 follow-up: `password` was merged into
+        // `util` so the "bun builtins via util" surface stays
+        // unified. The wrap preamble still bridges bun's
+        // native `Bun.password` to the page, but now through
+        // the frozen `__tspUtilNs__` object (a single
+        // `password: Bun.password` field) instead of a
+        // dedicated top-level `__tspServer.password` slot.
+        // Pages reach it via
+        //     import { util } from "tsp:server";
+        //     util.password.hashSync("hello", { algorithm: "bcrypt", cost: 4 });
+        //
+        // This test pins the wrap-string shape so a refactor
+        // that accidentally drops the `Bun.password` bridge
+        // (or splits `password` back out of `util`) is caught
+        // at unit-test time, without spinning the real
+        // binary.
+        let body = "function GET() { return util.password.hashSync('hello', { algorithm: 'bcrypt', cost: 4 }); }";
         let wrapped = wrap_for_bun_cli(body, "GET", Some("{}"));
+        // The password bridge must live INSIDE the util
+        // namespace -- a top-level `__tspServer.password`
+        // slot is the shape we just collapsed away from.
         assert!(
-            wrapped.contains("const __tspPasswordNs__ = Bun.password;"),
-            "wrap must bridge bun's native password API to `__tspPasswordNs__` via `Bun.password`; got prefix: {}",
+            !wrapped.contains("const __tspPasswordNs__ = Bun.password;"),
+            "password must no longer have its own top-level binding (it lives under util now); \
+             got prefix: {}",
             &wrapped[..wrapped.len().min(1200)]
         );
         assert!(
-            wrapped.contains("password: __tspPasswordNs__"),
-            "wrap must expose password on __tspServer; got prefix: {}",
+            !wrapped.contains("password: __tspPasswordNs__"),
+            "password must no longer be a top-level __tspServer field; got prefix: {}",
+            &wrapped[..wrapped.len().min(1500)]
+        );
+        // And it must be a `password: Bun.password` field
+        // inside the `__tspUtilNs__` object literal.
+        assert!(
+            wrapped.contains("password: Bun.password,"),
+            "wrap must bridge bun's native password API to `util.password` via `Bun.password`; \
+             got prefix: {}",
+            &wrapped[..wrapped.len().min(2500)]
+        );
+        // The util namespace must still be on __tspServer
+        // (the new home for password).
+        assert!(
+            wrapped.contains("util: __tspUtilNs__"),
+            "wrap must expose util on __tspServer; got prefix: {}",
             &wrapped[..wrapped.len().min(1500)]
         );
         // Plan §16.4: framework API must not be on globalThis.
@@ -2309,24 +2288,34 @@ export async function GET(ctx) {
     }
 
     #[test]
-    fn rewrite_tsp_server_imports_accepts_password_named_export() {
-        // Plan §16.1/§16.4: password is reached via
-        //     import { password } from "tsp:server";
-        // which the rewriter collapses into
-        //     const { password } = __tspServer;
+    fn rewrite_tsp_server_imports_rejects_password_after_merge_into_util() {
+        // Slice 22 follow-up: `password` was merged into
+        // `util` (one less top-level export, one less
+        // rewriter allow-list entry). Pages now reach
+        // `Bun.password` via
+        //     import { util } from "tsp:server";
+        //     util.password.hashSync(...)
+        //
+        // The old `import { password } from "tsp:server"`
+        // shape must be rejected by the rewriter so a
+        // forgotten code path fails fast at transpile time
+        // (rather than silently rendering an undefined
+        // `password` global at runtime). Plan §16.4
+        // requires the framework API to be reached through
+        // an explicit allow-listed import; "password" is no
+        // longer on that list.
         let src = r#"import { password } from "tsp:server";
 export function GET() {
   return password.hashSync("hello", { algorithm: "bcrypt", cost: 4 });
 }
 "#;
-        let rewritten = rewrite_tsp_server_imports(src).expect("rewrite should succeed");
+        let err = rewrite_tsp_server_imports(src)
+            .expect_err("rewriter must reject `import { password }` after the slice 22 merge");
+        let msg = format!("{err:?}");
         assert!(
-            rewritten.contains("const { password } = __tspServer;"),
-            "rewriter must collapse the password import into a single destructure; got: {rewritten}"
-        );
-        assert!(
-            !rewritten.contains("from \"tsp:server\""),
-            "the `from \"tsp:server\"` clause must be stripped after rewrite; got: {rewritten}"
+            msg.contains("unsupported tsp:server named import")
+                || msg.contains("password"),
+            "rejection must name the offending import (plan §16.4); got: {msg}"
         );
     }
 
@@ -2343,14 +2332,23 @@ export function GET() {
         //
         // We use cost=4 to keep the test under a second. The
         // page mirrors `routes/password.tsp` in production.
-        let source = r#"// Slice 17c (revised) regression test fixture.
-import { password } from "tsp:server";
+        //
+        // Slice 22 follow-up: `password` was merged into
+        // `util` (one less top-level export, one less
+        // rewriter allow-list entry). The fixture below
+        // mirrors the production shape after the merge --
+        // `import { util } from "tsp:server";
+        //  util.password.hashSync(...)` -- so the pipeline
+        // test catches any future regression that re-splits
+        // the two namespaces.
+        let source = r#"// Slice 17c (revised) + slice 22 follow-up fixture.
+import { util } from "tsp:server";
 
 export function GET() {
-  const bcrypt = password.hashSync("hello", { algorithm: "bcrypt", cost: 4 });
-  const argon = password.hashSync("hello", { algorithm: "argon2id" });
-  const bcryptOk = password.verifySync("hello", bcrypt);
-  const bcryptNo = password.verifySync("world", bcrypt);
+  const bcrypt = util.password.hashSync("hello", { algorithm: "bcrypt", cost: 4 });
+  const argon = util.password.hashSync("hello", { algorithm: "argon2id" });
+  const bcryptOk = util.password.verifySync("hello", bcrypt);
+  const bcryptNo = util.password.verifySync("world", bcrypt);
   return new Response(
     JSON.stringify({
       ok: bcryptOk === true && bcryptNo === false,
@@ -2372,8 +2370,12 @@ export function GET() {
             "import must be rewritten away; got: {transformed}"
         );
         assert!(
-            transformed.contains("const { password } = __tspServer;"),
-            "rewriter must emit `const {{ password }} = __tspServer;`; got: {transformed}"
+            transformed.contains("const { util } = __tspServer;"),
+            "rewriter must emit `const {{ util }} = __tspServer;` (password lives under util now); got: {transformed}"
+        );
+        assert!(
+            !transformed.contains("const { password } = __tspServer;"),
+            "rewriter must NOT emit a top-level `const {{ password }} = __tspServer;` after the merge; got: {transformed}"
         );
 
         let ctx_json = r#"{"method":"GET","path":"/password","query":"","headers":{"host":"127.0.0.1:1"},"body_b64":""}"#;

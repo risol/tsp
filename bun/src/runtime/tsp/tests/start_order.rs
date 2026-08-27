@@ -913,13 +913,15 @@ fn zod_runtime_compiled_into_wrap_serves_validated_schemas() {
 }
 
 // ---------------------------------------------------------------------------
-// password runtime integration test (slice 17c)
+// password runtime integration test (slice 17c + slice 22 follow-up)
 //
 // The TSP v2 wrap preamble bridges bun's native `Bun.password`
-// to the page as `__tspServer.password`. The page reaches it
-// via `import { password } from "tsp:server"`; the rewriter
-// emits `const { password } = __tspServer;` and the page uses
-// `password.hashSync(...)` / `password.verifySync(...)`.
+// to the page through the `util` namespace
+// (`__tspServer.util.password` is the same `Bun.password`
+// object). The page reaches it via
+// `import { util } from "tsp:server";`; the rewriter emits
+// `const { util } = __tspServer;` and the page uses
+// `util.password.hashSync(...)` / `util.password.verifySync(...)`.
 //
 // We assert this end-to-end by spinning the real binary
 // against a temp routes dir that contains `password.tsp`,
@@ -949,20 +951,17 @@ const PASSWORD_TSP: &str = r#"
 // inlines this rather than copying the file so the assertion
 // is self-contained.
 //
-// Plan §16.4: framework API must be explicitly imported (or
-// accessed via Context), NOT on globalThis. The page reaches
-// the password namespace via `import { password } from
-// "tsp:server"`; the host rewriter turns that into
-// `const { password } = __tspServer;` against the frozen
-// object the wrap preamble built. `__tspServer.password` is
-// the same object as `Bun.password`, so any future builtin
-// API surface (e.g. `Bun.password.options`) is automatically
-// available to the page without a v2 release.
-import { password } from "tsp:server";
+// Slice 22 follow-up: the password namespace was merged
+// into `util` so the "bun builtins via util" surface stays
+// unified. Pages reach `Bun.password` through
+// `import { util } from "tsp:server"; util.password.hashSync(...)`.
+// Plan §16.4 still holds: the framework API is reached by
+// an explicit import, never via globalThis.
+import { util } from "tsp:server";
 
 export function GET(_ctx) {
   const algo = _ctx.query.get("algo") || "bcrypt";
-  const hash = password.hashSync("hello", { algorithm: algo, cost: 4 });
+  const hash = util.password.hashSync("hello", { algorithm: algo, cost: 4 });
   return new Response(
     JSON.stringify({
       ok: true,
@@ -995,7 +994,7 @@ export async function POST(ctx) {
       { status: 400, headers: { "content-type": "application/json" } }
     );
   }
-  const matches = password.verifySync(parsed.pw, parsed.hash);
+  const matches = util.password.verifySync(parsed.pw, parsed.hash);
   if (!matches) {
     return new Response(JSON.stringify({ ok: false, matches: false }), {
       status: 400,
