@@ -1280,7 +1280,7 @@ Native Runtime (process singleton, host-owned)
 
 Per-request page module scope (eval per request, never shared)
   ├── mysql.*             # LIBRARY, page 自己 .createConnection() per request
-  ├── bcrypt.*            # LIBRARY, page 自己 .hash() per request
+  ├── password.*         # LIBRARY, page 自己 .hash() per request (bun:password builtin)
   ├── zod.*               # LIBRARY, page 自己 .parse() per request
   └── application code    # page 自己的状态，per request
 
@@ -1291,7 +1291,7 @@ JSC ctx.services
 ```
 
 **关键设计原则**：
-- **Libraries vs Services 分清**——zod / mysql2 / bcryptjs 是 stateless libraries，
+- **Libraries vs Services 分清**——zod / mysql2 是 stateless libraries；password 走 bun 内置的 Bun.password (零 embed)，
   page 用 namespace import 直接调用，不要走 service registry
 - **Db connection 不该走单例**——PHP-FPM 30 年没单例 db connection，page 每次
   `mysql.createConnection(config)` 拿新连接、用完 close。v2 同款
@@ -1317,18 +1317,19 @@ adapter**：
 
 ```ts
 // page 内：
-import { mysql } from "tsp:server";
+import { sql } from "tsp:server";
 import { zod } from "tsp:server";
-import { bcrypt } from "tsp:server";
+import { password } from "tsp:server";  // bun:password builtin (bcrypt / argon2id / scrypt)
 
-const conn = await mysql.createConnection({ host, port, user, password, database });
-const User = zod.z.object({ id: zod.z.number(), name: zod.z.string() });
-const user = User.parse(await conn.query("SELECT id, name FROM users WHERE id = ?", [42]));
+const conn = await sql("mysql://" + process.env.DB_PW + "@host/db");
+const User = zod.object({ id: zod.number(), name: zod.string() });
+const [user] = await conn`SELECT id, name FROM users WHERE id = ${42}`;
+const hash = password.hashSync("hunter2", { algorithm: "bcrypt", cost: 10 });
 conn.close();
 ```
 
-实现方式跟 nanoid 同款：`include_str!` 编译期 embed（mysql2 / bcryptjs / zod 整包源码
-+ 它的纯 JS 依赖），prelude 注入 `__tspServer.zod / __tspServer.mysql / __tspServer.bcrypt`
+实现方式：zod / mysql 走 nanoid 同款 `include_str!` embed（mysql2 / zod 整包源码
++ 它的纯 JS 依赖），prelude 注入 `__tspServer.zod / __tspServer.mysql` namespace；**密码哈希不走 embed**——bun 内置的 `Bun.password`（native Rust）已经覆盖 bcrypt / argon2id / scrypt，page 通过 `import { password } from "tsp:server"` 拿到的 `__tspServer.password === Bun.password`，零 byte 嵌入，零 per-request parse 开销
 namespace。**page 自己管 lifecycle**——每请求 new connection、用完 close。
 
 v1 那种 `registerDep("createMySQL", builder)` 的写法**不适用 v2**：
@@ -1348,7 +1349,7 @@ session         # session backend（memory / redis 句柄）
 runtime         # runtime.version / env / development 元信息
 ```
 
-**db / redis / bcrypt / zod / etc. 不走 native service**——它们已经在 page 侧走
+**db / redis / zod / etc. 不走 native service**——它们已经在 page 侧走
 namespace library 路径（§17.3）。v1 列的"DB drivers / crypto"在 v2 重新归类：
 纯 JS 实现能 cover 的全部走 library；必须 native 的等真有需要时再说。
 
