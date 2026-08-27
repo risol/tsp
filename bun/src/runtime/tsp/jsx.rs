@@ -445,7 +445,7 @@ fn rewrite_tsp_server_imports(source: &str) -> Result<String, JsxError> {
                             | "customRandom"
                             | "random"
                             | "zod"
-                            | "bcrypt"
+                            | "password"
                             | "sql"
                     )
                 };
@@ -550,31 +550,6 @@ const NANOID_RAW_SOURCE: &str =
 /// the same commit so the next person can re-derive the bundle
 /// from the locked source.
 const ZOD_RAW_SOURCE: &str = include_str!("vendor/zod-3.25.76.cjs");
-
-/// Pre-bundled bcryptjs 3.0.3 (CJS, single file) compiled by
-/// `bun build node_modules/bcryptjs/index.js --format=cjs --bundle`
-/// at `bun/src/runtime/tsp/vendor/bcryptjs-3.0.3.cjs`. The path is
-/// relative to this file (`bun/src/runtime/tsp/jsx.rs`): `vendor/`
-/// lives next to the module that embeds it. The bundle keeps the
-/// whole library self-contained (no `require` calls back into
-/// `node_modules/bcryptjs/...` at runtime), so the wrap preamble
-/// can run from a temp file with no module resolver. If the
-/// bundle is regenerated (e.g. to upgrade bcryptjs), commit the
-/// new file in place -- the `include_str!` hash will refresh the
-/// next `cargo build`.
-///
-/// Regeneration command (run from workspace root):
-///
-/// ```text
-/// bun build node_modules/bcryptjs/index.js \
-///     --format=cjs --bundle \
-///     --outfile bun/src/runtime/tsp/vendor/bcryptjs-3.0.3.cjs
-/// ```
-///
-/// Re-pin the version in `bun/package.json#bcryptjs` and
-/// `bun.lock` in the same commit so the next person can re-derive
-/// the bundle from the locked source.
-const BCRYPT_RAW_SOURCE: &str = include_str!("vendor/bcryptjs-3.0.3.cjs");
 
 // Slice 17d: the `mysql` namespace in `__tspServer` is **not** a
 // pre-bundled npm library. Bun 1.3+ ships a unified `bun:sql`
@@ -699,40 +674,46 @@ fn zod_prelude() -> String {
     )
 }
 
-/// Build the prelude that inlines bcryptjs 3.0.3 (pre-bundled
-/// CJS) into the wrap. The page reaches the bcrypt API via
-/// `import { bcrypt } from "tsp:server"`; the rewriter emits
-/// `const { bcrypt } = __tspServer;` and the page uses it as
-/// `bcrypt.hashSync(pw, salt)` / `bcrypt.compareSync(pw, hash)`.
+/// Build the prelude that surfaces bun's native `Bun.password`
+/// to the page as `__tspServer.password`. The page reaches the
+/// password API via
+/// `import { password } from "tsp:server"`; the rewriter emits
+/// `const { password } = __tspServer;` and the page uses it as
+/// `password.hashSync("hello", { algorithm: "bcrypt", cost: 4 })`
+/// or `password.verifySync("hello", hash)` or
+/// `password.hashSync("hello", { algorithm: "argon2id" })`.
 ///
-/// The bundle is plain CJS that ends with
-/// `module.exports = { hashSync, compareSync, genSalt, ... }`.
-/// To keep every top-level `var` (`__create`, `__defProp`,
-/// `__getOwnPropNames`, etc.) inside the wrap's local scope --
-/// and out of the page module -- the body is wrapped in an
-/// immediately-invoked function that provides fresh `module`
-/// and `exports` locals and returns `module.exports` (the bcrypt
-/// namespace object). The IIFE's return value is bound to a
-/// single const so only one identifier (`__tspBcryptNs__`)
-/// escapes into the page module scope, and the `__tspServer`
-/// freeze then re-exposes it under its public `bcrypt` name.
+/// The page-side API is **not** wrapped to look like v1's
+/// `bcrypt.hashSync(pw, salt)` shape; the previous wrap of
+/// bcryptjs (slice 17c first attempt) was abandoned in favour
+/// of the direct `Bun.password` surface once we confirmed the
+/// builtin supports bcrypt / argon2id / scrypt with native
+/// performance. Pages write the bun-native API directly; the
+/// only added value of the namespace is satisfying plan §16.4
+/// (no `globalThis.Bun` leakage) and giving the rewriter a
+/// single point to gate which builtin surfaces the page can
+/// reach (`password` is whitelisted; `Bun` itself is not).
 ///
-/// This deliberately does NOT publish the namespace on
-/// `globalThis` (plan §16.4: framework API must be explicitly
-/// imported or accessed via Context, not leaked globally).
-fn bcrypt_prelude() -> String {
-    format!(
-        "// === Inlined bcryptjs runtime ({} bytes of bundled CJS; regenerate via `bun build node_modules/bcryptjs/index.js --format=cjs --bundle --outfile bun/src/runtime/tsp/vendor/bcryptjs-3.0.3.cjs`) ===\n\
-         const __tspBcryptNs__ = (function() {{\n\
-         \x20 var module = {{ exports: {{}} }};\n\
-         \x20 var exports = module.exports;\n\
-         \x20 {}\n\
-         \x20 return module.exports;\n\
-         }})();\n\
-         // === End bcryptjs runtime ===\n",
-        BCRYPT_RAW_SOURCE.len(),
-        BCRYPT_RAW_SOURCE
-    )
+/// Cost notes: `Bun.password` is a native Rust implementation
+/// (no JS-side parse per request, no per-call allocations from
+/// a pre-bundled npm library). The page handler's first call
+/// triggers algorithm-key + salt generation inside bun; once
+/// warm the per-hash latency is well under 1 ms for bcrypt at
+/// cost=4. Production deployments should prefer `argon2id`
+/// (the bun default) over `bcrypt` per OWASP 2024+ guidance;
+/// bcrypt remains here for legacy hash format interop
+/// (verifying existing user passwords stored as `$2b$...`).
+fn password_prelude() -> String {
+    // Forward Bun.password through the frozen `__tspServer`
+    // object. No `require`, no `include_str!` -- bun's
+    // `Bun.password` is already in the host binary, and the
+    // synthetic `bun:main` evaluation context exposes it via
+    // the global `Bun` object. The rewriter hands the page
+    // `__tspServer.password` which IS the same `Bun.password`
+    // instance, so any future `Bun.password.*` API surface
+    // (e.g. `Bun.password.options`) is automatically available
+    // to the page without a v2 release.
+    "const __tspPasswordNs__ = Bun.password;\n".to_string()
 }
 
 /// `ctx_json` is the JSON-serialised `Context` (spec
@@ -746,7 +727,7 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
             + 1024
             + nanoid_prelude().len()
             + zod_prelude().len()
-            + bcrypt_prelude().len(),
+            + password_prelude().len(),
     );
     // Compile nanoid 5.1.6 into the wrap preamble so pages can call
     // `nanoid()` / `customAlphabet()` / `random()` / `customRandom()`
@@ -759,12 +740,17 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
     // entry has no module resolver for arbitrary npm packages, same
     // constraint as nanoid). See `zod_prelude` for the build pipeline.
     out.push_str(&zod_prelude());
-    // Slice 17c: embed bcryptjs 3.0.3 as `tsp:server.bcrypt` so pages
-    // can `hashSync()` / `compareSync()` / `genSaltSync()` without an
-    // import step. Same constraint as nanoid + zod: the synthetic
-    // entry has no module resolver for arbitrary npm packages. See
-    // `bcrypt_prelude` for the build pipeline.
-    out.push_str(&bcrypt_prelude());
+    // Slice 17c (revised): surface bun's native `Bun.password` as
+    // `tsp:server.password` so pages can call
+    // `password.hashSync("...", { algorithm: "bcrypt", cost: 4 })`
+    // or `password.verifySync("...", hash)`. No `include_str!` or
+    // pre-bundle: bun's builtin is already in the host binary, and
+    // the page reaches it through the global `Bun` object. The
+    // first attempt (bcryptjs embed, slice 17c) was abandoned when
+    // we confirmed `Bun.password` covers bcrypt / argon2id / scrypt
+    // with native performance and zero per-request parse cost. See
+    // `password_prelude` for the binding contract.
+    out.push_str(&password_prelude());
     // Slice 17d: surface bun's native SQL client (`Bun.SQL` /
     // `require("bun").SQL`) as `tsp:server.sql` so pages can do
     // `await sql\`mysql://...\`` for MySQL/PG/SQLite access. No
@@ -823,7 +809,7 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
          class __tspHttpError__ extends Error {\n\
          \x20 constructor(__status__, __message__, __init__) { super(__message__); this.name = 'HttpError'; this.status = __status__; this.headers = new Headers((__init__ || {}).headers || {}); }\n\
          }\n\
-         const __tspServer = Object.freeze({json: __tspJson__, redirect: __tspRedirect__, text: __tspText__, html: __tspHtml__, notFound: __tspNotFound__, HttpError: __tspHttpError__, fragment: __tspFragment__, raw: __tspRaw__, nanoid: __tspNanoid, customAlphabet: __tspNanoidCustomAlphabet, customRandom: __tspNanoidCustomRandom, random: __tspNanoidRandom, zod: __tspZodNs__, bcrypt: __tspBcryptNs__, sql: __tspSqlNs__});\n"
+         const __tspServer = Object.freeze({json: __tspJson__, redirect: __tspRedirect__, text: __tspText__, html: __tspHtml__, notFound: __tspNotFound__, HttpError: __tspHttpError__, fragment: __tspFragment__, raw: __tspRaw__, nanoid: __tspNanoid, customAlphabet: __tspNanoidCustomAlphabet, customRandom: __tspNanoidCustomRandom, random: __tspNanoidRandom, zod: __tspZodNs__, password: __tspPasswordNs__, sql: __tspSqlNs__});\n"
     );
     out.push_str(
         "function __tspEscape__(__value__) {\n\
@@ -2122,66 +2108,56 @@ export async function GET(ctx) {
     }
 
     #[test]
-    fn wrap_for_bun_cli_inlines_bcrypt_runtime_for_pages() {
-        // Same shape as the zod unit test: the bcryptjs
-        // bundle (plain CJS) is wrapped in an IIFE that returns
-        // `module.exports` (the bcrypt namespace), bound to
-        // `__tspBcryptNs__`, and re-exposed on the frozen
-        // `__tspServer` object under its public name `bcrypt`.
-        let body = "function GET() { return bcrypt.genSaltSync(4); }";
+    fn wrap_for_bun_cli_surfaces_bun_password_for_pages() {
+        // Slice 17c (revised): the `password` namespace in
+        // `__tspServer` is `Bun.password` itself, surfaced
+        // through the wrap preamble with a single
+        // `const __tspPasswordNs__ = Bun.password;` binding
+        // (no `include_str!`, no IIFE -- the page reuses bun's
+        // native Rust-backed password API directly). This test
+        // pins the wrap-string shape so a refactor that
+        // accidentally drops the `Bun.password` bridge (or
+        // renames `__tspServer.password`) is caught at unit-test
+        // time, without spinning the real binary.
+        let body = "function GET() { return password.hashSync('hello', { algorithm: 'bcrypt', cost: 4 }); }";
         let wrapped = wrap_for_bun_cli(body, "GET", Some("{}"));
         assert!(
-            wrapped.contains("const __tspBcryptNs__ = (function()"),
-            "bcrypt prelude must bind a single `__tspBcryptNs__` const; got prefix: {}",
-            &wrapped[..wrapped.len().min(800)]
+            wrapped.contains("const __tspPasswordNs__ = Bun.password;"),
+            "wrap must bridge bun's native password API to `__tspPasswordNs__` via `Bun.password`; got prefix: {}",
+            &wrapped[..wrapped.len().min(1200)]
         );
         assert!(
-            wrapped.contains("return module.exports;"),
-            "bcrypt prelude IIFE must return `module.exports`"
+            wrapped.contains("password: __tspPasswordNs__"),
+            "wrap must expose password on __tspServer; got prefix: {}",
+            &wrapped[..wrapped.len().min(1500)]
         );
-        assert!(
-            wrapped.contains("bcrypt: __tspBcryptNs__"),
-            "wrap must expose bcrypt on __tspServer; got prefix: {}",
-            &wrapped[..wrapped.len().min(1400)]
-        );
-        // The bundle ends with `module.exports = { compare, ...,
-        // decodeBase64 }` -- pin that the re-export shape is
-        // present so a refactor that breaks the namespace object
-        // is caught at unit-test time.
-        assert!(
-            wrapped.contains("decodeBase64"),
-            "bcrypt bundle's `decodeBase64` named export must survive the inlining; got prefix: {}",
-            &wrapped[..wrapped.len().min(800)]
-        );
-        // Plan §16.4: the framework API must not be published on
-        // globalThis. The nanoid block already enforces this for
-        // the id namespace; bcrypt gets the same protection.
+        // Plan §16.4: framework API must not be on globalThis.
         for forbidden in [
+            "globalThis.password =",
             "globalThis.bcrypt =",
-            "globalThis.bcryptjs =",
         ] {
             assert!(
                 !wrapped.contains(forbidden),
-                "bcrypt must not be published on globalThis (plan §16.4); found `{forbidden}`"
+                "password must not be published on globalThis (plan §16.4); found `{forbidden}`"
             );
         }
     }
 
     #[test]
-    fn rewrite_tsp_server_imports_accepts_bcrypt_named_export() {
-        // Plan §16.1/§16.4: bcrypt is reached via
-        //     import { bcrypt } from "tsp:server";
+    fn rewrite_tsp_server_imports_accepts_password_named_export() {
+        // Plan §16.1/§16.4: password is reached via
+        //     import { password } from "tsp:server";
         // which the rewriter collapses into
-        //     const { bcrypt } = __tspServer;
-        let src = r#"import { bcrypt } from "tsp:server";
+        //     const { password } = __tspServer;
+        let src = r#"import { password } from "tsp:server";
 export function GET() {
-  return bcrypt.hashSync("hello", bcrypt.genSaltSync(4));
+  return password.hashSync("hello", { algorithm: "bcrypt", cost: 4 });
 }
 "#;
         let rewritten = rewrite_tsp_server_imports(src).expect("rewrite should succeed");
         assert!(
-            rewritten.contains("const { bcrypt } = __tspServer;"),
-            "rewriter must collapse the bcrypt import into a single destructure; got: {rewritten}"
+            rewritten.contains("const { password } = __tspServer;"),
+            "rewriter must collapse the password import into a single destructure; got: {rewritten}"
         );
         assert!(
             !rewritten.contains("from \"tsp:server\""),
@@ -2190,31 +2166,33 @@ export function GET() {
     }
 
     #[test]
-    fn bcrypt_pipeline_generates_runable_module_under_real_bun() {
-        // Mirrors the nanoid / zod pipeline tests: take a
+    fn password_pipeline_generates_runable_module_under_real_bun() {
+        // Mirrors the nanoid / zod / sql pipeline tests: take a
         // production-shaped `.tsp` file, run the full pipeline
         // (tsx_to_js -> wrap_for_bun_cli -> temp file -> spawn
         // `bun`), and assert the envelope. Catches JS-level
-        // errors (IIFE return shadowed, double `var` collision,
-        // or the `bcrypt` destructure mis-binding) without
-        // needing a 9-minute binary relink.
-        let source = r#"// Slice 17c regression test fixture.
-import { bcrypt } from "tsp:server";
+        // errors (e.g. `Bun.password` failing in the synthetic
+        // `bun:main` context, or the `__tspServer.password`
+        // binding mis-wiring) without needing a 9-minute binary
+        // relink.
+        //
+        // We use cost=4 to keep the test under a second. The
+        // page mirrors `routes/password.tsp` in production.
+        let source = r#"// Slice 17c (revised) regression test fixture.
+import { password } from "tsp:server";
 
 export function GET() {
-  // round=4 is the bcrypt minimum; keeps the test under a second
-  // on the cheapest x86_64 box while still proving the actual
-  // bcrypt algorithm runs (not a stub or shortcut).
-  const salt = bcrypt.genSaltSync(4);
-  const hash = bcrypt.hashSync("hello", salt);
-  const matches = bcrypt.compareSync("hello", hash);
-  const rejects = bcrypt.compareSync("world", hash);
+  const bcrypt = password.hashSync("hello", { algorithm: "bcrypt", cost: 4 });
+  const argon = password.hashSync("hello", { algorithm: "argon2id" });
+  const bcryptOk = password.verifySync("hello", bcrypt);
+  const bcryptNo = password.verifySync("world", bcrypt);
   return new Response(
     JSON.stringify({
-      ok: matches === true && rejects === false,
-      hash,
-      salt,
-      rounds: bcrypt.getRounds(hash),
+      ok: bcryptOk === true && bcryptNo === false,
+      isBcrypt: bcrypt.startsWith("$2b$"),
+      isArgon: argon.startsWith("$argon2id$"),
+      bcryptSample: bcrypt.slice(0, 7),
+      argonSample: argon.slice(0, 10),
     }),
     {
       status: 200,
@@ -2229,11 +2207,11 @@ export function GET() {
             "import must be rewritten away; got: {transformed}"
         );
         assert!(
-            transformed.contains("const { bcrypt } = __tspServer;"),
-            "rewriter must emit `const {{ bcrypt }} = __tspServer;`; got: {transformed}"
+            transformed.contains("const { password } = __tspServer;"),
+            "rewriter must emit `const {{ password }} = __tspServer;`; got: {transformed}"
         );
 
-        let ctx_json = r#"{"method":"GET","path":"/bcrypt","query":"","headers":{"host":"127.0.0.1:1"},"body_b64":""}"#;
+        let ctx_json = r#"{"method":"GET","path":"/password","query":"","headers":{"host":"127.0.0.1:1"},"body_b64":""}"#;
         let wrapped = wrap_for_bun_cli(&transformed, "GET", Some(ctx_json));
 
         let bun_candidates: &[&str] = if cfg!(windows) {
@@ -2257,7 +2235,7 @@ export function GET() {
         };
 
         let temp_path = std::env::temp_dir().join(format!(
-            "tsp-pipeline-bcrypt-{}.tsx",
+            "tsp-pipeline-password-{}.tsx",
             std::process::id()
         ));
         std::fs::write(&temp_path, &wrapped).expect("wrap must be writable");
@@ -2278,21 +2256,25 @@ export function GET() {
             stdout.contains("__TSP_OUT_V1__"),
             "bun must print the envelope marker; stdout: {stdout}"
         );
-        // The page produced `{ ok: true, hash, salt, rounds: 4 }`.
-        // The body is JSON-escaped inside the envelope, so look
-        // for the escaped fragments:
-        //   * `\"ok\":true` -- compareSync("hello", hash) true,
-        //                    compareSync("world", hash) false.
-        //   * `\"rounds\":4` -- the salt's round count survived.
-        //   * `\"x-demo\":\"slice17c\"` -- the page's custom header
-        //                                 was carried through.
+        // The page produced
+        // `{ ok: true, isBcrypt: true, isArgon: true,
+        //    bcryptSample: "$2b$04$", argonSample: "$argon2id" }`.
+        // Body is JSON-escaped inside the envelope, so look for
+        // the escaped fragments. The presence of the
+        // algorithm-specific prefixes proves that the real
+        // bcrypt + argon2id implementations ran (not a stub).
         assert!(
-            stdout.contains(r#"\"ok\":true"#) && stdout.contains(r#"\"rounds\":4"#),
-            "envelope must contain the bcrypt result fragments; stdout: {stdout}"
-        );
-        assert!(
-            stdout.contains("slice17c"),
-            "envelope must carry the page's custom header marker"
+            stdout.contains(r#"\"ok\":true"#)
+                && stdout.contains(r#"\"isBcrypt\":true"#)
+                && stdout.contains(r#"\"isArgon\":true"#)
+                && stdout.contains(r#"\"bcryptSample\":\"$2b$04$\""#)
+                && stdout.contains(r#"\"argonSample\":\"$argon2id$\""#),
+            "envelope must contain the password result fragments\n  ok={}\n  isBcrypt={}\n  isArgon={}\n  bcryptSample={}\n  argonSample={}\n  stdout: {stdout}",
+            stdout.contains(r#"\"ok\":true"#),
+            stdout.contains(r#"\"isBcrypt\":true"#),
+            stdout.contains(r#"\"isArgon\":true"#),
+            stdout.contains(r#"\"bcryptSample\":\"$2b$04$\""#),
+            stdout.contains(r#"\"argonSample\":\"$argon2id\""#),
         );
         assert!(
             !stdout.contains("ReferenceError") && !stdout.contains("SyntaxError"),
