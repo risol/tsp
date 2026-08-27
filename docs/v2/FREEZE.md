@@ -212,13 +212,48 @@ Evidence: `tsp-v2-specification.md` §14, `tsp-v2-plan.md` §14.
 
 ### 8. `tsp:*` builtin module naming
 
-The host exposes three builtin modules. No more, no less for v2.0:
+The host exposes three builtin module **names** (`tsp:server`,
+`tsp:html`, `tsp:runtime`). No more, no less. Subsequent slices may
+add named exports to an existing module; adding a fourth module name
+would be a contract break (see Amendment log at the end of this
+document).
+
+The current **importable** surface (the names a page may
+`import { ... } from "tsp:server"`):
 
 ```text
-tsp:server    -> Context, PageConfig, fragment, json, redirect, text,
-                html, notFound, HttpError
-tsp:html      -> HtmlNode, TrustedHtml, raw, escape
-tsp:runtime   -> runtime.version, runtime.env, runtime.development
+tsp:server (Amendment 1 surface, 2026-08-27)
+  Response builders (v2.0)
+    fragment, json, redirect, text, html, notFound, HttpError
+  HTML escape (v2.0, also re-exposed under tsp:html)
+    raw
+  ID generation (Amendment 1)
+    nanoid, customAlphabet, customRandom, random
+  Validation library (Amendment 1)
+    zod                              (zod 4.4.3, embedded)
+  Password hashing (Amendment 1)
+    password                         (Bun.password native — bcrypt /
+                                      argon2id / scrypt)
+  Database factory (Amendment 1)
+    sql                              (Bun.SQL factory; per-worker pool
+                                      via bun:sql)
+  Bun builtin helper namespace (Amendment 1)
+    util                             (17 surfaces: randomUUIDv7, hash,
+                                      CryptoHasher, Glob, TOML, YAML,
+                                      markdown, escapeHTML, gzipSync,
+                                      gunzipSync, file, write, which,
+                                      peek, deepEquals, deepMatch,
+                                      nanoseconds, env)
+
+tsp:html (v2.0 + Amendment 1)
+  raw                                (HTML escape; same `__tspRaw__`
+                                      as on tsp:server, so a page that
+                                      already imports `raw` from one
+                                      module does not need to re-import
+                                      from the other)
+
+tsp:runtime (v2.0)
+  runtime.version, runtime.env, runtime.development
 ```
 
 What this freezes for application code:
@@ -227,8 +262,24 @@ What this freezes for application code:
   `globalThis.__tspBuiltins`. (plan §16.4) Explicit imports only.
 - The host does NOT expose internal APIs through the runtime module
   (no service registry handles, no JSC value inspectors).
+- The `Context` and `PageConfig` types referenced in earlier drafts of
+  this item are **handler-signature types**, not importable names.
+  The handler signature `export function GET(ctx: Context, cfg:
+  PageConfig)` is the only way to reach them; there is no
+  `import { Context, PageConfig } from "tsp:server"`.
+- JSX runtime pieces (`HtmlNode`, `TrustedHtml`, `escape`) are
+  applied by the transpiler at JSX-expansion time; they are not
+  importable names. Pages do not need to import anything to use JSX.
+- The bun builtin helpers in `util` are surfaced read-only and as
+  individual properties — the wrapper deliberately omits
+  `Bun.env.toJSON()` to prevent pages from dumping all env vars
+  (would leak DB_PW / API_KEY per plan §17.1).
+- High-risk bun builtins are intentionally NOT exposed: `Bun.serve`,
+  `Bun.spawn`, `Bun.FFI`, `Bun.S3Client`, `Bun.connect`, `Bun.mmap`,
+  `Bun.Cookie`, `Bun.Transpiler`. Pages needing them belong in the
+  host layer, not in the import surface.
 
-Evidence: `tsp-v2-specification.md` §16, `tsp-v2-plan.md` §16.
+Evidence: `tsp-v2-specification.md` §16, `tsp-v2-plan.md` §16, §17.3.
 
 ### 9. JSX child / attribute escaping semantics
 
@@ -458,3 +509,75 @@ The 12 frozen items are now the surface application code is
 allowed to rely on. Subsequent slices (in-process JSC bridge,
 watcher + atomic reload, full Context bridge, ...) build on
 these, they do not renegotiate them.
+
+---
+
+## Amendment log
+
+Additive changes to the contract that do **not** contradict a frozen
+item. Each entry records what was added, the slice that added it,
+and the rationale. The original v2.0 sign-off above is not
+overturned; the amendments are strictly add-on.
+
+### Amendment 1 (2026-08-27) — `tsp:server` namespace expansion (slices 17 + 18)
+
+**What changed.** Item 8's importable surface grew from 9 names to 17
+(plus 1 hidden wrapper detail: `Bun.env` re-wrapped to omit
+`toJSON()`). The three module names are unchanged.
+
+**Names added.**
+- `nanoid`, `customAlphabet`, `customRandom`, `random`
+  (slice 17e / BUG-0001 follow-up, commit `e821af4bca`)
+- `zod` (slice 17b, commit `336d3d522f`; upgraded to zod 4.4.3 in
+  commit `d62ac69c94`)
+- `password` (slice 17c, originally bcryptjs in `336d3d522f`, then
+  migrated to native `Bun.password` in `c0b802c340`)
+- `sql` (slice 17d, commit `336d3d522f`; `Bun.SQL` factory)
+- `util` (slice 18, commit `756108d694`; namespace of 17 bun
+  builtins, see the item 8 surface listing)
+
+**Why this does not contradict a frozen item.** Item 8 froze the
+*module names* (three of them, no more) and the *import-only*
+discipline (no `globalThis`, no leaked service registry handles).
+Adding named exports to an existing module preserves both. The
+discipline that "imports are the only framework surface" is
+strengthened, not weakened: a page now has fewer reasons to reach
+for a global.
+
+**Naming discipline enforced.** Every new export follows the
+PHP-FPM-style per-request fresh state rule (plan §17.1): the
+imported value is a stateless library or a factory (`sql`,
+`password`), never a singleton holding cross-request mutable state.
+Pages that need cross-request state must go through `ctx.session`
+(plan §18) or `ctx.services` (plan §17.5), not through `tsp:server`.
+
+**High-risk bun builtins explicitly excluded.** `Bun.serve`,
+`Bun.spawn`, `Bun.FFI`, `Bun.S3Client`, `Bun.connect`, `Bun.mmap`,
+`Bun.Cookie`, `Bun.Transpiler` are deliberately **not** exposed.
+These would either give a page a sub-server on a different port,
+a subprocess channel (RCE surface), a raw native call interface,
+cloud-credential access, or a host-pipeline escape — none of which
+fit the per-request, host-mediated model. If a future use case
+needs one, it belongs in the host layer (`tsp.config.ts` services,
+plan §17.5), not in the page import surface.
+
+**Correction to the original item 8 listing.** The freeze's
+v2.0 line listed `Context` and `PageConfig` as `tsp:server` exports.
+The actual runtime has never exposed them as importable names — they
+are handler-signature types (the `ctx: Context, cfg: PageConfig`
+parameters of a `GET` / `POST` / `PUT` / `DELETE` export). The
+amended item 8 above clarifies that the importable surface is
+*values*, not types. JSX runtime pieces (`HtmlNode`, `TrustedHtml`,
+`escape`) similarly are not importable; the transpiler wires them
+in at JSX-expansion time. No code that shipped on or before the
+v2.0 sign-off imported these names, so this is a documentation
+correction rather than a behaviour change.
+
+**Verification.** 228 tests green as of this amendment
+(202 lib + 4 worker_integration + 15 process_model + 7 start_order
+e2e, including `util_namespace_surfaces_bun_builtins_for_pages` for
+the new `util` namespace, `zod_runtime_compiled_into_wrap_serves_validated_schemas`
+for `zod`, `password_runtime_through_bun_password_serves_hashed_passwords`
+for `password`, `sql_runtime_uses_bun_native_pool_for_page_local_datasource`
+for `sql`, and `nanoid_runtime_compiled_into_wrap_serves_distinct_ids`
+for the nanoid family).
