@@ -681,6 +681,46 @@ production `routes/upload.tsp` page wraps the call in
 `formData-error: <message>` body so the e2e can assert on
 the failure shape rather than timing out on a hang).
 
+**Config-driven custom services (slice 22 prototype, plan
+§17.5 / §21).** The host reads a JSON file pointed at by
+`TSP_CONFIG` (default: `tsp.config.json`) at boot. Each
+`services.<name>` entry the file declares is registered
+as a host-owned singleton on the `ServiceRegistry`; pages
+read `ctx.services.<name>` exactly the same way they
+read the built-in `logger` / `session` / `time`. Only one
+service kind is supported in the prototype:
+
+```text
+{
+  "services": {
+    "hits":  { "kind": "counter", "initial": 0 },
+    "views": { "kind": "counter", "initial": 100 }
+  }
+}
+```
+
+`CounterService` holds a per-name `AtomicU64` that
+post-increments on every `describe_json()` call (i.e. on
+every request that snapshots the registry). The wire
+shape the page reads is
+`{ "kind": "counter", "name": "<n>", "value": <u64> }`
+and `value` is frozen on the page side. A typo'd `kind`
+is a hard error at boot. A missing file is fine (the
+host logs `no config at <path>` and registers only the
+three built-ins). The e2e test
+`config_driven_counter_service_increments_across_requests`
+in `tests/start_order.rs` writes a temp config declaring
+`hits` (initial 0) and `views` (initial 100), spawns the
+master with `TSP_CONFIG=<temp>`, and asserts the
+counters increment by exactly 1 per request (1→2→3 for
+hits, 101→102→103 for views). A second round in the same
+test spawns a fresh master without `TSP_CONFIG` and
+asserts the custom-service names report `null` (the page
+falls back to the built-ins only). The host's boot log
+also uses `ServiceRegistry::iter_names` (NOT
+`snapshot`) so the summary line does not bump a
+counter just by printing it.
+
 **High-risk bun builtins explicitly excluded.** `Bun.serve`,
 `Bun.spawn`, `Bun.FFI`, `Bun.S3Client`, `Bun.connect`, `Bun.mmap`,
 `Bun.Cookie`, `Bun.Transpiler` are deliberately **not** exposed.
@@ -703,8 +743,8 @@ in at JSX-expansion time. No code that shipped on or before the
 v2.0 sign-off imported these names, so this is a documentation
 correction rather than a behaviour change.
 
-**Verification.** 232 tests green as of this amendment
-(202 lib + 4 worker_integration + 15 process_model + 11 start_order
+**Verification.** 233 tests green as of this amendment
+(202 lib + 4 worker_integration + 15 process_model + 12 start_order
 e2e, including `util_namespace_surfaces_bun_builtins_for_pages` for
 the new `util` namespace, `zod_runtime_compiled_into_wrap_serves_validated_schemas`
 for `zod`, `password_runtime_through_bun_password_serves_hashed_passwords`
@@ -716,6 +756,8 @@ for the nanoid family, and — added with this amendment —
 `session_runtime_mints_regenerates_and_destroys_session_id` for
 `ctx.session` (slice 16k/l),
 `dynamic_segments_and_catch_all_route_to_pages_with_params` for
-dynamic route segments + catch-all (slice 16e), and
+dynamic route segments + catch-all (slice 16e),
 `multipart_form_data_round_trips_through_real_binary` for
-`ctx.request.formData()` (slice 16g)).
+`ctx.request.formData()` (slice 16g), and
+`config_driven_counter_service_increments_across_requests` for
+config-driven custom services (slice 22 prototype)).

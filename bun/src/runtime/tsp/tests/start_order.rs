@@ -2235,6 +2235,135 @@ fn multipart_form_data_round_trips_through_real_binary() {
 }
 
 // ---------------------------------------------------------------------------
+// Config-driven custom service (slice 22 prototype, plan §17.5 / §21)
+//
+// The host reads a JSON config file pointed at by `TSP_CONFIG`
+// (default: `tsp.config.json`) and registers each declared
+// `services.<name>` entry as a host-singleton. The only kind
+// the slice 22 prototype supports is `counter` (a per-name
+// `AtomicU64` that post-increments on every snapshot); a
+// typo'd kind is a hard error at boot.
+//
+// The integration test exercises the full lifecycle against
+// the real binary:
+//
+//   1. Write a temp `tsp.config.json` declaring two counters
+//      (`hits` initial=0, `views` initial=100).
+//   2. Spawn the master with `TSP_CONFIG=<temp>`.
+//   3. GET /counter 3 times. The host snapshot for the page
+//      carries both counters; the page reads their
+//      `value` property.
+//   4. Assert:
+//        - hit 1: hits=1,  views=101  (both post-increment)
+//        - hit 2: hits=2,  views=102
+//        - hit 3: hits=3,  views=103
+//      The two counters are independent (different
+//      AtomicU64 cells), so the value the page reads
+//      proves the config-driven registration worked and
+//      that cross-request state survives the worker-pool
+//      hop.
+//
+// Then the test re-uses the same binary to assert the
+// "no config" path: a fresh process without TSP_CONFIG
+// still boots cleanly, but the custom-service names are
+// NOT in the registry (the page reports `null`).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn config_driven_counter_service_increments_across_requests() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-svc-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+    std::fs::write(
+        routes_dir.join("counter.tsp"),
+        include_str!("../../../../../routes/counter.tsp"),
+    )
+    .expect("counter.tsp");
+
+    // Slice 22 config: two independent counters with
+    // different initial values, so the test can assert
+    // both increment by exactly 1 per request and prove
+    // they are not aliased to the same AtomicU64.
+    let config_path = temp_root.join("tsp.config.json");
+    std::fs::write(
+        &config_path,
+        "{\n  \"services\": {\n    \"hits\":  { \"kind\": \"counter\", \"initial\": 0 },\n    \"views\": { \"kind\": \"counter\", \"initial\": 100 }\n  }\n}\n",
+    )
+    .expect("config");
+
+    // --- Round 1: with config; both counters live and
+    // increment per request. ---
+    let port: u16 = 34_500 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_CONFIG", &config_path)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    for (i, expected_hits, expected_views) in
+        [(1u64, 1u64, 101u64), (2u64, 2u64, 102u64), (3u64, 3u64, 103u64)]
+    {
+        let (status, body) = http_get_status(port, "/counter", Duration::from_secs(10));
+        assert_eq!(status, 200, "GET /counter must 200 (round {i}); got {status} body={body:?}");
+        assert!(
+            body.contains(&format!("\"hits\":{expected_hits}"))
+                && body.contains(&format!("\"views\":{expected_views}")),
+            "round {i}: body must show hits={expected_hits} views={expected_views}; got {body:?}"
+        );
+    }
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+
+    // --- Round 2: no config; the custom-service names are
+    // absent. The page reports `null` for both. ---
+    let port2: u16 = 34_600 + (std::process::id() as u16 % 500);
+    let mut child2 = std::process::Command::new(master)
+        .env("TSP_PORT", port2.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        // Intentionally no TSP_CONFIG; default
+        // `tsp.config.json` does not exist in cwd.
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn (no config)");
+
+    wait_for_marker(&mut child2, "listening on", Duration::from_secs(10));
+
+    let (status_nc, body_nc) = http_get_status(port2, "/counter", Duration::from_secs(10));
+    assert_eq!(status_nc, 200, "no-config GET /counter must 200; got {status_nc}");
+    assert!(
+        body_nc.contains("\"hits\":null") && body_nc.contains("\"views\":null"),
+        "no-config body must show null counters; got {body_nc:?}"
+    );
+
+    let _ = terminate(child2.id());
+    let _ = child2.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+// ---------------------------------------------------------------------------
 // bun:sql runtime integration test (slice 17d)
 //
 // The TSP v2 wrap preamble surfaces bun's native SQL client

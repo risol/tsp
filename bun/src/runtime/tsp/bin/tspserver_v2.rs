@@ -32,6 +32,7 @@ use bun_runtime_tsp::host;
 use bun_runtime_tsp::jsc_bridge::BunRuntime;
 use bun_runtime_tsp::module_graph::ModuleGraph;
 use bun_runtime_tsp::router::RouteTable;
+use bun_runtime_tsp::services::load_counter_services_from_config;
 use bun_runtime_tsp::services::SESSION_STORE_CAP_DEFAULT;
 use bun_runtime_tsp::services::ServiceRegistry;
 use bun_runtime_tsp::session_backend::{MemoryBackend, RedisBackend, SessionBackend};
@@ -193,14 +194,50 @@ fn serve_main() -> ExitCode {
             Arc::new(MemoryBackend::new(SESSION_STORE_CAP_DEFAULT))
         }
     };
-    let services: &'static ServiceRegistry =
-        Box::leak(Box::new(ServiceRegistry::with_backends(session_backend)));
+    // Slice 22 prototype: load config-driven custom services
+    // (plan §17.5 / §21). The host reads a JSON file pointed
+    // at by `TSP_CONFIG` (default: `tsp.config.json`) and
+    // registers any `services.<name>` entries it declares.
+    // Currently only `kind: "counter"` is supported; a typo'd
+    // kind is a hard error so a misconfigured deploy fails
+    // fast at boot rather than at the first request.
+    //
+    // We build the registry in a local first so the
+    // `register` calls go through the typed API (no `unsafe`).
+    // The final registry is `Box::leak`ed into a `&'static`
+    // so every connection thread shares the same instance;
+    // it is never owned by a page generation, so reloads do
+    // not tear services down (plan sect.61 Phase 8
+    // acceptance).
+    let mut registry_builder = ServiceRegistry::with_backends(session_backend);
+    let config_path =
+        std::env::var("TSP_CONFIG").unwrap_or_else(|_| "tsp.config.json".to_string());
+    let mut custom_labels: Vec<String> = Vec::new();
+    if std::path::Path::new(&config_path).is_file() {
+        let text = std::fs::read_to_string(&config_path)
+            .unwrap_or_else(|e| panic!("TSPv2PoC1: read {config_path}: {e}"));
+        let custom = load_counter_services_from_config(&text)
+            .unwrap_or_else(|e| panic!("TSPv2PoC1: parse {config_path}: {e}"));
+        for svc in custom {
+            custom_labels.push(svc.name().to_string());
+            registry_builder.register(svc);
+        }
+        eprintln!(
+            "TSPv2PoC1: custom services from {config_path}: {}",
+            custom_labels.join(", ")
+        );
+    } else {
+        eprintln!(
+            "TSPv2PoC1: no config at {config_path} (set TSP_CONFIG to enable \
+             custom services)"
+        );
+    }
+    let services: &'static ServiceRegistry = Box::leak(Box::new(registry_builder));
     eprintln!(
         "TSPv2PoC1: services registered: {}",
         services
-            .snapshot(&[])
-            .iter()
-            .map(|(n, _)| n.as_str())
+            .iter_names()
+            .map(|n| n.to_string())
             .collect::<Vec<_>>()
             .join(", ")
     );
@@ -250,7 +287,7 @@ fn resolve_routes_dir() -> PathBuf {
 
 fn print_help() {
     println!(
-        "TSP v2 commands:\n  tspserver_v2              run the native HTTP server\n  tspserver_v2 check       validate routes and local imports\n  tspserver_v2 routes      list filesystem routes and exports\n  tspserver_v2 graph       print the resolved module graph\n\nEnvironment:\n  TSP_ROUTES_DIR            route root (default: routes)\n  TSP_PUBLIC_DIR            public asset root (default: public)\n  TSP_PORT                  HTTP port (default: 3000)\n  TSP_WORKER_COUNT          embedded self-spawned worker processes (default: 1)\n  TSP_WORKER_MAX_IN_FLIGHT  max concurrent requests per worker (default: 2*count)\n  TSP_WORKER_MAX_REQUESTS   recycle each worker after N requests\n  TSP_WORKER_MAX_AGE_MS     recycle each worker after this many ms\n  TSP_WORKER_MAX_MEMORY_BYTES  recycle each worker after RSS reaches this\n  TSP_INVALIDATION_FILE     shared cross-worker invalidation log\n  TSP_CGROUP_ROOT           explicit Linux cgroup v2 parent directory\n  TSP_WORKER_MEMORY_MAX / TSP_WORKER_CPU_MAX / TSP_WORKER_PIDS_MAX  cgroup limits\n  TSP_APPLICATION_NAME      application name registered in the registry (default: main)"
+        "TSP v2 commands:\n  tspserver_v2              run the native HTTP server\n  tspserver_v2 check       validate routes and local imports\n  tspserver_v2 routes      list filesystem routes and exports\n  tspserver_v2 graph       print the resolved module graph\n\nEnvironment:\n  TSP_ROUTES_DIR            route root (default: routes)\n  TSP_PUBLIC_DIR            public asset root (default: public)\n  TSP_PORT                  HTTP port (default: 3000)\n  TSP_WORKER_COUNT          embedded self-spawned worker processes (default: 1)\n  TSP_WORKER_MAX_IN_FLIGHT  max concurrent requests per worker (default: 2*count)\n  TSP_WORKER_MAX_REQUESTS   recycle each worker after N requests\n  TSP_WORKER_MAX_AGE_MS     recycle each worker after this many ms\n  TSP_WORKER_MAX_MEMORY_BYTES  recycle each worker after RSS reaches this\n  TSP_INVALIDATION_FILE     shared cross-worker invalidation log\n  TSP_CGROUP_ROOT           explicit Linux cgroup v2 parent directory\n  TSP_WORKER_MEMORY_MAX / TSP_WORKER_CPU_MAX / TSP_WORKER_PIDS_MAX  cgroup limits\n  TSP_REDIS_URL             optional Redis URL for the session backend\n  TSP_CONFIG                JSON file declaring config-driven custom\n                            services (default: tsp.config.json);\n                            supports `kind: counter` with `initial`\n  TSP_APPLICATION_NAME      application name registered in the registry (default: main)"
     );
 }
 

@@ -198,6 +198,17 @@ impl ServiceRegistry {
         out
     }
 
+    /// Iterate the names of all registered runtime-scoped
+    /// services WITHOUT calling `describe_json`. Used by
+    /// the host's boot log so a service with a side-effect
+    /// `describe_json` (e.g. the config-driven
+    /// `CounterService`, which post-increments on every
+    /// snapshot) is not bumped just because the master
+    /// printed a summary line.
+    pub fn iter_names(&self) -> impl Iterator<Item = &str> + '_ {
+        self.runtime.values().map(|s| s.name())
+    }
+
     /// Flush envelope `service_logs` into the owning services.
     /// Returns how many lines were accepted. Lines for unknown
     /// services or non-log services are dropped with a host
@@ -699,6 +710,315 @@ impl Service for TimeService {
     fn as_any(&self) -> &dyn Any {
         self
     }
+}
+
+// =====================================================================
+// CounterService -- config-driven, host-singleton, cross-request
+// mutable. The host registers one per `services.<name>.kind =
+// "counter"` entry in the JSON config file pointed at by
+// `TSP_CONFIG` (default: `tsp.config.json`). The wire shape is
+// `{"kind":"counter","name":"<n>","value":<u64>}` and the
+// value increments on every `describe_json()` call (i.e. on
+// every request that snapshots the registry). The page reads
+// `ctx.services.<name>.value` as a frozen read-only property.
+//
+// This is the slice 22 prototype for "config-driven custom
+// service" -- a host-owned, per-name singleton that the page
+// observes but cannot mutate. Pages that need to mutate state
+// across requests must go through `ctx.session` (session
+// data map) or a future per-name mutation surface; the
+// counter increments server-side per snapshot.
+// =====================================================================
+
+pub struct CounterService {
+    name: String,
+    value: std::sync::atomic::AtomicU64,
+}
+
+impl CounterService {
+    pub fn new(name: impl Into<String>, initial: u64) -> Self {
+        Self {
+            name: name.into(),
+            value: std::sync::atomic::AtomicU64::new(initial),
+        }
+    }
+
+    /// Read the current counter value WITHOUT incrementing.
+    /// Tests use this to pin the post-increment value
+    /// without going through the wire.
+    pub fn peek(&self) -> u64 {
+        self.value.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+impl Service for CounterService {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn scope(&self) -> ServiceScope {
+        ServiceScope::Runtime
+    }
+
+    fn is_request_varying(&self) -> bool {
+        // Every request observes a new value (post-increment),
+        // so the generation cache must not replay a stale
+        // snapshot.
+        true
+    }
+
+    fn describe_json(&self) -> String {
+        // Post-increment: the wire value the page reads is
+        // the value AFTER this request bumped the counter.
+        // First request reads 1, second reads 2, etc.
+        let n = self
+            .value
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        format!(
+            "{{\"kind\":\"counter\",\"name\":{},\"value\":{n}}}",
+            json_string_field(&self.name),
+        )
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// Hand-rolled config loader for the host-side services
+/// registry. Reads a small JSON file with the shape
+///
+/// ```json
+/// {
+///   "services": {
+///     "hits":  { "kind": "counter", "initial": 0 },
+///     "views": { "kind": "counter", "initial": 100 }
+///   }
+/// }
+/// ```
+///
+/// and returns a list of `Arc<dyn Service>` ready to hand
+/// to `ServiceRegistry::register`. The parser is
+/// intentionally minimal (objects with string keys +
+/// string / number leaves only) because the supported
+/// service set is small. Unknown `kind` values are a
+/// hard error so a typo'd config does not silently
+/// register a phantom service.
+pub fn load_counter_services_from_config(
+    text: &str,
+) -> Result<Vec<Arc<dyn Service>>, String> {
+    let mut services: Vec<Arc<dyn Service>> = Vec::new();
+    // Locate the `"services"` object. The minimal parser
+    // is "find the next quoted key, then the next quoted
+    // value (an object)"; good enough for the v2
+    // prototype.
+    let services_start = find_top_level_object_for_key(text, "services")
+        .ok_or_else(|| "config: missing top-level `\"services\"` object".to_string())?;
+    let services_obj = &text[services_start.0..services_start.1];
+    // Skip the opening `{` of the services object so
+    // `parse_quoted_string` sees a key as the first
+    // meaningful token. The closing `}` is the
+    // `services_obj` boundary; the pair walk stops when
+    // no more keys can be found.
+    let mut cursor = if services_obj.starts_with('{') { 1 } else { 0 };
+    cursor = skip_ws(services_obj, cursor);
+    // Walk key/value pairs inside `services_obj`. Each
+    // entry must be `"<name>": { ... }`; the inner
+    // object must contain `"kind": "counter"` and an
+    // optional `"initial": <number>` (default 0).
+    loop {
+        let (key, after_key) = match parse_quoted_string(services_obj, cursor) {
+            Some((k, p)) => (k, p),
+            None => break,
+        };
+        // Skip whitespace and the colon.
+        let mut p = skip_ws(services_obj, after_key);
+        if p >= services_obj.len() || services_obj.as_bytes()[p] != b':' {
+            return Err(format!("config: expected `:` after `{}`", key));
+        }
+        p = skip_ws(services_obj, p + 1);
+        if p >= services_obj.len() || services_obj.as_bytes()[p] != b'{' {
+            return Err(format!(
+                "config: service `{}` value must be an object",
+                key
+            ));
+        }
+        let (inner_obj, after_obj) = read_balanced_object(services_obj, p)
+            .ok_or_else(|| format!("config: unbalanced object for `{}`", key))?;
+        let kind = find_string_field(inner_obj, "kind").ok_or_else(|| {
+            format!("config: service `{}` missing `\"kind\"` field", key)
+        })?;
+        let initial = find_number_field(inner_obj, "initial").unwrap_or(0);
+        match kind.as_str() {
+            "counter" => {
+                services.push(Arc::new(CounterService::new(key.clone(), initial)));
+            }
+            other => {
+                return Err(format!(
+                    "config: service `{}` has unknown kind `{}` (supported: counter)",
+                    key, other
+                ));
+            }
+        }
+        cursor = after_obj;
+        cursor = skip_ws(services_obj, cursor);
+        if cursor < services_obj.len() && services_obj.as_bytes()[cursor] == b',' {
+            cursor += 1;
+        }
+    }
+    Ok(services)
+}
+
+fn skip_ws(s: &str, mut p: usize) -> usize {
+    while p < s.len() {
+        let c = s.as_bytes()[p];
+        if c == b' ' || c == b'\n' || c == b'\r' || c == b'\t' {
+            p += 1;
+        } else {
+            break;
+        }
+    }
+    p
+}
+
+fn parse_quoted_string(s: &str, start: usize) -> Option<(String, usize)> {
+    let p = skip_ws(s, start);
+    if p >= s.len() || s.as_bytes()[p] != b'"' {
+        return None;
+    }
+    let mut out = String::new();
+    let mut i = p + 1;
+    while i < s.len() {
+        let c = s.as_bytes()[i];
+        if c == b'"' {
+            return Some((out, i + 1));
+        }
+        if c == b'\\' && i + 1 < s.len() {
+            let n = s.as_bytes()[i + 1];
+            match n {
+                b'"' => out.push('"'),
+                b'\\' => out.push('\\'),
+                b'n' => out.push('\n'),
+                b'r' => out.push('\r'),
+                b't' => out.push('\t'),
+                _ => {
+                    out.push('\\');
+                    out.push(n as char);
+                }
+            }
+            i += 2;
+            continue;
+        }
+        out.push(c as char);
+        i += 1;
+    }
+    None
+}
+
+fn read_balanced_object(s: &str, start: usize) -> Option<(&str, usize)> {
+    let bytes = s.as_bytes();
+    if bytes[start] != b'{' {
+        return None;
+    }
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escape = false;
+    let mut i = start;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if in_string {
+            if escape {
+                escape = false;
+            } else if c == b'\\' {
+                escape = true;
+            } else if c == b'"' {
+                in_string = false;
+            }
+        } else {
+            match c {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some((&s[start..=i], i + 1));
+                    }
+                }
+                b'"' => in_string = true,
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Locate the `{...}` object whose top-level key is `key`.
+/// Returns the byte range (start, end_exclusive).
+fn find_top_level_object_for_key(text: &str, key: &str) -> Option<(usize, usize)> {
+    // Find `"<key>":` at the top level (no nested objects
+    // counted as nesting for the search). The key search
+    // starts at the first top-level object `{` so we do
+    // not mistake a nested `"services"` for the top-level
+    // one.
+    let bytes = text.as_bytes();
+    // Find the first top-level `{`.
+    let mut first_brace = None;
+    for (i, &c) in bytes.iter().enumerate() {
+        if c == b'{' {
+            first_brace = Some(i);
+            break;
+        }
+    }
+    let first_brace = first_brace?;
+    // Search for `"<key>"` between `first_brace` and the
+    // matching close. Simplest: just find any occurrence.
+    let needle = format!("\"{}\"", key);
+    let from = &text[first_brace..];
+    let idx = from.find(&needle)?;
+    let after_key = first_brace + idx + needle.len();
+    // Skip ws + colon.
+    let mut p = skip_ws(text, after_key);
+    if p >= text.len() || bytes[p] != b':' {
+        return None;
+    }
+    p = skip_ws(text, p + 1);
+    if p >= text.len() || bytes[p] != b'{' {
+        return None;
+    }
+    read_balanced_object(text, p).map(|(_, end)| (p, end))
+}
+
+fn find_string_field(obj: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{}\"", key);
+    let idx = obj.find(&needle)?;
+    let after = idx + needle.len();
+    let mut p = skip_ws(obj, after);
+    if p >= obj.len() || obj.as_bytes()[p] != b':' {
+        return None;
+    }
+    p = skip_ws(obj, p + 1);
+    parse_quoted_string(obj, p).map(|(s, _)| s)
+}
+
+fn find_number_field(obj: &str, key: &str) -> Option<u64> {
+    let needle = format!("\"{}\"", key);
+    let idx = obj.find(&needle)?;
+    let after = idx + needle.len();
+    let mut p = skip_ws(obj, after);
+    if p >= obj.len() || obj.as_bytes()[p] != b':' {
+        return None;
+    }
+    p = skip_ws(obj, p + 1);
+    let bytes = obj.as_bytes();
+    let start = p;
+    while p < obj.len() && bytes[p].is_ascii_digit() {
+        p += 1;
+    }
+    if p == start {
+        return None;
+    }
+    obj[start..p].parse::<u64>().ok()
 }
 
 fn json_string_field(s: &str) -> String {
