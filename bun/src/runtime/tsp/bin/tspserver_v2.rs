@@ -43,12 +43,28 @@ use bun_runtime_tsp::worker::lifecycle::RecyclePolicy;
 use bun_runtime_tsp::worker::sandbox::ResourceLimits;
 use bun_runtime_tsp::worker::application::{Application, ApplicationRegistry, WorkerGroup};
 
+/// Version string baked into the binary. The
+/// `bun-profile --revision` step in the build
+/// pipeline (see `package-tspserver-v2.sh`) writes
+/// the runtime's git revision into the binary, but
+/// the host binary itself doesn't read it -- so we
+/// keep a hand-written version string in sync with
+/// the repo. The slice 11b PoC 1 contract is
+/// "the host binary prints its version and exits";
+/// a future slice will lift this from `Cargo.toml`
+/// or wire it to the bun revision at build time.
+const VERSION: &str = "tspserver_v2 2.0.0-poC1 (slice 11b+)";
+
 pub fn run() -> ExitCode {
     match std::env::args().nth(1).as_deref() {
         Some("check") => run_check(),
         Some("routes") => run_routes(),
         Some("graph") => run_graph(),
         Some("typings") => run_typings(),
+        Some("--version") | Some("-V") => {
+            println!("{VERSION}");
+            ExitCode::SUCCESS
+        }
         Some("--help") | Some("-h") => {
             print_help();
             ExitCode::SUCCESS
@@ -351,7 +367,7 @@ fn resolve_routes_dir() -> PathBuf {
 
 fn print_help() {
     println!(
-        "TSP v2 commands:\n  tspserver_v2              run the native HTTP server\n  tspserver_v2 check       validate routes and local imports\n  tspserver_v2 routes      list filesystem routes and exports\n  tspserver_v2 graph       print the resolved module graph\n  tspserver_v2 typings     write tsp:* TypeScript declaration files\n\nEnvironment:\n  TSP_ROUTES_DIR            route root (default: routes)\n  TSP_PUBLIC_DIR            public asset root (default: public)\n  TSP_PORT                  HTTP port (default: 3000)\n  TSP_WORKER_COUNT          embedded self-spawned worker processes (default: 1)\n  TSP_WORKER_MAX_IN_FLIGHT  max concurrent requests per worker (default: 2*count)\n  TSP_WORKER_MAX_REQUESTS   recycle each worker after N requests\n  TSP_WORKER_MAX_AGE_MS     recycle each worker after this many ms\n  TSP_WORKER_MAX_MEMORY_BYTES  recycle each worker after RSS reaches this\n  TSP_INVALIDATION_FILE     shared cross-worker invalidation log\n  TSP_MAX_BODY_BYTES         per-request body size cap; requests with\n                            Content-Length over this are rejected with\n                            413 Payload Too Large (default: 1 MiB)\n  TSP_CGROUP_ROOT           explicit Linux cgroup v2 parent directory\n  TSP_WORKER_MEMORY_MAX / TSP_WORKER_CPU_MAX / TSP_WORKER_PIDS_MAX  cgroup limits\n  TSP_REDIS_URL             optional Redis URL for the session backend\n  TSP_CONFIG                JSON file declaring config-driven custom\n                            services (default: tsp.config.json);\n                            supports `kind: counter` with `initial`\n  TSP_APPLICATION_NAME      application name registered in the registry (default: main)"
+        "TSP v2 commands:\n  tspserver_v2              run the native HTTP server\n  tspserver_v2 check       validate routes and local imports\n  tspserver_v2 routes      list filesystem routes and exports\n  tspserver_v2 graph       print the resolved module graph\n  tspserver_v2 typings     write tsp:* TypeScript declaration files\n  tspserver_v2 --version   print the version and exit\n  tspserver_v2 --help      print this help and exit\n\nEnvironment:\n  TSP_ROUTES_DIR            route root (default: routes)\n  TSP_PUBLIC_DIR            public asset root (default: public)\n  TSP_PORT                  HTTP port (default: 3000)\n  TSP_TIMEOUT_MS            per-request timeout in ms; 0 disables the\n                            watchdog (default: 30000). The per-page\n                            `config.timeoutMs` overrides this per\n                            request (spec section 7 v2.0 core PageConfig)\n  TSP_DEVELOPMENT           set to 1 for dev mode: page-throw 500\n                            responses render as self-contained HTML\n                            error pages (name + message + stack) instead\n                            of the prod JSON body (default: 0 / prod)\n  TSP_WORKER_COUNT          embedded self-spawned worker processes (default: 1)\n  TSP_WORKER_MAX_IN_FLIGHT  max concurrent requests per worker (default: 2*count)\n  TSP_WORKER_MAX_REQUESTS   recycle each worker after N requests\n  TSP_WORKER_MAX_AGE_MS     recycle each worker after this many ms\n  TSP_WORKER_MAX_MEMORY_BYTES  recycle each worker when RSS reaches this\n  TSP_INVALIDATION_FILE     shared cross-worker invalidation log\n  TSP_MAX_BODY_BYTES         per-request body size cap; requests with\n                            Content-Length over this are rejected with\n                            413 Payload Too Large (default: 1 MiB)\n  TSP_CGROUP_ROOT           explicit Linux cgroup v2 parent directory\n  TSP_WORKER_MEMORY_MAX / TSP_WORKER_CPU_MAX / TSP_WORKER_PIDS_MAX  cgroup limits\n  TSP_REDIS_URL             optional Redis URL for the session backend\n  TSP_CONFIG                JSON file declaring config-driven custom\n                            services (default: tsp.config.json);\n                            supports `kind: counter` with `initial`\n  TSP_APPLICATION_NAME      application name registered in the registry (default: main)"
     );
 }
 
