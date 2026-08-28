@@ -406,6 +406,36 @@ fn run_routes() -> ExitCode {
 }
 
 fn run_check() -> ExitCode {
+    // Parse optional flags. The default check does
+    // route-table scan + regex static-analysis; `--tsc`
+    // additionally runs a real `tsc --noEmit` pass against
+    // the routes + the tsp:* declaration files.
+    let raw_args: Vec<String> = std::env::args().skip(2).collect();
+    let mut tsc = false;
+    let mut i = 0;
+    while i < raw_args.len() {
+        let arg = &raw_args[i];
+        if arg == "--tsc" {
+            tsc = true;
+            i += 1;
+        } else if arg == "--help" || arg == "-h" {
+            println!(
+                "Usage: tspserver_v2 check [--tsc]\n\n\
+                 Scans the routes/ directory and prints each route's\n\
+                 static export set. Returns 1 if any route fails to\n\
+                 parse, 0 otherwise.\n\n\
+                 --tsc    additionally run `tsc --noEmit` against the\n\
+                          routes (after rewriting `.tsp` to `.tsx`)\n\
+                          and the bundled `tsp:*` declaration files.\n\
+                          Returns 1 if tsc reports any error."
+            );
+            return ExitCode::SUCCESS;
+        } else {
+            eprintln!("tsp check: unexpected argument `{arg}`");
+            return ExitCode::from(2);
+        }
+    }
+
     let root = resolve_routes_dir();
     let table = match RouteTable::scan(&root) {
         Ok(table) => table,
@@ -435,8 +465,279 @@ fn run_check() -> ExitCode {
             eprintln!("ERROR module graph: {error}");
         }
     }
+    if tsc {
+        match run_tsc_check(&root) {
+            Ok(()) => println!("OK tsc: 0 error(s)"),
+            Err(error) => {
+                failed = true;
+                eprintln!("ERROR tsc: {error}");
+            }
+        }
+    }
     if failed { ExitCode::from(1) } else { ExitCode::SUCCESS }
 }
+
+/// Phase 11 follow-up: real `tsc --noEmit` type-check pass
+/// over the routes directory.
+///
+/// The pass:
+///   1. Walks `routes_root` and copies every `.tsp` file to
+///      a temp directory as `.tsx` (tsc treats .tsp as
+///      unknown). `.ts` helper files (e.g. `routes/_db.ts`)
+///      are copied verbatim.
+///   2. Copies the three bundled `tsp:*` declaration files
+///      into the temp dir's `tsp-types/` subdir.
+///   3. Writes a `tsconfig.json` that maps the `tsp:*`
+///      module names to those declarations and includes
+///      `routes/**/*.tsx` + `tsp-types/**/*.d.ts`.
+///   4. Locates the `tsc` binary (CWD `node_modules/.bin`
+///      first, then PATH).
+///   5. Invokes `tsc --noEmit --project <tsconfig>` and
+///      forwards its stdout to the user's stdout verbatim.
+///   6. Returns Ok if tsc exits 0, Err if tsc exits
+///      non-zero or cannot be invoked.
+///
+/// The temp directory is removed on every return path
+/// (success, parse error, tsc invocation failure).
+///
+/// The check is conservative: `strict: false` so the user
+/// is not forced to handle `null`/`undefined` exactly; the
+/// goal is to surface gross type mismatches (typos in
+/// imported names, wrong argument shapes, missing
+/// properties), not to enforce strictness the runtime
+/// itself does not enforce.
+fn run_tsc_check(routes_root: &std::path::Path) -> Result<(), String> {
+    use std::process::Command;
+
+    // (1) Set up the temp dir.
+    let temp = std::env::temp_dir().join(format!(
+        "tsp-tsc-check-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| format!("clock: {e}"))?
+            .as_nanos()
+    ));
+    let temp_routes = temp.join("routes");
+    let temp_types = temp.join("tsp-types");
+    std::fs::create_dir_all(&temp_routes).map_err(|e| format!("mkdir temp routes: {e}"))?;
+    std::fs::create_dir_all(&temp_types).map_err(|e| format!("mkdir temp tsp-types: {e}"))?;
+
+    // RAII guard: remove the temp dir on every return path.
+    // The closure cannot move `temp` into itself, so we
+    // capture the path and use a flag-based cleanup.
+    let cleanup_path = temp.clone();
+    let cleanup = || {
+        let _ = std::fs::remove_dir_all(&cleanup_path);
+    };
+
+    let result: Result<(), String> = (|| {
+        // (2) Copy `.tsp` -> `.tsx` and `.ts` -> `.ts`
+        // recursively, preserving directory structure.
+        copy_routes_recursive(routes_root, &temp_routes)
+            .map_err(|e| format!("copy routes: {e}"))?;
+
+        // (3) Copy the three bundled declaration files.
+        // The bin does not know where the user keeps them,
+        // so we probe a small list of conventional
+        // locations: CWD-relative `.tsp-types/`, then
+        // CWD-relative `tsp-types/`, then the parent of
+        // the routes root (e.g. `<project>/.tsp-types/`
+        // when the user runs from `<project>/`). The
+        // first dir that contains all three d.ts files
+        // wins. If none does, error with a hint that
+        // points at the typings subcommand.
+        let mut tsp_types_src: Option<std::path::PathBuf> = None;
+        for base in [
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            routes_root
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| PathBuf::from(".")),
+        ] {
+            for sub in &[".tsp-types", "tsp-types"] {
+                let candidate = base.join(sub);
+                if ["tsp-server.d.ts", "tsp-html.d.ts", "tsp-runtime.d.ts"]
+                    .iter()
+                    .all(|name| candidate.join(name).is_file())
+                {
+                    tsp_types_src = Some(candidate);
+                    break;
+                }
+            }
+            if tsp_types_src.is_some() {
+                break;
+            }
+        }
+        let tsp_types_src = tsp_types_src.ok_or_else(|| {
+            "cannot locate the tsp:* declaration files: probed \
+             `.tsp-types/` and `tsp-types/` in the current \
+             directory and in the parent of the routes root. \
+             Run `tspserver_v2 typings --out .tsp-types` to \
+             generate them."
+                .to_string()
+        })?;
+        println!(
+            "tsp check --tsc: using declaration files from {}",
+            tsp_types_src.display()
+        );
+        for name in &["tsp-server.d.ts", "tsp-html.d.ts", "tsp-runtime.d.ts"] {
+            let src = tsp_types_src.join(name);
+            let dst = temp_types.join(name);
+            std::fs::copy(&src, &dst)
+                .map_err(|e| format!("copy {src:?} -> {dst:?}: {e}"))?;
+        }
+
+        // (4) Write the tsconfig.
+        let tsconfig = temp.join("tsconfig.json");
+        std::fs::write(&tsconfig, TSC_TSCONFIG_JSON)
+            .map_err(|e| format!("write tsconfig: {e}"))?;
+
+        // (5) Locate tsc. CWD-relative node_modules wins
+        // over PATH (a project pinned to tsc 5.9 should
+        // not be overridden by a system tsc 4.x).
+        let tsc_bin = locate_tsc_binary().ok_or_else(|| {
+            "cannot locate tsc binary: looked for \
+             ./node_modules/.bin/tsc, ./node_modules/.bin/tsc.cmd, and \
+             `tsc` on PATH. Install TypeScript (`bun add -d typescript`) \
+             to enable this check."
+                .to_string()
+        })?;
+        println!("tsp check --tsc: using {}", tsc_bin.display());
+
+        // (6) Run tsc. We use the working directory of the
+        // user (so the user's node_modules / package.json
+        // are visible to tsc for any third-party imports
+        // the route makes), and pass --project pointing at
+        // our temp tsconfig.
+        let output = Command::new(&tsc_bin)
+            .arg("--noEmit")
+            .arg("--project")
+            .arg(&tsconfig)
+            .current_dir(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+            .output()
+            .map_err(|e| format!("invoke {}: {e}", tsc_bin.display()))?;
+        // Forward tsc's stdout (the error list) to the user
+        // so they see the same diagnostic they would from a
+        // direct tsc invocation.
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "tsc reported error(s); see the diagnostic output above \
+                 (exit status: {})",
+                output.status
+            ))
+        }
+    })();
+
+    cleanup();
+    result
+}
+
+/// Recursively copy `routes_root` into `dst_root`, renaming
+/// `.tsp` files to `.tsx` (TypeScript's compiler does not
+/// recognise the `.tsp` extension by default). All other
+/// files (notably `.ts` helpers like `routes/_db.ts`) are
+/// copied verbatim. The directory layout under
+/// `dst_root` mirrors `routes_root` exactly.
+fn copy_routes_recursive(
+    src_root: &std::path::Path,
+    dst_root: &std::path::Path,
+) -> std::io::Result<()> {
+    let entries = std::fs::read_dir(src_root)?;
+    for entry in entries {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        let src = entry.path();
+        let dst = dst_root.join(&*name_str);
+        if file_type.is_dir() {
+            std::fs::create_dir_all(&dst)?;
+            copy_routes_recursive(&src, &dst)?;
+        } else if file_type.is_file() {
+            if name_str.ends_with(".tsp") {
+                // .tsp -> .tsx. The contents are the same;
+                // tsc treats .tsx as TSX.
+                let dst_tsx = dst_root.join(format!(
+                    "{}.tsx",
+                    name_str.strip_suffix(".tsp").unwrap_or(&name_str)
+                ));
+                std::fs::copy(&src, &dst_tsx)?;
+            } else {
+                // .ts, .d.ts, .json, etc. -- copy verbatim.
+                // This is what makes the slice
+                // transparent to user helpers like
+                // `routes/_db.ts` (the SQL demo imports
+                // from it).
+                std::fs::copy(&src, &dst)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Find the `tsc` binary. Order:
+///   1. `./node_modules/.bin/tsc.cmd` (Windows)
+///   2. `./node_modules/.bin/tsc`     (POSIX)
+///   3. `tsc` on PATH
+fn locate_tsc_binary() -> Option<PathBuf> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let candidate_cmd = cwd.join("node_modules").join(".bin").join("tsc.cmd");
+    if candidate_cmd.is_file() {
+        return Some(candidate_cmd);
+    }
+    let candidate = cwd.join("node_modules").join(".bin").join("tsc");
+    if candidate.is_file() {
+        return Some(candidate);
+    }
+    // Fall back to PATH: `Command::new("tsc")` resolves
+    // through the standard PATH search on both Windows
+    // and POSIX.
+    Some(PathBuf::from("tsc"))
+}
+
+/// The tsconfig the tsc check writes. Conservative: it
+/// only enables the language features a `.tsp` page uses
+/// (JSX, ES modules) and explicitly relaxes `strict` so
+/// existing pages that use `?? null` etc. are not flagged.
+/// The `paths` table maps the three frozen module names
+/// to the bundled declaration files; without it, tsc
+/// would refuse to resolve `import "tsp:server"`.
+///
+/// `skipLibCheck: true` is required because `tsp-server.d.ts`
+/// hand-rolls its `Context` interface; without skipping
+/// lib check, tsc would complain that some interface
+/// members are not strictly compatible with each other
+/// across the file (the hand-rolled shape is the contract
+/// per the typings e2e pin, not a bug to be fixed).
+const TSC_TSCONFIG_JSON: &str = r#"{
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "target": "es2020",
+    "jsx": "preserve",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "esModuleInterop": true,
+    "baseUrl": ".",
+    "paths": {
+      "tsp:server": ["./tsp-types/tsp-server.d.ts"],
+      "tsp:html": ["./tsp-types/tsp-html.d.ts"],
+      "tsp:runtime": ["./tsp-types/tsp-runtime.d.ts"]
+    }
+  },
+  "include": [
+    "routes/**/*.tsx",
+    "routes/**/*.ts",
+    "tsp-types/**/*.d.ts"
+  ]
+}
+"#;
 
 fn run_graph() -> ExitCode {
     let root = resolve_routes_dir();

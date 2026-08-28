@@ -4411,3 +4411,163 @@ fn metrics_endpoint_serves_prometheus_text_after_priming_requests() {
     let _ = std::fs::remove_dir_all(&temp_root);
 }
 
+// ---------------------------------------------------------------------------
+// `tspserver_v2 check --tsc` (Phase 11 close: real tsc type-check)
+//
+// The `check` subcommand historically did only the regex-based
+// static-export detection (slice 5) + the module-graph build
+// (slice 21). It did NOT run a real TypeScript type-checker.
+// This slice adds a `--tsc` flag that:
+//   - copies the routes dir to a temp dir, renaming `.tsp`
+//     to `.tsx` (tsc does not recognise the .tsp extension);
+//   - copies the three bundled `tsp:*` declaration files
+//     from the project's `.tsp-types/` (or `tsp-types/`)
+//     into the temp tree;
+//   - writes a tsconfig that maps `tsp:*` module names to
+//     those declaration files (via `paths`);
+//   - locates a `tsc` binary in the project's
+//     `node_modules/.bin/`, or on PATH;
+//   - runs `tsc --noEmit --project <tsconfig>` and forwards
+//     tsc's stdout/stderr to the user.
+// The check is opt-in (`tspserver_v2 check --tsc`); the
+// default `check` continues to do the original regex-based
+// scan. `--tsc` returns 1 if tsc reports any error.
+//
+// The e2e boots the binary twice and asserts the contract
+// for both the clean path and the broken path:
+//
+//   (1) clean routes: tsc exits 0, `check --tsc` returns 0,
+//       the printed body shows "OK tsc: 0 error(s)".
+//   (2) broken routes: tsc exits non-zero, `check --tsc`
+//       returns 1, the printed body shows a TS2353 line for
+//       the `cost` property on `util.password.hash` (the d.ts
+//       does not allow `cost`, so tsc rejects it -- the wrap
+//       runtime silently drops unknown options, so tsc
+//       catching this is a real win over the runtime-only
+//       surface).
+//
+// The e2e uses inline `include_str!` fixtures (mirrors the
+// `nanoid` / `cookies` / `session` / etc. pattern) so the
+// assertion is self-contained and does not drift if the
+// production `routes/` change.
+// ---------------------------------------------------------------------------
+
+const TSC_CLEAN_TSP: &str = r#"
+// Clean route: only `json` from `tsp:server`, no
+// banned properties on the options object. tsc
+// must report 0 errors.
+import { json } from "tsp:server";
+
+export function GET(_ctx) {
+  return json({ ok: true });
+}
+"#;
+
+const TSC_BROKEN_TSP: &str = r#"
+// Broken route: `util.password.hash`'s `options` argument
+// only allows `algorithm` (per the slice 18 d.ts). The
+// `cost` field is a bcrypt-specific option that bun's
+// native password API does not surface; tsc must reject
+// it with TS2353 ("Object literal may only specify known
+// properties").
+import { util } from "tsp:server";
+
+export async function GET(_ctx) {
+  const hash = await util.password.hash("hello", { cost: 12 });
+  return new Response(hash);
+}
+"#;
+
+#[test]
+fn check_with_tsc_flag_catches_user_type_errors_and_passes_clean_routes() {
+    // The e2e shells out to the binary's `check --tsc`
+    // subcommand twice (once with a clean routes dir, once
+    // with a broken one). It does NOT boot the HTTP server
+    // -- the check subcommand is a CLI introspection tool.
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    // --- Round 1: clean routes ---
+    let clean_root = std::env::temp_dir().join(format!(
+        "tsp-tsc-clean-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let clean_routes = clean_root.join("routes");
+    std::fs::create_dir_all(&clean_routes).expect("clean routes dir");
+    std::fs::write(clean_routes.join("clean.tsp"), TSC_CLEAN_TSP).expect("clean.tsp");
+    let clean_output = std::process::Command::new(master)
+        .arg("check")
+        .arg("--tsc")
+        .env("TSP_ROUTES_DIR", &clean_routes)
+        .current_dir(std::path::Path::new("D:/GitHub/tsp"))
+        .output()
+        .expect("check --tsc spawn");
+    let clean_stdout = String::from_utf8_lossy(&clean_output.stdout);
+    let clean_stderr = String::from_utf8_lossy(&clean_output.stderr);
+    assert_eq!(
+        clean_output.status.code(),
+        Some(0),
+        "clean `check --tsc` must exit 0 (no tsc errors); \
+         stdout:\n{clean_stdout}\nstderr:\n{clean_stderr}"
+    );
+    assert!(
+        clean_stdout.contains("OK tsc: 0 error(s)"),
+        "clean `check --tsc` must report 0 tsc errors; \
+         stdout was:\n{clean_stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&clean_root);
+
+    // --- Round 2: broken routes ---
+    let broken_root = std::env::temp_dir().join(format!(
+        "tsp-tsc-broken-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let broken_routes = broken_root.join("routes");
+    std::fs::create_dir_all(&broken_routes).expect("broken routes dir");
+    std::fs::write(broken_routes.join("broken.tsp"), TSC_BROKEN_TSP).expect("broken.tsp");
+    let broken_output = std::process::Command::new(master)
+        .arg("check")
+        .arg("--tsc")
+        .env("TSP_ROUTES_DIR", &broken_routes)
+        .current_dir(std::path::Path::new("D:/GitHub/tsp"))
+        .output()
+        .expect("check --tsc broken spawn");
+    let broken_stdout = String::from_utf8_lossy(&broken_output.stdout);
+    let broken_stderr = String::from_utf8_lossy(&broken_output.stderr);
+    assert_eq!(
+        broken_output.status.code(),
+        Some(1),
+        "broken `check --tsc` must exit 1 (tsc caught the \
+         `cost` property on util.password.hash); \
+         stdout:\n{broken_stdout}\nstderr:\n{broken_stderr}"
+    );
+    // tsc forwards its error list to the user's stdout;
+    // the bin copies it through verbatim. The TS2353
+    // line is the exact contract: `cost` is not a
+    // known property of the algorithm-options type.
+    assert!(
+        broken_stdout.contains("TS2353")
+            || broken_stdout.contains("Object literal may only specify known properties"),
+        "broken `check --tsc` must surface tsc's TS2353 \
+         diagnostic (the `cost` property the page passes \
+         is not in the d.ts); stdout was:\n{broken_stdout}"
+    );
+    assert!(
+        broken_stdout.contains("cost"),
+        "broken `check --tsc` stdout must mention `cost`; \
+         stdout was:\n{broken_stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&broken_root);
+}
+
+
