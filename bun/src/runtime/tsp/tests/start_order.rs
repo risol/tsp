@@ -4865,19 +4865,13 @@ fn head_on_regular_page_uses_get_export_and_drops_body() {
 
     // (1b) HEAD /getonly -> 200 + empty body. The
     // FoundHeadOverGet path runs the GET handler
-    // and drops the body. The Content-Length on
-    // the HEAD response is 0 (the body is empty);
-    // the GET's body size is NOT preserved on the
-    // HEAD response -- this is a known gap
-    // (progress.md §14a, slice 14a note:
-    // "Content-Length-preserving refactor"). The
-    // metrics endpoint's HEAD path DOES preserve
-    // Content-Length (it's hand-rolled in
-    // host.rs:1517); the page path is the gap.
-    // This e2e pins the CURRENT behavior (0), so a
-    // future fix to preserve the GET's body length
-    // must update this test to match the new
-    // contract.
+    // and drops the body at the wire (per RFC 9110
+    // sect.9.3.2). The Content-Length is preserved
+    // as the GET body size (11 = length of
+    // "hello world") so a client can size its
+    // request without a follow-up GET. The slice-14a
+    // "Content-Length-preserving refactor" gap is
+    // closed.
     let request = format!(
         "HEAD /getonly HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
     );
@@ -4900,8 +4894,8 @@ fn head_on_regular_page_uses_get_export_and_drops_body() {
         .and_then(|v| v.trim().parse::<usize>().ok())
         .expect("HEAD must carry Content-Length");
     assert_eq!(
-        cl, 0,
-        "HEAD /getonly Content-Length must be 0 (the body is dropped); got {cl}"
+        cl, 11,
+        "HEAD /getonly Content-Length must be 11 (the GET body size); got {cl}"
     );
 
     // (2) HEAD /postonly -> 405 (no GET or HEAD exported).
@@ -5085,6 +5079,20 @@ fn head_on_route_with_both_get_and_head_calls_head_handler() {
     assert!(
         head_body.is_empty(),
         "HEAD /both body must be empty; got {head_body:?}"
+    );
+    // Content-Length on the explicit-HEAD path is
+    // the page's HEAD handler body length (9 =
+    // "from head"). The wire body is empty; the
+    // header reports the would-be body size.
+    let cl = raw_h
+        .lines()
+        .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+        .and_then(|l| l.split(':').nth(1))
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .expect("HEAD must carry Content-Length");
+    assert_eq!(
+        cl, 9,
+        "HEAD /both Content-Length must be 9 (the HEAD handler's body size); got {cl}"
     );
 
     let _ = terminate(child.id());
@@ -5469,6 +5477,102 @@ export function DELETE() {
     assert!(
         stdout.contains("page1.tsp") && stdout.contains("page2.tsp"),
         "routes --json must include the source filenames; got: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+#[test]
+fn graph_command_json_flag_emits_stable_json_array() {
+    // `tspserver_v2 graph --json` emits a JSON array
+    // describing the module graph. The hand-rolled
+    // shape is:
+    //   [{"path":".../page1.tsp","imports":[".../_db"]},
+    //    {"path":".../page2.tsp","imports":[]}]
+    // The human-readable tab-separated default is
+    // preserved (covered by the existing graph smoke).
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-graph-json-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+    // page1 imports from _db.ts; page2 has no imports.
+    std::fs::write(
+        routes_dir.join("_db.ts"),
+        "export const x: number = 42;\n",
+    )
+    .expect("_db.ts");
+    std::fs::write(
+        routes_dir.join("page1.tsp"),
+        r#"
+import { x } from "./_db";
+export function GET() {
+  return new Response(String(x), { headers: { "content-type": "text/plain" } });
+}
+"#,
+    )
+    .expect("page1.tsp");
+    std::fs::write(
+        routes_dir.join("page2.tsp"),
+        r#"
+export function GET() {
+  return new Response("ok", { headers: { "content-type": "text/plain" } });
+}
+"#,
+    )
+    .expect("page2.tsp");
+
+    let output = std::process::Command::new(master)
+        .arg("graph")
+        .arg("--json")
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .current_dir(std::path::Path::new("D:/GitHub/tsp"))
+        .output()
+        .expect("graph --json spawn");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "graph --json must exit 0; \
+         stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.trim_start().starts_with('['),
+        "graph --json must start with `[`; got: {stdout:?}"
+    );
+    assert!(
+        stdout.trim_end().ends_with(']'),
+        "graph --json must end with `]`; got: {stdout:?}"
+    );
+    // Each entry must carry the path and imports
+    // fields. The hand-rolled shape uses
+    // `node.path` for path and the list of resolved
+    // import paths for imports.
+    assert!(
+        stdout.contains("\"path\":") && stdout.contains("\"imports\":"),
+        "graph --json must carry path and imports fields; got: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("_db.ts") || stdout.contains("_db"),
+        "graph --json must include the _db import path; got: {stdout:?}"
+    );
+    // page2 has no imports -- the entry must have
+    // an empty imports array.
+    assert!(
+        stdout.contains("\"imports\":[]"),
+        "graph --json must include the empty imports array for page2; got: {stdout:?}"
     );
 
     let _ = std::fs::remove_dir_all(&temp_root);

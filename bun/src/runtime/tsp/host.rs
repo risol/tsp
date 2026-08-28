@@ -1643,6 +1643,19 @@ fn handle_connection(
         }
     }
 
+    // Content-Length override for HEAD responses.
+    // For the page-dispatch path, when the request is
+    // HEAD and the page produced a body (either via
+    // FoundHeadOverGet or via the explicit HEAD
+    // handler), the wire body is empty (per RFC 9110
+    // sect.9.3.2) but the Content-Length should report
+    // the body size the GET would have produced, so a
+    // client can size its request without a follow-up
+    // GET. The match arm below sets this when relevant.
+    // Default 0 = "use body.len()" -- the GET-equivalent
+    // case is unaffected.
+    let mut content_length_override: usize = 0;
+
     let (status_line, content_type, allow_header, body, extra_headers) = match parsed {
         ParsedRequest::Unknown => (
             "HTTP/1.1 400 Bad Request",
@@ -1890,6 +1903,18 @@ fn handle_connection(
                             outcome.headers.clone(),
                         )
                     };
+                    // For explicit HEAD requests, the
+                    // page's HEAD handler produced a
+                    // body that is dropped at the wire.
+                    // Capture its length so the
+                    // Content-Length header (computed
+                    // later from `content_length_override`)
+                    // still reports the would-be body
+                    // size. For non-HEAD the override
+                    // stays 0 and `body.len()` is used.
+                    if req_method == HttpMethod::Head {
+                        content_length_override = body.len();
+                    }
                     (
                         if use_envelope {
                             outcome.status_line
@@ -1905,18 +1930,19 @@ fn handle_connection(
                 MatchResult::FoundHeadOverGet { route } => {
                     // Spec sect.6.5: HEAD with no explicit HEAD export.
                     // Run the GET handler, then strip the body. We
-                    // intentionally do NOT preserve Content-Length --
-                    // see the slice 14a note in progress.md for the
-                    // proper Content-Length-preserving refactor.
-                    // The body is dropped here; we do NOT call
-                    // parse_envelope on the GET result because the
-                    // head body must be empty regardless of the
-                    // page's response shape.
+                    // DO preserve Content-Length (the GET body size)
+                    // so a client can size its request without
+                    // making a follow-up GET -- the same contract
+                    // /__tsp/metrics uses for its hand-rolled HEAD
+                    // path (host.rs:1517). The `head_on_regular_page_...`
+                    // and `head_on_route_with_both_get_and_head_...`
+                    // e2e tests pin this. The body itself is dropped
+                    // at the wire (per RFC 9110 sect.9.3.2).
                     let page_ref = PageRef {
                         route: route.path.clone(),
                         method: HttpMethod::Get,
                     };
-                    let (_status, _ct, _allow, _body) = render_for_route(
+                    let (_status, _ct, _allow, get_envelope) = render_for_route(
                         &route,
                         HttpMethod::Get,
                         &page_ref,
@@ -1927,6 +1953,16 @@ fn handle_connection(
                         timeout_ms,
                         &cancellation,
                     );
+                    // The render result is the raw
+                    // `__TSP_OUT_V1__\n{...JSON...}` envelope,
+                    // NOT the page's actual response body.
+                    // Parse the envelope to extract the
+                    // real body length (the `body` field
+                    // in the JSON). The envelope itself
+                    // is dropped on the floor.
+                    let get_body_len = parse_envelope(&get_envelope).body.len();
+                    let _ = get_envelope; // explicitly drop
+                    content_length_override = get_body_len;
                     (
                         "HTTP/1.1 200 OK",
                         "text/html; charset=utf-8".to_string(),
@@ -2018,15 +2054,18 @@ fn handle_connection(
         header_block.push_str("\r\n");
     }
     // For HEAD responses, the body is dropped at the
-    // wire (per RFC 9110 sect.9.3.2). The Content-Length
-    // is therefore 0, not the page's body size. The page
-    // handler is still invoked for any side effects, but
-    // the body bytes do not reach the wire. The
-    // `head_on_regular_page_...` and
-    // `head_on_route_with_both_get_and_head_...` e2e
-    // tests pin this contract.
+    // wire (per RFC 9110 sect.9.3.2). The Content-Length,
+    // however, is preserved: it reports the body size
+    // the page would have produced, so a client can
+    // size its request without a follow-up GET. The
+    // match arm below sets `content_length_override`
+    // for both Found (the page's HEAD handler body
+    // length) and FoundHeadOverGet (the GET's body
+    // length) cases. For non-HEAD requests, the
+    // wire body is the body bytes themselves, and
+    // Content-Length is `body.len()`.
     let content_length = if page_method == HttpMethod::Head {
-        0
+        content_length_override
     } else {
         body.len()
     };

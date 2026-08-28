@@ -1008,6 +1008,32 @@ const TSC_TSCONFIG_JSON: &str = r#"{
 "#;
 
 fn run_graph() -> ExitCode {
+    // Parse optional flag. Default output is
+    // tab-separated (`<path>\timports=[<a>,<b>,...]`).
+    // `--json` emits a stable JSON array for tooling /
+    // CI consumption.
+    let raw_args: Vec<String> = std::env::args().skip(2).collect();
+    let mut json = false;
+    let mut i = 0;
+    while i < raw_args.len() {
+        let arg = &raw_args[i];
+        if arg == "--json" {
+            json = true;
+            i += 1;
+        } else if arg == "--help" || arg == "-h" {
+            println!(
+                "Usage: tspserver_v2 graph [--json]\n\n\
+                 Prints one line per module in the routes/ directory:\n\
+                   <path>\\timports=[<a>,<b>,...]\n\
+                 --json    emit a JSON array of {{path, imports}} instead."
+            );
+            return ExitCode::SUCCESS;
+        } else {
+            eprintln!("tsp graph: unexpected argument `{arg}`");
+            return ExitCode::from(2);
+        }
+    }
+
     let root = resolve_routes_dir();
     let graph = match ModuleGraph::from_routes_dir(&root) {
         Ok(graph) => graph,
@@ -1018,14 +1044,37 @@ fn run_graph() -> ExitCode {
     };
     let mut nodes = graph.nodes();
     nodes.sort_by(|a, b| a.path.cmp(&b.path));
-    for node in nodes {
-        let imports = node
-            .imports
-            .iter()
-            .map(|id| id.as_path().to_string_lossy().into_owned())
-            .collect::<Vec<_>>()
-            .join(",");
-        println!("{}\timports=[{}]", node.path.display(), imports);
+    if json {
+        println!("[");
+        for (idx, node) in nodes.iter().enumerate() {
+            let imports: Vec<String> = node
+                .imports
+                .iter()
+                .map(|id| id.as_path().to_string_lossy().into_owned())
+                .collect();
+            let imports_json: Vec<String> =
+                imports.iter().map(|i| json_string(i)).collect();
+            let prefix = if idx == 0 { "  " } else { ",\n  " };
+            print!(
+                "{prefix}{{\"path\":{},\"imports\":[{}]}}",
+                json_string(&node.path.to_string_lossy()),
+                imports_json.join(",")
+            );
+        }
+        if !nodes.is_empty() {
+            println!();
+        }
+        println!("]");
+    } else {
+        for node in nodes {
+            let imports = node
+                .imports
+                .iter()
+                .map(|id| id.as_path().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join(",");
+            println!("{}\timports=[{}]", node.path.display(), imports);
+        }
     }
     ExitCode::SUCCESS
 }
