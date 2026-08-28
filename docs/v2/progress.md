@@ -2426,3 +2426,75 @@ metrics, and reload state are host-owned and survive page generation reloads.
   `5c6d4c1d87` -> `9853fd30d7` -> `29d5700a2a`,
   each with its own commit message in the
   repo's `git log`.
+
+## Session update (2026-08-28) -- HTTP hardening + tooling + PageConfig.methods
+
+Five batches land after the metrics+tsc close-out.
+The total over the day: 261 -> 279 tests, 21 -> 32
+e2e, 221 -> 228 lib, 6 new commits on the parent
+repo. The themes:
+
+- **HTTP surface hardening.** A cascade of small
+  fixes that round out the host's HTTP response
+  shape:
+    - `/__tsp/metrics` HEAD support (200, empty
+      body, GET body size preserved) +
+      `405 Method Not Allowed` for non-GET/HEAD
+      with `Allow: GET, HEAD`
+    - HEAD on a regular page route drops the body
+      at the wire (per RFC 9110 sect.9.3.2) and
+      reports the GET's body size in
+      `Content-Length` (slice-14a gap closed)
+    - HEAD on a route that exports BOTH GET and
+      HEAD calls the HEAD handler directly (no
+      FoundHeadOverGet fallback)
+    - OPTIONS auto-204 + `Allow:` on routes that
+      do NOT export OPTIONS; routes that DO
+      export OPTIONS call the handler
+    - `X-Content-Type-Options: nosniff` on every
+      host response (defence-in-depth against
+      MIME-sniffing)
+- **CLI tooling.** `tspserver_v2 check` gained
+  `--tsc` (Phase 11 close) and `--no-color`; the
+  diagnostics are now paths-relative to the
+  user's routes root (the temp dir prefix is
+  stripped) and ANSI-free under `--no-color`.
+  `routes` and `graph` both gained a `--json`
+  flag for CI / tooling integration; the JSON
+  shape is hand-rolled (no serde dep) and uses
+  the same `json_string` helper across both
+  subcommands.
+- **PageConfig.methods static validation**
+  (FREEZE.md §11). `tspserver_v2 check` now
+  parses `export const config = { methods: [...] }`
+  and validates it against the page's actual
+  exports. A mismatch is a check-time error
+  (exit 1) but does not affect the runtime (the
+  static scan + 405 dispatch already covers
+  method rejection). The `detect_config_methods`
+  parser is hand-rolled (~80 lines) and handles
+  the common shapes (single / double quotes,
+  whitespace, empty list, unknown method names).
+  7 new unit tests cover the parser, 1 new e2e
+  covers the end-to-end check.
+
+The new e2e (10 tests):
+  - `head_on_metrics_endpoint_returns_200_with_empty_body`
+  - `post_on_metrics_endpoint_returns_405_with_allow_header`
+  - `head_on_regular_page_uses_get_export_and_drops_body`
+  - `head_on_route_with_both_get_and_head_calls_head_handler`
+  - `options_on_regular_page_returns_204_with_allow_header`
+  - `metrics_endpoint_includes_x_content_type_options_nosniff_header`
+  - `regular_page_response_includes_x_content_type_options_nosniff`
+  - `routes_command_json_flag_emits_stable_json_array`
+  - `graph_command_json_flag_emits_stable_json_array`
+  - `check_validates_config_methods_against_actual_exports`
+
+- **Verification:** 279 tests green (228 lib + 7
+  new `detect_config_methods` unit tests +
+  4 worker_integration + 15 process_model + 32
+  start_order e2e). 6 git commits on the parent
+  tsp repo this session (post the morning's
+  metrics+tsc batch):
+  `e8308ad217` -> `0198584b81` -> `532b8490ee`
+  -> `57e0ade258` -> `654e2f4a7c`.
