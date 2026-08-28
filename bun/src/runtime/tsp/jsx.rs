@@ -518,11 +518,22 @@ const NANOID_URL_ALPHABET: &str =
 /// compile time via `include_str!` so the wrap preamble can
 /// ship a working ID generator without an `import` step. The
 /// path is relative to this file (`bun/src/runtime/tsp/jsx.rs`):
-/// four `..` segments walk back to the workspace root, then into
-/// `node_modules/nanoid/`. If nanoid is moved out of that path
-/// the build will fail with a clear `include_str!` error.
-const NANOID_RAW_SOURCE: &str =
-    include_str!("../../../../node_modules/nanoid/index.js");
+/// `vendor/nanoid/index.js` lives next to this module. The
+/// file is vendored under `bun/src/runtime/tsp/vendor/nanoid/`
+/// (alongside the zod 4.4.3 bundle) so the build is
+/// self-contained: CI does NOT need `bun install` or any
+/// `node_modules/` to be present at the workspace root. The
+/// pre-`vendor` location was `../../../../node_modules/nanoid/`
+/// (the v1 server's `node_modules` at the repo root, which is
+/// gitignored and absent in fresh checkouts), and the CI native
+/// jobs did not run `bun install` -- so the include_str silently
+/// failed on every fresh-checkout CI run since the nanoid
+/// embedding commit (`e821af4bca`). The vendored file makes
+/// the build hermetic. If nanoid is upgraded, regenerate
+/// `vendor/nanoid/index.js` from the new `node_modules/nanoid/`
+/// and commit the new file in place -- the `include_str!` hash
+/// will refresh the next `cargo build`.
+const NANOID_RAW_SOURCE: &str = include_str!("vendor/nanoid/index.js");
 
 /// Pre-bundled zod 4.4.3 (CJS, single file) compiled by
 /// `bun build node_modules/zod/index.js --format=cjs --bundle --target=bun --minify`
