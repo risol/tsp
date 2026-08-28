@@ -5577,3 +5577,123 @@ export function GET() {
 
     let _ = std::fs::remove_dir_all(&temp_root);
 }
+
+// ---------------------------------------------------------------------------
+// `tspserver_v2 check` validates `config.methods`
+// (FREEZE.md §11, slice 11 of plan).
+//
+// When a page declares `export const config = {
+// methods: [...] }`, the static check now validates
+// that the declared set matches the actual exports.
+// A mismatch is a contract break: the page says it
+// serves one set, but the user would see another
+// (the actual exports). The runtime does NOT
+// enforce `config.methods` (the static scan +
+// `MatchResult::MethodNotAllowed` already covers
+// 405 dispatch), so this is strictly a check-time
+// validation -- the wire behaviour is unaffected.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn check_validates_config_methods_against_actual_exports() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-config-methods-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+
+    // (1) Match: config.methods = [GET, POST], the
+    // page exports both.
+    std::fs::write(
+        routes_dir.join("match.tsp"),
+        r#"
+export const config = {
+  methods: ["GET", "POST"],
+} satisfies PageConfig;
+export function GET() { return new Response("g"); }
+export function POST() { return new Response("p"); }
+"#,
+    )
+    .expect("match.tsp");
+
+    // (2) Mismatch: config.methods = [GET, POST], but
+    // the page only exports GET. The check must
+    // fail.
+    std::fs::write(
+        routes_dir.join("mismatch.tsp"),
+        r#"
+export const config = {
+  methods: ["GET", "POST"],
+} satisfies PageConfig;
+export function GET() { return new Response("g"); }
+"#,
+    )
+    .expect("mismatch.tsp");
+
+    // (3) Undeclared: no `config.methods`. The
+    // check must NOT error (the existing
+    // behaviour is preserved).
+    std::fs::write(
+        routes_dir.join("undeclared.tsp"),
+        r#"
+export function GET() { return new Response("g"); }
+"#,
+    )
+    .expect("undeclared.tsp");
+
+    // Run the default `check` (no --tsc) so the
+    // config.methods validation is the only thing
+    // that can fail.
+    let output = std::process::Command::new(master)
+        .arg("check")
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .current_dir(std::path::Path::new("D:/GitHub/tsp"))
+        .output()
+        .expect("check spawn");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // (1) match: OK
+    assert!(
+        stdout.contains("OK /match [GET,POST]"),
+        "match.tsp must report OK with [GET,POST]; stdout: {stdout:?}"
+    );
+    // (2) mismatch: ERROR + the printed methods
+    // arrays.
+    assert!(
+        stderr.contains("config.methods mismatch"),
+        "mismatch.tsp must surface the config.methods mismatch; stderr: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("mismatch.tsp"),
+        "mismatch error must name the source file; stderr: {stderr:?}"
+    );
+    // (3) undeclared: OK (no config.methods, so
+    // no validation)
+    assert!(
+        stdout.contains("OK /undeclared [GET]"),
+        "undeclared.tsp must report OK with [GET]; stdout: {stdout:?}"
+    );
+
+    // Exit code: must be 1 (the mismatch surfaces
+    // as a non-zero exit, like other `check`
+    // errors).
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "check must exit 1 when a config.methods mismatch is found; \
+         stdout: {stdout:?}\nstderr: {stderr:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_root);
+}

@@ -31,7 +31,7 @@ use bun_runtime_tsp::generation::{PageRef, PageRegistry};
 use bun_runtime_tsp::host;
 use bun_runtime_tsp::jsc_bridge::BunRuntime;
 use bun_runtime_tsp::module_graph::ModuleGraph;
-use bun_runtime_tsp::router::RouteTable;
+use bun_runtime_tsp::router::{HttpMethod, RouteTable};
 use bun_runtime_tsp::services::load_config_services;
 use bun_runtime_tsp::services::SESSION_STORE_CAP_DEFAULT;
 use bun_runtime_tsp::services::ServiceRegistry;
@@ -554,11 +554,47 @@ fn run_check() -> ExitCode {
     let mut failed = false;
     for route in table.iter() {
         match bun_runtime_tsp::page::prepare(&route) {
-            Ok(page) => println!(
-                "OK {} [{}]",
-                route.path,
-                page.methods.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(",")
-            ),
+            Ok(page) => {
+                // FREEZE.md §11: when a page declares
+                // `config.methods`, the static check
+                // validates the declared set against
+                // the actual exports. A mismatch is
+                // a contract break: the page says it
+                // serves one set, the user would
+                // see another.
+                if let Some(declared) = &page.config_methods {
+                    // `HttpMethod` does not implement
+                    // `Ord`, so a sorted comparison via
+                    // `BTreeSet` is not available.
+                    // Build a HashSet from each side and
+                    // compare (the field is a `Vec`, not
+                    // a `HashSet`, so we collect twice).
+                    use std::collections::HashSet;
+                    let actual: HashSet<HttpMethod> =
+                        page.methods.iter().copied().collect();
+                    let want: HashSet<HttpMethod> =
+                        declared.iter().copied().collect();
+                    if actual != want {
+                        failed = true;
+                        eprintln!(
+                            "ERROR {}: config.methods mismatch -- declared {:?} but exports {:?}; \
+                             the page must export exactly the methods listed in `config.methods`",
+                            route.source.display(),
+                            declared,
+                            page.methods
+                        );
+                        // Still print the OK line so the
+                        // operator can see the static
+                        // scan result; the ERROR line
+                        // above already set `failed`.
+                    }
+                }
+                println!(
+                    "OK {} [{}]",
+                    route.path,
+                    page.methods.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(",")
+                );
+            }
             Err(error) => {
                 failed = true;
                 eprintln!("ERROR {}: {error}", route.source.display());

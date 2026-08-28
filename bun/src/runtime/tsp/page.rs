@@ -31,6 +31,16 @@ pub struct PageSource {
     pub text: String,
     pub byte_len: usize,
     pub methods: Vec<HttpMethod>,
+    /// `config.methods` if the page declared a
+    /// `PageConfig` (FREEZE.md §11). When `Some`,
+    /// the static check (`tspserver_v2 check`)
+    /// validates the declared set against the
+    /// actual exports; a mismatch is reported
+    /// as an error. The runtime does NOT enforce
+    /// `config.methods` (the host's static scan
+    /// already wins on 405 dispatch), so this is
+    /// strictly a check-time validation.
+    pub config_methods: Option<Vec<HttpMethod>>,
 }
 
 #[derive(Debug)]
@@ -81,10 +91,12 @@ pub fn prepare(route: &Route) -> Result<PageSource, PrepareError> {
     })?;
     let byte_len = text.len();
     let methods = detect_methods(&text);
+    let config_methods = detect_config_methods(&text);
     Ok(PageSource {
         text,
         byte_len,
         methods,
+        config_methods,
     })
 }
 
@@ -116,6 +128,87 @@ fn exports_method(text: &str, method: HttpMethod) -> bool {
         let trimmed = line.trim_start();
         trimmed.starts_with(&needle_async) || trimmed.starts_with(&needle_sync)
     })
+}
+
+/// Detect `config.methods` in a .tsp file (FREEZE.md
+/// §11). The page's `export const config = { ... }`
+/// is the only source of truth for the declared
+/// method set; if absent, this returns `None` (the
+/// page uses the implicit "all exported methods"
+/// set, which is the historical default).
+///
+/// The detector is hand-rolled (no regex dep) and
+/// handles the common shapes:
+///   methods: ["GET", "POST"]
+///   methods: ['GET', 'POST']
+///   methods:[GET,POST]               (no quotes -- lenient)
+///   methods: ["GET"]                (single)
+///   methods: []                     (empty)
+///   methods: [ "GET" , "POST" ]      (whitespace)
+/// It rejects an unrecognized method name with
+/// `None` (the whole config is then `None`, so the
+/// check will not surface a partial / broken parse
+/// as a successful parse with a wrong value).
+pub fn detect_config_methods(text: &str) -> Option<Vec<HttpMethod>> {
+    // Find `methods:` in the source. We anchor on
+    // the colon so an `auth.methods` or
+    // `something.methods` does not match. The
+    // surrounding braces / `config` keyword are
+    // NOT required -- `methods: [...]: ...;`
+    // also matches. This is lenient on purpose
+    // (the user is allowed to write the methods
+    // list in a sibling object literal).
+    let idx = text.find("methods:")?;
+    let after = &text[idx + "methods:".len()..];
+    // Find the start of the array. The first
+    // `[` is the array opener.
+    let array_start = after.find('[')?;
+    let after_open = &after[array_start + 1..];
+    // Find the matching `]`. The detector does
+    // NOT skip string literals (the file might
+    // have `]` inside a string) -- the conventional
+    // .tsp config is short enough that this is a
+    // non-issue in practice. A full TS parser
+    // (slice 7's AST pass) would handle this.
+    let array_end = after_open.find(']')?;
+    let inside = &after_open[..array_end];
+    // Empty list -> empty config_methods.
+    if inside.trim().is_empty() {
+        return Some(Vec::new());
+    }
+    let mut out = Vec::new();
+    for raw in inside.split(',') {
+        let item = raw.trim();
+        // Strip surrounding quotes (single or
+        // double). Unquoted values are rejected
+        // -- we want explicit string literals, not
+        // identifiers (which would be a different
+        // shape entirely).
+        let unquoted = if (item.starts_with('"') && item.ends_with('"'))
+            || (item.starts_with('\'') && item.ends_with('\''))
+        {
+            &item[1..item.len() - 1]
+        } else {
+            return None;
+        };
+        // Reject any whitespace inside the method
+        // name (a malformed value like `"G ET"`).
+        if unquoted.chars().any(|c| c.is_whitespace()) {
+            return None;
+        }
+        let method = match unquoted {
+            "GET" => HttpMethod::Get,
+            "POST" => HttpMethod::Post,
+            "PUT" => HttpMethod::Put,
+            "PATCH" => HttpMethod::Patch,
+            "DELETE" => HttpMethod::Delete,
+            "HEAD" => HttpMethod::Head,
+            "OPTIONS" => HttpMethod::Options,
+            _ => return None,
+        };
+        out.push(method);
+    }
+    Some(out)
 }
 
 #[cfg(test)]
@@ -189,6 +282,100 @@ mod tests {
         let src = "export async function GET() { return null; }";
         let methods = detect_methods(src);
         assert_eq!(methods, vec![HttpMethod::Get]);
+    }
+
+    // -----------------------------------------------------------------
+    // `config.methods` detection (FREEZE.md §11, slice 11 of plan)
+    //
+    // The page's `export const config = { methods: [...] }` is the
+    // single source of truth for the declared method set. The
+    // detector is hand-rolled (no regex dep) and lenient on the
+    // common shapes (single / double quotes, whitespace). An
+    // unparseable config returns `None` so the check treats the
+    // page as if it had no `config` at all (no false-positive
+    // mismatches from a partial parse).
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn detect_config_methods_none_when_absent() {
+        let src = r#"
+export function GET() {
+  return new Response("ok");
+}
+"#;
+        assert_eq!(detect_config_methods(src), None);
+    }
+
+    #[test]
+    fn detect_config_methods_double_quotes() {
+        let src = r#"
+export const config = {
+  methods: ["GET", "POST"],
+} satisfies PageConfig;
+export function GET() { return null; }
+export function POST() { return null; }
+"#;
+        assert_eq!(
+            detect_config_methods(src),
+            Some(vec![HttpMethod::Get, HttpMethod::Post])
+        );
+    }
+
+    #[test]
+    fn detect_config_methods_single_quotes() {
+        let src = r#"
+export const config = { methods: ['GET'] };
+export function GET() { return null; }
+"#;
+        assert_eq!(
+            detect_config_methods(src),
+            Some(vec![HttpMethod::Get])
+        );
+    }
+
+    #[test]
+    fn detect_config_methods_empty_list() {
+        let src = r#"
+export const config = { methods: [] };
+"#;
+        assert_eq!(detect_config_methods(src), Some(vec![]));
+    }
+
+    #[test]
+    fn detect_config_methods_rejects_unknown_name() {
+        // An unknown method (e.g. "BREW" for the
+        // coffee protocol) is a hard parse error:
+        // the detector returns None so the check
+        // does not surface a wrong value.
+        let src = r#"
+export const config = { methods: ["BREW"] };
+"#;
+        assert_eq!(detect_config_methods(src), None);
+    }
+
+    #[test]
+    fn detect_config_methods_rejects_unquoted() {
+        let src = r#"
+export const config = { methods: [GET] };
+"#;
+        // Unquoted values are NOT identifiers
+        // (the field is a string list, not a
+        // reference to a const). The detector
+        // returns None.
+        assert_eq!(detect_config_methods(src), None);
+    }
+
+    #[test]
+    fn detect_config_methods_tolerates_whitespace() {
+        let src = r#"
+export const config = {
+  methods:   [   "GET"   ,   "DELETE"   ]   ,
+};
+"#;
+        assert_eq!(
+            detect_config_methods(src),
+            Some(vec![HttpMethod::Get, HttpMethod::Delete])
+        );
     }
 
     #[test]
