@@ -2716,3 +2716,102 @@ on the OS's TIME_WAIT state for the previous test's port)
 and is unrelated to this slice. A future test-infra pass
 should switch each test to a unique port base; this slice
 does not change that pattern.
+
+## Session update (2026-08-28) -- `TSP3001` typed error for invalid handler return (spec §6.3 / plan §10.4)
+
+One more slice lands to close out the FREEZE item 5
+contract for handler return values. The themes:
+aligning the wrap-side error with the spec's
+`TSP3001` wording, and distinguishing top-level
+contract violations from nested JSX-child errors.
+
+- **`TSP3001: handler returned unsupported value
+  <Type>. Expected HtmlNode or Response.`** (spec §6.3
+  / plan §10.4 / FREEZE item 5). A handler's return
+  value MUST be one of: an `HtmlNode` (the TSP JSX
+  runtime's opaque element) or a standard `Response`
+  object. The pre-slice wrap threw a generic JS error
+  ("page returned invalid value (expected string or
+  Response, got X)") for non-`Response` non-`string`
+  returns, and the JSX rendering layer threw a
+  `TSP3102` ("object cannot be rendered as an HTML
+  child") when it tried to treat the plain object as
+  a JSX element. Neither matched the spec's `TSP3001`
+  wording. The slice changes the
+  `__tspRenderNode__` JS-side helper to branch on the
+  `__child__` flag:
+    * `__child__ === false` (top-level call from the
+      wrap): throw `TSP3001: handler returned
+      unsupported value <Type>. Expected HtmlNode or
+      Response.` (matching plan §10.4 verbatim). The
+      type name is capitalized to match the plan's
+      "Object" / "Number" / etc. wording.
+    * `__child__ === true` (recursive call from
+      inside a JSX rendering): throw the existing
+      `TSP3102` (the JSX rendering error stays scoped
+      to JSX-internal mistakes).
+  This is the minimum change that surfaces the
+  spec's `TSP3001` for top-level contract violations
+  while preserving the `TSP3102` for nested JSX
+  child errors (which are a different class of
+  mistake). The wrap's earlier "instanceof Response"
+  / "typeof string" / else branch (the same file,
+  later in the wrap) is kept and now uses the same
+  `TSP3001` wording for the rare case where
+  `__tspRenderNode__` is bypassed.
+
+  1 new unit test
+  (`wrap_invalid_return_value_uses_tsp3001_prefix`)
+  exercises a `return 42` page and asserts the wrap
+  contains the `TSP3001:` prefix and the capitalized
+  type name (`Number`). The pre-existing
+  `wrap_envelope_inspects_response_and_string` test
+  is updated to assert on the new prefix.
+
+  1 new e2e
+  (`handler_returned_unsupported_value_surfaces_tsp3001`)
+  boots the real binary, hits four pages that return
+  each of the four forbidden shapes (`{redirect: ...}`,
+  `42`, `true`, `undefined`), and pins for each:
+    - the response is 500
+    - the body contains the `TSP3001:` prefix
+    - the body names the invalid type (`Object` /
+      `Number` / `Boolean` / `Undefined`)
+
+  The slice is wrap-side only. The host's existing
+  500 path for `x-tsp-error: page` (the wrap's
+  standard "I threw" signal) carries the new message
+  to the client verbatim. No host-side changes
+  needed.
+
+- **Verification:** all lib + e2e tests green
+  (modulo the pre-existing port-collision flake).
+  1 new commit on the parent tsp repo this
+  session:
+  `09e113d602`.
+
+### Summary across the day
+
+- 8 slices / doc updates landed on the parent
+  `D:/GitHub/tsp` repo:
+    * 1 morning HTTP-hardening + tooling +
+      PageConfig.methods batch (6 commits, 279 -> 302 tests)
+    * 1 first afternoon PageConfig + check batch
+      (3 commits, 302 -> 332 tests)
+    * 1 second afternoon check + PageConfig batch
+      (3 commits, 332 -> 322...330? tests; the
+      2nd batch was the v2.0 core PageConfig close-out)
+    * 1 third afternoon TSP3001 slice
+      (1 commit, +1 unit +1 e2e)
+  + 2 progress.md updates + 1 spec-freeze-style
+  internal doc close-out.
+- v2.0 core PageConfig is COMPLETE (spec §7):
+  `bodyLimit`, `cache`, `methods`, `timeoutMs` all
+  pinned by unit tests + e2e.
+- All three spec §46 export-validation items are
+  pinned at the check-time level
+  (`config.methods` mismatch, unknown runtime
+  exports, `export default` violation).
+- The `TSP3001` typed error for invalid handler
+  return is now wired through the wrap. The
+  spec/plan wording is used verbatim.
