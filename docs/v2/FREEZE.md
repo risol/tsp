@@ -1837,3 +1837,135 @@ added to the existing dev_error_page e2e). The 4
 unchanged test buckets all still pass against the
 unchanged wrap, the unchanged worker, and the
 unchanged production binary.
+
+### Amendment 10 (2026-08-28) — `/__tsp/metrics` e2e pin + `tsc check`
+
+Two new tooling surfaces ship together:
+
+**1. `/__tsp/metrics` endpoint contract
+(host.rs:1517-1532).** The closure-hardening
+metrics surface (closure item, recorded in
+`progress.md` §"Session update (2026-08-25)")
+was always exposed at `GET /__tsp/metrics`
+returning `200 OK` + `text/plain;
+version=0.0.4; charset=utf-8` + a Prometheus
+text-format body. It was not e2e-pinned. The
+new e2e
+(`metrics_endpoint_serves_prometheus_text_after_priming_requests`)
+boots the real binary, primes the counters with
+a 200 + 404, then hits `/__tsp/metrics` and
+asserts:
+
+  - the response shape (status + content-type
+    + 10 metric names each with `# HELP` and
+    `# TYPE` preamble);
+  - the **snapshot semantics** of the body:
+    `prometheus()` runs AFTER the metrics
+    call's own `record_request()` (so
+    `requests_total` and `active_requests`
+    include the call) but BEFORE its own
+    `record_response()` + `record_duration()`
+    (so `2xx_total`, `duration_count`, and the
+    `active` decrement do NOT yet reflect the
+    call). A second hit on the same binary
+    sees the first call's contributions, which
+    pins the order. A regression that swaps
+    those phases would break the test.
+
+  The contract application code may rely on:
+
+  - `GET /__tsp/metrics` returns 200 with a
+    Prometheus body covering 10 metric names
+    (`tsp_requests_total`, `tsp_active_requests`,
+    `tsp_request_duration_ms_sum`,
+    `tsp_request_duration_ms_count`,
+    `tsp_responses_{2,4,5}xx_total`,
+    `tsp_request_timeouts_total`,
+    `tsp_request_cancellations_total`,
+    `tsp_reload_total`).
+  - The body is a snapshot of the host's
+    `metrics::global()` at the moment of the
+    metrics call, BEFORE the call's own
+    `record_response` + `record_duration`
+    fire. Operators that scrape `/__tsp/metrics`
+    should treat the body as "state as of the
+    scrape started" (so `requests_total`
+    always shows 1 more than `2xx+4xx+5xx`,
+    and `duration_count` is one less than
+    `requests_total` until the scrape
+    completes).
+  - The endpoint is the ONLY path matched
+    before the page router. It is dispatched
+    in `host.rs` directly, not through the
+    `PageRegistry`, so a route file at
+    `routes/__tsp/metrics.tsp` does not
+    shadow it.
+
+**2. `tspserver_v2 check --tsc` (Phase 11
+close).** The `check` subcommand historically
+did only the regex-based static-export
+detection + the module-graph build. The new
+`--tsc` flag adds a real `tsc --noEmit` pass:
+
+  - Walks the routes dir recursively, copying
+    `.tsp` to `.tsx` and `.ts` helpers
+    verbatim into a temp tree.
+  - Copies the three bundled declaration files
+    from `.tsp-types/` (the `tspserver_v2
+    typings` default) or `tsp-types/` (the
+    repo's location) into the temp tree.
+    The bin probes CWD and the parent of the
+    routes root, in that order.
+  - Writes a `tsconfig.json` that maps
+    `tsp:server` / `tsp:html` / `tsp:runtime`
+    to the three declarations via `paths`,
+    with `skipLibCheck: true` (the hand-rolled
+    d.ts shape is the contract, not a bug) and
+    `strict: false` (the runtime is not strict,
+    so the check is not either).
+  - Locates a `tsc` binary: CWD
+    `node_modules/.bin/tsc{.cmd,}` first, then
+    `tsc` on PATH.
+  - Invokes `tsc --noEmit --project <tsconfig>`
+    and forwards stdout / stderr to the user
+    verbatim.
+
+  The check is opt-in: the default
+  `tspserver_v2 check` continues to do the
+  original regex scan + graph build, so
+  existing workflows are unaffected.
+  `--tsc` returns 0 if tsc exits 0, 1
+  otherwise.
+
+  E2E
+  (`check_with_tsc_flag_catches_user_type_errors_and_passes_clean_routes`):
+  Round 1 (clean route) exits 0 and prints
+  "OK tsc: 0 error(s)". Round 2 (broken
+  route) exits 1 with a TS2353 diagnostic for
+  a property the d.ts does not allow (e.g.
+  `cost` on `util.password.hash` options --
+  the d.ts only allows `algorithm`; bun's
+  native password API silently drops unknown
+  options at runtime, so the check is the
+  only place the type error is visible).
+
+  The contract application code may rely on:
+
+  - `tspserver_v2 check --tsc` returns 0 when
+    the routes type-check cleanly against the
+    bundled `tsp:*` declaration files; 1 if
+    tsc reports any error.
+  - The user's project must have a `tsc`
+    binary either in the local
+    `node_modules/.bin/` or on `PATH`.
+  - The bundled declaration files are
+    required; run `tspserver_v2 typings --out
+    .tsp-types` first if the project does not
+    have them.
+
+**Verification.** 21 e2e (start_order.rs),
+221 lib, 4 worker_integration, 15
+process_model = 261 tests, all green. The 2
+new amendments net 1 e2e (the metrics pin;
+the tsc check is a new flag on the existing
+check subcommand) and 0 lib changes.
