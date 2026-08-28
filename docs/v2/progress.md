@@ -2599,3 +2599,120 @@ The new unit tests (20):
   parent tsp repo this session (post the morning's
   HTTP-hardening + PageConfig.methods batch):
   `f7ddf13d95` -> `156aac5c29` -> `2a89f30038`.
+
+## Session update (2026-08-28) -- three more PageConfig / check-validation slices
+
+Two more slices land after the morning/afternoon's first
+batch. The themes: closing out the v2.0 core PageConfig
+surface (spec §7) and the spec §46 export-validation
+checks. The total over the day: 279 -> 332 tests, 32 ->
+37 e2e, 235 -> 264 lib, 3 new commits on the parent
+repo.
+
+- **`check` reports `export default` violations** (spec
+  §46, spec §67.4). A `.tsp` file may only export the
+  named HTTP method handlers + the optional
+  `const config = { ... }`; a top-level
+  `export default ...` is silently ignored at runtime
+  (the page registry reads only the named HTTP method
+  exports and the `config` const). The slice surfaces
+  default exports at check time so the user gets a clear
+  message rather than a silent no-op. The
+  `detect_default_export` parser is hand-rolled
+  (~30 lines) and follows the same line-start rules
+  as the other PageConfig detectors (sync / async,
+  indented, with comment lines skipped). Catches the
+  seven common shapes:
+    * `export default foo;`
+    * `export default { ... };`
+    * `export default function() {}`
+    * `export default async function() {}`
+    * `export default () => {}`
+    * `export default async () => {}`
+    * `export default class {}`
+  Anchored on `export default ` (with the trailing
+  space) so `export { default: ... }` (a named
+  re-export of a `default` member) is correctly NOT
+  matched. 9 new unit tests cover the parser, 1 new
+  e2e covers the end-to-end check-time reporting. The
+  `{` and `}` in the help text and the error message
+  are escaped as `{{` / `}}` to avoid Rust treating
+  them as format-string placeholders.
+
+- **`config.timeoutMs` per-page request timeout**
+  (spec §7 v2.0 core PageConfig). A page may declare
+  `config.timeoutMs: N` (milliseconds). The per-page
+  value OVERRIDES the global `TSP_TIMEOUT_MS` for
+  that one request. `0` means "no timeout" (the
+  per-request abort signal is still created and wired
+  in the wrap preamble, but the watchdog never
+  fires) -- same as the global `0`. The per-page
+  value is NOT silently clamped to the global; the
+  page is the authority on its own timeout budget.
+  The watchdog implementation in `worker/manager.rs`
+  already supports per-request `timeout_ms`; this
+  slice just resolves the effective timeout from the
+  page's config and threads it through. The
+  `detect_config_timeout_ms` parser follows the same
+  line-shape rules as `detect_config_body_limit`
+  (simple int, underscore separator, small
+  expression form, `0` for "no timeout"). 7 new
+  unit tests cover the parser, 1 new e2e covers the
+  3 contract scenarios: (1) per-page timeout fires
+  (504), (2) no per-page value uses the global
+  default (200), (3) per-page `0` disables the
+  watchdog (200).
+
+  The e2e uses `await Bun.sleep(N)` to make the page
+  take longer than the per-page timeout. The 504
+  comes from the existing watchdog
+  (`worker/manager.rs::execute_with_timeout`) and the
+  existing 504 path in `host.rs` -- no new status
+  codes.
+
+The new e2e (2 tests):
+  - `check_reports_default_export_violation`
+  - `config_timeout_ms_overrides_global_request_timeout`
+
+The new unit tests (16):
+  - 9 in `page::tests` for `detect_default_export`
+  - 7 in `page::tests` for `detect_config_timeout_ms`
+
+- **Verification:** 332 tests green (264 lib + 4
+  worker_integration + 15 process_model + 37
+  start_order e2e). 3 new git commits on the
+  parent tsp repo this session (post the morning's
+  HTTP-hardening + PageConfig.methods batch, in
+  addition to the first 3-slice batch):
+  `347f906f65` -> `20cffb3917` (the third
+  commit is the progress doc itself).
+
+- **v2.0 core PageConfig is now complete** (spec §7):
+    * `bodyLimit` (commit `f7ddf13d95`)
+    * `cache` (plan §55, commit `156aac5c29`)
+    * `methods` declared, validated against exports
+      (previous session, commit `654e2f4a7c`)
+    * `timeoutMs` (commit `20cffb3917`)
+  `auth` is explicitly deferred (FREEZE §11: "the
+  page config cannot raise the ceiling" is the
+  only auth-related rule; the full `auth` policy
+  lands with the auth service hooks in slice 9+).
+  All three spec §46 export-validation items
+  implemented at the check-time level (full
+  generation-build enforcement lands with the AST
+  detector in a future slice):
+    * `config.methods` mismatch
+    * unknown runtime exports
+    * `export default` violation
+
+### Known flake (still present)
+
+The pre-existing `multi_route_dispatch_does_not_alias_to_first_request`
+e2e and the `metrics_endpoint_serves_prometheus_text_after_priming_requests`
+e2e both base their port on `30_000 + pid%500/1000`, so the
+two tests can collide on a single port and the second one
+fails to bind. The collision is intermittent (it depends
+on the OS's TIME_WAIT state for the previous test's port)
+and is unrelated to this slice. A future test-infra pass
+should switch each test to a unique port base; this slice
+does not change that pattern.
