@@ -89,6 +89,27 @@ pub struct PageSource {
     /// build-time failure) lands with the AST
     /// detector in a future slice.
     pub unknown_exports: Vec<String>,
+    /// True if the file has a top-level
+    /// `export default` statement. Per spec
+    /// §46 ("no `default` export" in the
+    /// export validation list) and spec §67.4
+    /// (a Phase 0.5 candidate: a default
+    /// export is currently a silent
+    /// no-op at runtime, because the page
+    /// registry's `load_entry_point` reads
+    /// only the named HTTP method exports
+    /// and the `config` const). The check
+    /// subcommand reports this as an ERROR
+    /// so the user gets a clear message at
+    /// check time rather than a silent
+    /// ignore. The detector follows the
+    /// same line-start rules as the other
+    /// PageConfig detectors in this module
+    /// (line-trim, skip comments). The AST
+    /// detector that catches the rarer
+    /// multi-line `export\ndefault` shape
+    /// is deferred.
+    pub has_default_export: bool,
 }
 
 /// `config.cache` policy values. The wire form
@@ -170,6 +191,7 @@ pub fn prepare(route: &Route) -> Result<PageSource, PrepareError> {
     let config_body_limit = detect_config_body_limit(&text);
     let config_cache = detect_config_cache(&text);
     let unknown_exports = detect_unknown_exports(&text);
+    let has_default_export = detect_default_export(&text);
     Ok(PageSource {
         text,
         byte_len,
@@ -178,6 +200,7 @@ pub fn prepare(route: &Route) -> Result<PageSource, PrepareError> {
         config_body_limit,
         config_cache,
         unknown_exports,
+        has_default_export,
     })
 }
 
@@ -284,6 +307,49 @@ pub fn detect_unknown_exports(text: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// Detect a top-level `export default` statement
+/// in a .tsp file (spec §46 "no `default` export",
+/// spec §67.4). The page registry reads only the
+/// named HTTP method exports and the `config` const;
+/// a default export is silently ignored at runtime
+/// today. The check subcommand surfaces it so the
+/// user gets a clear message at check time.
+///
+/// The detector follows the same line-start rules
+/// as the other PageConfig detectors in this module
+/// (line-trim, skip comments). The hand-rolled
+/// detector catches the common shapes:
+///   `export default foo;`
+///   `export default { ... };`
+///   `export default function() {}`
+///   `export default async function() {}`
+///   `export default class {}`
+///   `export default () => {}`
+///   `export default async () => {}`
+/// The rare multi-line `export\ndefault` shape
+/// (no space, on a new line) is missed; the AST
+/// detector that catches it is deferred.
+pub fn detect_default_export(text: &str) -> bool {
+    text.lines().any(|line| {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") || trimmed.starts_with("/*") {
+            return false;
+        }
+        // Anchor on `export default` (single
+        // space) so `export { default: ... }`
+        // and `export_default` (a name) do
+        // not match. The space after
+        // `default` is the optional
+        // separator before the exported
+        // value (which can be a name, a
+        // function, a class, an object, or
+        // an arrow function).
+        trimmed.starts_with("export default ")
+            || trimmed == "export default"
+            || trimmed.starts_with("export default{")
+    })
 }
 
 /// Detect `config.methods` in a .tsp file (FREEZE.md
@@ -953,6 +1019,117 @@ export async function helper() { return 1; }
 "#;
         let unknowns = detect_unknown_exports(src);
         assert_eq!(unknowns, vec!["helper".to_string()]);
+    }
+
+    #[test]
+    fn detect_default_export_none_when_absent() {
+        // A page that only uses named exports
+        // has no default export (spec §46).
+        let src = r#"
+export function GET() { return new Response("ok"); }
+export const config = { cache: "no-store" } satisfies PageConfig;
+"#;
+        assert!(!detect_default_export(src));
+    }
+
+    #[test]
+    fn detect_default_export_finds_named_form() {
+        // `export default foo;` is the
+        // simplest default-export shape.
+        let src = r#"
+const foo = { route: "/foo" };
+export default foo;
+export function GET() { return new Response("ok"); }
+"#;
+        assert!(detect_default_export(src));
+    }
+
+    #[test]
+    fn detect_default_export_finds_anonymous_object() {
+        // `export default { ... };` (no
+        // local name) is also a default
+        // export and must be flagged.
+        let src = r#"
+export default { route: "/foo" };
+export function GET() { return new Response("ok"); }
+"#;
+        assert!(detect_default_export(src));
+    }
+
+    #[test]
+    fn detect_default_export_finds_function_form() {
+        // `export default function() {}` and
+        // `export default async function() {}`
+        // are also default exports.
+        let src_sync = r#"
+export default function() { return 1; }
+export function GET() { return new Response("ok"); }
+"#;
+        assert!(detect_default_export(src_sync));
+        let src_async = r#"
+export default async function() { return 1; }
+export function GET() { return new Response("ok"); }
+"#;
+        assert!(detect_default_export(src_async));
+    }
+
+    #[test]
+    fn detect_default_export_finds_arrow_form() {
+        // `export default () => {}` and
+        // `export default async () => {}`
+        // are also default exports.
+        let src = r#"
+export default async () => 1;
+export function GET() { return new Response("ok"); }
+"#;
+        assert!(detect_default_export(src));
+    }
+
+    #[test]
+    fn detect_default_export_finds_class_form() {
+        // `export default class {}` is also
+        // a default export.
+        let src = r#"
+export default class Foo {}
+export function GET() { return new Response("ok"); }
+"#;
+        assert!(detect_default_export(src));
+    }
+
+    #[test]
+    fn detect_default_export_skips_comment_lines() {
+        // `// export default foo;` is a
+        // comment, not a real export.
+        let src = r#"
+// export default foo;
+export function GET() { return new Response("ok"); }
+"#;
+        assert!(!detect_default_export(src));
+    }
+
+    #[test]
+    fn detect_default_export_handles_indented_default() {
+        // Indentation is allowed (the
+        // detector trims line start).
+        let src = r#"
+    export default foo;
+export function GET() { return new Response("ok"); }
+"#;
+        assert!(detect_default_export(src));
+    }
+
+    #[test]
+    fn detect_default_export_ignores_unrelated_export_default_member() {
+        // `export { default: ... }` is a
+        // named re-export of a `default`
+        // member, NOT a default export.
+        // The line-start anchor rejects it.
+        let src = r#"
+const x = { default: 1 };
+export { x };
+export function GET() { return new Response("ok"); }
+"#;
+        assert!(!detect_default_export(src));
     }
 
     #[test]

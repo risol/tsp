@@ -5825,6 +5825,120 @@ export function another_helper() { return 2; }
 }
 
 // ---------------------------------------------------------------------------
+// Spec §46: "no `default` export" (spec §67.4).
+//
+// A `.tsp` file may only export the named HTTP
+// method handlers and (optionally) a
+// `const config = { ... }`. A top-level
+// `export default ...` is silently ignored at
+// runtime (the page registry reads only the
+// named HTTP method exports and the `config`
+// const). The slice surfaces default exports
+// at check time so the user gets a clear
+// message rather than a silent no-op.
+//
+// The e2e runs `check` against a routes dir
+// with two files:
+//   (1) `clean.tsp` -- only named exports.
+//       `check` must NOT report a default-
+//       export error for it.
+//   (2) `with_default.tsp` -- has
+//       `export default foo;`. `check` MUST
+//       report the violation and exit 1.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn check_reports_default_export_violation() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-default-export-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+
+    std::fs::write(
+        routes_dir.join("clean.tsp"),
+        r#"
+export function GET() { return new Response("ok"); }
+export const config = { cache: "no-store" } satisfies PageConfig;
+"#,
+    )
+    .expect("clean.tsp");
+
+    std::fs::write(
+        routes_dir.join("with_default.tsp"),
+        r#"
+const foo = { route: "/foo" };
+// `export default foo;` is forbidden by
+// spec §46 ("no `default` export"). The
+// page registry reads only the named HTTP
+// method exports and the `config` const;
+// a default export is silently ignored at
+// runtime. `check` surfaces it so the user
+// gets a clear message at check time.
+export default foo;
+export function GET() { return new Response("ok"); }
+"#,
+    )
+    .expect("with_default.tsp");
+
+    let output = std::process::Command::new(master)
+        .arg("check")
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .current_dir(std::path::Path::new("D:/GitHub/tsp"))
+        .output()
+        .expect("check spawn");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // (1) clean.tsp: OK, no default-export error
+    assert!(
+        stdout.contains("OK /clean [GET]"),
+        "clean.tsp must report OK [GET]; stdout: {stdout:?}"
+    );
+    assert!(
+        !stderr.contains("clean.tsp"),
+        "clean.tsp must NOT report a default-export error; stderr: {stderr:?}"
+    );
+
+    // (2) with_default.tsp: ERROR naming the
+    // source file and citing spec §46.
+    assert!(
+        stderr.contains("`export default` is not allowed"),
+        "with_default.tsp must surface the default-export violation; stderr: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("with_default.tsp"),
+        "default-export error must name the source file; stderr: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("spec §46"),
+        "default-export error must cite spec §46; stderr: {stderr:?}"
+    );
+
+    // Exit code: must be 1 (the default-export
+    // violation surfaces as a non-zero exit,
+    // like other `check` errors).
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "check must exit 1 when a default-export violation is found; \
+         stdout: {stdout:?}\nstderr: {stderr:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+// ---------------------------------------------------------------------------
 // `config.bodyLimit` per-page cap (FREEZE.md §11, slice 11)
 //
 // A page may declare `config.bodyLimit: N` (bytes).

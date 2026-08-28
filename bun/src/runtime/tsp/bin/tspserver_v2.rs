@@ -532,7 +532,10 @@ fn run_check() -> ExitCode {
                  `export function NAME(...)` whose name is not a\n\
                  standard HTTP method handler as an unknown runtime\n\
                  export (spec §46); a clean run must have no such\n\
-                 exports.\n\n\
+                 exports. Also reports any top-level `export default`\n\
+                 as a `default export` violation (spec §46); a `.tsp`\n\
+                 file's exports must be the named HTTP method handlers\n\
+                 and (optionally) a `const config = {{ ... }}`.\n\n\
                  --tsc        additionally run `tsc --noEmit` against the\n\
                               routes (after rewriting `.tsp` to `.tsx`)\n\
                               and the bundled `tsp:*` declaration files.\n\
@@ -623,6 +626,28 @@ fn run_check() -> ExitCode {
                          allowed as top-level `export function` calls",
                         route.source.display(),
                         page.unknown_exports,
+                    );
+                }
+                // Spec §46: "no `default`
+                // export". The page registry
+                // reads only the named HTTP
+                // method exports and the
+                // `config` const; a default
+                // export is silently ignored
+                // at runtime. The check
+                // surfaces it so the user gets
+                // a clear message at check
+                // time rather than a silent
+                // no-op.
+                if page.has_default_export {
+                    failed = true;
+                    eprintln!(
+                        "ERROR {}: `export default` is not allowed \
+                         (spec §46 \"no `default` export\"); \
+                         a `.tsp` file's exports must be the named \
+                         HTTP method handlers and (optionally) a \
+                         `const config = {{ ... }}`",
+                        route.source.display(),
                     );
                 }
                 println!(
