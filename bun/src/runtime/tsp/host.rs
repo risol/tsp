@@ -1773,6 +1773,27 @@ fn handle_connection(
                 }
                 _ => std::collections::HashMap::new(),
             };
+            // `config.cache` (plan §55, FREEZE.md §11):
+            // a page may declare a default
+            // `Cache-Control` header. Resolved
+            // here so the inner dispatch arm
+            // can inject the default into the
+            // response headers ONLY when the
+            // page's `Response` did not set one
+            // itself (the page is more specific
+            // than the page-level default). The
+            // value is the FREEZE.md §11 literal
+            // (`no-store` / `private` / `public`).
+            // The detector in `page.rs` is
+            // hand-rolled and tolerates single /
+            // double quotes + whitespace.
+            let default_cache_control: Option<&'static str> = match &matched {
+                MatchResult::Found { route, .. }
+                | MatchResult::FoundHeadOverGet { route } => crate::page::prepare(route)
+                    .ok()
+                    .and_then(|p| p.config_cache.map(|c| c.header_value())),
+                _ => None,
+            };
             // Slice 16k: resolve the request's session
             // view (spec sect.16) against the runtime
             // SessionService. `None` cookie -> fresh
@@ -1974,6 +1995,29 @@ fn handle_connection(
                             outcome.headers.clone(),
                         )
                     };
+                    // `config.cache` (plan §55, FREEZE.md §11):
+                    // inject the page-level default
+                    // `Cache-Control` header into the
+                    // response ONLY when the page's
+                    // `Response` did not set one itself
+                    // (the page is more specific than
+                    // the page-level default; a page
+                    // that needs a custom value can
+                    // set its own). The injection
+                    // happens here (after the
+                    // x-tsp-error filter) so the page's
+                    // explicit header -- if any --
+                    // always wins.
+                    let mut headers = headers;
+                    if let Some(cc) = default_cache_control {
+                        if !headers
+                            .iter()
+                            .any(|(k, _)| k.eq_ignore_ascii_case("cache-control"))
+                        {
+                            headers
+                                .push(("Cache-Control".to_string(), cc.to_string()));
+                        }
+                    }
                     // For explicit HEAD requests, the
                     // page's HEAD handler produced a
                     // body that is dropped at the wire.

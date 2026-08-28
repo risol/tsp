@@ -51,6 +51,51 @@ pub struct PageSource {
     /// larger value falls back to the global at
     /// runtime.
     pub config_body_limit: Option<usize>,
+    /// `config.cache` if the page declared one
+    /// (plan §55, FREEZE.md §11). The runtime
+    /// applies this AFTER route matching: the
+    /// declared value is used as a default
+    /// `Cache-Control` header on the response,
+    /// but the page's own `Response.headers` set
+    /// of `Cache-Control` always wins (the page
+    /// is more specific than the page-level
+    /// default). The supported values are the
+    /// three FREEZE.md §11 literals:
+    ///   "no-store" -> `Cache-Control: no-store`
+    ///   "private"  -> `Cache-Control: private`
+    ///   "public"   -> `Cache-Control: public`
+    /// Anything else is unparseable (returns
+    /// `None` so `tspserver_v2 check` does not
+    /// surface a wrong value as a successful
+    /// parse).
+    pub config_cache: Option<CachePolicy>,
+}
+
+/// `config.cache` policy values. The wire form
+/// is the value the user wrote in
+/// `export const config = { cache: "..." }`; the
+/// `header_value` is the `Cache-Control` header
+/// line the host applies when the page's
+/// `Response` did not set one itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CachePolicy {
+    NoStore,
+    Private,
+    Public,
+}
+
+impl CachePolicy {
+    /// `Cache-Control` header value for this policy.
+    /// Kept as `&'static str` so the host can push
+    /// the literal directly into the response header
+    /// block without allocating.
+    pub fn header_value(self) -> &'static str {
+        match self {
+            CachePolicy::NoStore => "no-store",
+            CachePolicy::Private => "private",
+            CachePolicy::Public => "public",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -103,12 +148,14 @@ pub fn prepare(route: &Route) -> Result<PageSource, PrepareError> {
     let methods = detect_methods(&text);
     let config_methods = detect_config_methods(&text);
     let config_body_limit = detect_config_body_limit(&text);
+    let config_cache = detect_config_cache(&text);
     Ok(PageSource {
         text,
         byte_len,
         methods,
         config_methods,
         config_body_limit,
+        config_cache,
     })
 }
 
@@ -292,6 +339,91 @@ pub fn detect_config_body_limit(text: &str) -> Option<usize> {
         };
     }
     Some(product)
+}
+
+/// Detect `config.cache` in a .tsp file
+/// (FREEZE.md §11, plan §55). The page's
+/// `export const config = { cache: "..." }` is
+/// a single string literal; the runtime maps it
+/// to a `Cache-Control` header value used as a
+/// default when the page's `Response.headers`
+/// did not set one. Returns `None` when the
+/// page did not declare a value OR the value is
+/// not one of the three FREEZE.md §11 literals
+/// (so `tspserver_v2 check` does not surface a
+/// wrong value as a successful parse).
+///
+/// The detector is hand-rolled (no regex dep)
+/// and tolerates the common shapes:
+///   cache: "no-store"
+///   cache: 'public'
+///   cache:   "private"
+///   "cache": "public"
+/// It rejects unknown strings, numbers, and
+/// expressions -- those would not be a valid
+/// `CachePolicy` at the wire anyway.
+pub fn detect_config_cache(text: &str) -> Option<CachePolicy> {
+    // Find the `cache` key. Three shapes are
+    // accepted:
+    //   cache:  "..."   (unquoted key)
+    //   "cache": "..."  (double-quoted key)
+    //   'cache': "..."  (single-quoted key)
+    // We locate the first `cache` substring and
+    // then walk forward to the `:` -- accepting
+    // an optional quote + whitespace between
+    // `cache` and `:`. The first such `cache`
+    // in a config block is the binding the
+    // runtime cares about; the parser does not
+    // try to skip unrelated `cache` substrings
+    // (e.g. inside a comment) because the
+    // hand-rolled detector follows the same
+    // simple line-shape rule as the other
+    // PageConfig detectors in this module.
+    let idx = text.find("cache")?;
+    let after_key = &text[idx + "cache".len()..];
+    // Optional closing quote + whitespace, then `:`.
+    let mut i = 0;
+    if after_key.starts_with('"') || after_key.starts_with('\'') {
+        i += 1;
+    }
+    while i < after_key.len() && after_key.as_bytes()[i] == b' ' {
+        i += 1;
+    }
+    if after_key.as_bytes().get(i) != Some(&b':') {
+        // Not a `cache:` key (could be
+        // `cache = ...` or `cached: ...`);
+        // reject.
+        return None;
+    }
+    let after = &after_key[i + 1..];
+    // Skip the optional value body up to the
+    // next `,` or `}` or newline. We allow the
+    // value to be a single string literal (with
+    // single or double quotes).
+    let end = after
+        .find(|c: char| c == ',' || c == '}' || c == '\n')
+        .unwrap_or(after.len());
+    let raw = after[..end].trim();
+    // Strip surrounding quotes (single / double).
+    let stripped = if (raw.starts_with('"') && raw.ends_with('"') && raw.len() >= 2)
+        || (raw.starts_with('\'') && raw.ends_with('\'') && raw.len() >= 2)
+    {
+        &raw[1..raw.len() - 1]
+    } else {
+        // Not a string literal: cannot be a
+        // valid `CachePolicy` (numbers /
+        // expressions are out of scope).
+        return None;
+    };
+    match stripped {
+        "no-store" => Some(CachePolicy::NoStore),
+        "private" => Some(CachePolicy::Private),
+        "public" => Some(CachePolicy::Public),
+        // Unknown string: rejected so the
+        // check-time surface does not
+        // silently accept it.
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -540,6 +672,86 @@ export const config = { bodyLimit: Infinity };
 export const config = { bodyLimit: -1 };
 "#;
         assert_eq!(detect_config_body_limit(src), None);
+    }
+
+    #[test]
+    fn detect_config_cache_none_when_absent() {
+        let src = r#"
+export function GET() { return new Response("ok"); }
+"#;
+        assert_eq!(detect_config_cache(src), None);
+    }
+
+    #[test]
+    fn detect_config_cache_no_store() {
+        let src = r#"
+export const config = { cache: "no-store" } satisfies PageConfig;
+export function GET() { return new Response("ok"); }
+"#;
+        assert_eq!(detect_config_cache(src), Some(CachePolicy::NoStore));
+    }
+
+    #[test]
+    fn detect_config_cache_private_and_public() {
+        let src_priv = r#"
+export const config = { cache: "private" };
+"#;
+        assert_eq!(detect_config_cache(src_priv), Some(CachePolicy::Private));
+        let src_pub = r#"
+export const config = { cache: 'public' };
+"#;
+        // Single quotes are accepted
+        // (config values can be either quoted).
+        assert_eq!(detect_config_cache(src_pub), Some(CachePolicy::Public));
+    }
+
+    #[test]
+    fn detect_config_cache_tolerates_whitespace_and_quoted_key() {
+        // The `"cache":` (quoted-key) shape and
+        // extra whitespace between `cache:` and
+        // the value both work.
+        let src = r#"
+export const config = {   "cache"   :     "no-store"   };
+"#;
+        assert_eq!(detect_config_cache(src), Some(CachePolicy::NoStore));
+    }
+
+    #[test]
+    fn detect_config_cache_rejects_unknown_value() {
+        // "max-age=60" is a valid Cache-Control
+        // directive but NOT one of the three
+        // FREEZE.md §11 cache policies. The
+        // detector surfaces it as None so
+        // `tspserver_v2 check` does not
+        // silently accept a value the runtime
+        // cannot map to a default header.
+        let src = r#"
+export const config = { cache: "max-age=60" };
+"#;
+        assert_eq!(detect_config_cache(src), None);
+    }
+
+    #[test]
+    fn detect_config_cache_rejects_unquoted() {
+        // Unquoted identifiers are not valid
+        // string literals; the runtime does
+        // not parse them.
+        let src = r#"
+export const config = { cache: no_store };
+"#;
+        assert_eq!(detect_config_cache(src), None);
+    }
+
+    #[test]
+    fn cache_policy_header_value_maps_to_freeze_literals() {
+        // The header value is exactly the
+        // FREEZE.md §11 literal so a user who
+        // reads the spec sees the same string
+        // on the wire that they wrote in
+        // `config`.
+        assert_eq!(CachePolicy::NoStore.header_value(), "no-store");
+        assert_eq!(CachePolicy::Private.header_value(), "private");
+        assert_eq!(CachePolicy::Public.header_value(), "public");
     }
 
     #[test]

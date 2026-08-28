@@ -5855,3 +5855,216 @@ fn config_body_limit_enforces_per_page_cap() {
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&temp_root);
 }
+
+// ---------------------------------------------------------------------------
+// `config.cache` per-page default `Cache-Control` (plan §55,
+// FREEZE.md §11)
+//
+// A page may declare `config.cache: "no-store" | "private" |
+// "public"` on its `export const config = { ... } satisfies PageConfig`.
+// The runtime applies the value as a default
+// `Cache-Control` header on the response, but the
+// page's own `Response.headers` set of
+// `Cache-Control` always wins (the page is more
+// specific than the page-level default). The
+// supported values are the three FREEZE.md §11
+// literals; anything else is unparseable (the
+// `detect_config_cache` parser returns `None` and
+// the host treats the page as having no default).
+//
+// The e2e covers:
+//   (1) `cache: "no-store"` -> the response
+//       carries `Cache-Control: no-store`
+//   (2) `cache: "private"` -> the response
+//       carries `Cache-Control: private`
+//   (3) `cache: "public"` -> the response
+//       carries `Cache-Control: public`
+//   (4) No `config.cache` declared -> the
+//       response does NOT carry a `Cache-Control`
+//       header (the page-level default is opt-in;
+//       the host's other headers are unaffected)
+//   (5) Page's own `Response` sets
+//       `Cache-Control: max-age=60` and the
+//       page-level default also declares
+//       `cache: "no-store"`: the page's
+//       `max-age=60` wins (page is more
+//       specific than the page-level default)
+// ---------------------------------------------------------------------------
+
+fn parse_cache_control(raw: &str) -> Option<String> {
+    raw.lines()
+        .find(|l| l.to_ascii_lowercase().starts_with("cache-control:"))
+        .map(|l| l.split(':').nth(1).unwrap_or("").trim().to_string())
+}
+
+const CACHE_NO_STORE_TSP: &str = r#"
+export const config = {
+  cache: "no-store",
+} satisfies PageConfig;
+export function GET() {
+  return new Response("ok", {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
+}
+"#;
+
+const CACHE_PRIVATE_TSP: &str = r#"
+export const config = {
+  cache: "private",
+} satisfies PageConfig;
+export function GET() {
+  return new Response("ok", {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
+}
+"#;
+
+const CACHE_PUBLIC_TSP: &str = r#"
+export const config = {
+  cache: "public",
+} satisfies PageConfig;
+export function GET() {
+  return new Response("ok", {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
+}
+"#;
+
+const CACHE_NONE_TSP: &str = r#"
+export function GET() {
+  return new Response("ok", {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
+}
+"#;
+
+const CACHE_OVERRIDE_TSP: &str = r#"
+export const config = {
+  cache: "no-store",
+} satisfies PageConfig;
+// The page's own `Cache-Control: max-age=60`
+// wins over the page-level default of
+// `no-store` (the page is more specific than
+// the page-level default).
+export function GET() {
+  return new Response("ok", {
+    status: 200,
+    headers: {
+      "content-type": "text/plain",
+      "cache-control": "max-age=60",
+    },
+  });
+}
+"#;
+
+#[test]
+fn config_cache_sets_default_cache_control_header() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-cache-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+    std::fs::write(routes_dir.join("no_store.tsp"), CACHE_NO_STORE_TSP)
+        .expect("no_store.tsp");
+    std::fs::write(routes_dir.join("private.tsp"), CACHE_PRIVATE_TSP)
+        .expect("private.tsp");
+    std::fs::write(routes_dir.join("public.tsp"), CACHE_PUBLIC_TSP)
+        .expect("public.tsp");
+    std::fs::write(routes_dir.join("none.tsp"), CACHE_NONE_TSP).expect("none.tsp");
+    std::fs::write(routes_dir.join("override.tsp"), CACHE_OVERRIDE_TSP)
+        .expect("override.tsp");
+
+    let port: u16 = 41_500 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    // (1) `cache: "no-store"` -> `Cache-Control: no-store`
+    let request = format!(
+        "GET /no_store HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (s, raw) = http_send_raw(port, &request);
+    assert_eq!(s, 200);
+    let cc = parse_cache_control(&raw);
+    assert_eq!(
+        cc.as_deref(),
+        Some("no-store"),
+        "`config.cache: \"no-store\"` must set `Cache-Control: no-store`; got: {cc:?}"
+    );
+
+    // (2) `cache: "private"` -> `Cache-Control: private`
+    let request = format!(
+        "GET /private HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (s, raw) = http_send_raw(port, &request);
+    assert_eq!(s, 200);
+    let cc = parse_cache_control(&raw);
+    assert_eq!(
+        cc.as_deref(),
+        Some("private"),
+        "`config.cache: \"private\"` must set `Cache-Control: private`; got: {cc:?}"
+    );
+
+    // (3) `cache: "public"` -> `Cache-Control: public`
+    let request = format!(
+        "GET /public HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (s, raw) = http_send_raw(port, &request);
+    assert_eq!(s, 200);
+    let cc = parse_cache_control(&raw);
+    assert_eq!(
+        cc.as_deref(),
+        Some("public"),
+        "`config.cache: \"public\"` must set `Cache-Control: public`; got: {cc:?}"
+    );
+
+    // (4) No `config.cache` declared -> no `Cache-Control` header
+    let request = format!(
+        "GET /none HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (s, raw) = http_send_raw(port, &request);
+    assert_eq!(s, 200);
+    let cc = parse_cache_control(&raw);
+    assert!(
+        cc.is_none(),
+        "page without `config.cache` must NOT carry a `Cache-Control` header (the page-level default is opt-in); got: {cc:?}"
+    );
+
+    // (5) Page's `Cache-Control: max-age=60` wins over `config.cache: "no-store"`
+    let request = format!(
+        "GET /override HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (s, raw) = http_send_raw(port, &request);
+    assert_eq!(s, 200);
+    let cc = parse_cache_control(&raw);
+    assert_eq!(
+        cc.as_deref(),
+        Some("max-age=60"),
+        "the page's own `Cache-Control: max-age=60` must win over the page-level default of `no-store`; got: {cc:?}"
+    );
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
