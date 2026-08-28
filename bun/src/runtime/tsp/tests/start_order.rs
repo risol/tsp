@@ -244,7 +244,12 @@ fn multi_route_dispatch_does_not_alias_to_first_request() {
     std::fs::write(routes_dir.join("index.tsp"), INDEX_TSP).expect("write index.tsp");
     std::fs::write(routes_dir.join("time.tsp"), TIME_TSP).expect("write time.tsp");
 
-    let port: u16 = 30_000 + (std::process::id() as u16 % 1_000);
+    // Unique port range. The metrics test uses
+    // `30_000 + pid%500` and the old range
+    // `30_000 + pid%1000` collided with it on
+    // TIME_WAIT. Move to a fresh range that no
+    // other test in this file uses.
+    let port: u16 = 43_000 + (std::process::id() as u16 % 500);
 
     let mut child = std::process::Command::new(master)
         .env("TSP_PORT", port.to_string())
@@ -4625,21 +4630,58 @@ fn check_with_tsc_flag_catches_user_type_errors_and_passes_clean_routes() {
 /// response. Used by the HEAD / POST tests below; the
 /// existing `http_get_status` strips headers, but the
 /// HEAD / 405 / Allow-header assertions need them.
+///
+/// The read is tolerant of a trailing `ConnectionReset`
+/// on the LAST read: when the server sends a 413 (or
+/// any response) and then closes, the client OS may
+/// surface the close as RST instead of FIN if the
+/// server is still draining a body that was bigger
+/// than the kernel buffer. The response body was
+/// already received; the RST just terminates the
+/// stream. Tests that exercise a 413 against a
+/// multi-MB body (e.g. `config_body_limit_...`) rely
+/// on this tolerance.
 fn http_send_raw(port: u16, raw_request: &str) -> (u16, String) {
-    use std::io::{Read, Write};
+    use std::io::{ErrorKind, Read, Write};
     use std::net::TcpStream;
     let mut stream = TcpStream::connect(("127.0.0.1", port))
         .expect("connect");
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(Duration::from_secs(15)))
         .expect("set_read_timeout");
     stream
         .write_all(raw_request.as_bytes())
         .expect("write request");
+    // Read in a manual loop so a trailing RST (after
+    // the response body has been received) does not
+    // panic the test. We accept the data we have as
+    // long as the FIRST read returned some bytes
+    // (the response was received). A RST on the
+    // first read would be a real failure (the server
+    // never sent the response).
     let mut raw = String::new();
-    stream
-        .read_to_string(&mut raw)
-        .expect("read response");
+    let mut buf = [0u8; 4096];
+    let mut first_read = false;
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                first_read = true;
+                raw.push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
+            Err(e)
+                if first_read
+                    && (e.kind() == ErrorKind::ConnectionReset
+                        || e.kind() == ErrorKind::UnexpectedEof) =>
+            {
+                // Trailing RST after the response
+                // body. The response IS in `raw`;
+                // ignore the error.
+                break;
+            }
+            Err(e) => panic!("read response: {e}"),
+        }
+    }
     let status_line = raw.lines().next().unwrap_or("");
     let status: u16 = status_line
         .split_whitespace()
@@ -5998,6 +6040,22 @@ export async function POST(ctx) {
 }
 "#;
 
+const BODY_LIMIT_LARGE_TSP: &str = r#"
+// Page that declares a bodyLimit larger than the
+// global TSP_MAX_BODY_BYTES. The per-page cap is
+// clamped to the global, so the existing global
+// 413 check is what fires (NOT the per-page one).
+export const config = {
+  bodyLimit: 1024 * 1024,
+} satisfies PageConfig;
+export function GET() {
+  return new Response("ok", {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
+}
+"#;
+
 #[test]
 fn config_body_limit_enforces_per_page_cap() {
     let Some(master) = locate_master() else {
@@ -6016,6 +6074,7 @@ fn config_body_limit_enforces_per_page_cap() {
     let routes_dir = temp_root.join("routes");
     std::fs::create_dir_all(&routes_dir).expect("routes dir");
     std::fs::write(routes_dir.join("limited.tsp"), BODY_LIMIT_TSP).expect("limited.tsp");
+    std::fs::write(routes_dir.join("large.tsp"), BODY_LIMIT_LARGE_TSP).expect("large.tsp");
 
     let port: u16 = 41_000 + (std::process::id() as u16 % 500);
     let mut child = std::process::Command::new(master)
@@ -6081,6 +6140,44 @@ fn config_body_limit_enforces_per_page_cap() {
     assert_eq!(
         s_get, 200,
         "GET (body-shape rule does not apply to GET) must 200; got {s_get}"
+    );
+
+    // (4) Per-page cap > global: the global wins.
+    // A request with a body larger than the global
+    // is rejected by the existing global 413 check
+    // (the per-page cap is silently reduced to the
+    // global, so the per-page 413 never fires before
+    // the global one). The default global is 1 MiB,
+    // so a 1.5 MiB body trips the global.
+    //
+    // This scenario exercises the TCP teardown
+    // contract: the server must drain the
+    // 1.5 MiB body off the socket AFTER writing the
+    // 413 response, so the client can complete its
+    // send without `ConnectionReset`. A naive
+    // `Shutdown::Both` with the body unread causes
+    // the OS to send RST.
+    let too_big = "x".repeat(1_500_000);
+    let request = format!(
+        "POST /large HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: {}\r\nContent-Type: text/octet-stream\r\nConnection: close\r\n\r\n{}",
+        too_big.len(),
+        too_big
+    );
+    let (s_global, raw_global) = http_send_raw(port, &request);
+    assert_eq!(
+        s_global, 413,
+        "1.5 MiB POST must 413 (the global check fires); got {s_global}"
+    );
+    let body_global = raw_global
+        .split("\r\n\r\n")
+        .nth(1)
+        .unwrap_or("")
+        .to_string();
+    // The global 413 body is the older one (not
+    // mentioning config.bodyLimit).
+    assert!(
+        !body_global.contains("config.bodyLimit"),
+        "the 413 body for the global-capped request must NOT mention config.bodyLimit (the global check fires first); got: {body_global:?}"
     );
 
     let _ = terminate(child.id());

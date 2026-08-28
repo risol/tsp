@@ -1506,6 +1506,23 @@ fn handle_connection(
             stream
                 .write_all(body_text.as_bytes())
                 .map_err(HostError::Connection)?;
+            // TCP teardown: a naive `Shutdown::Both`
+            // here causes the OS to send RST if the
+            // body has not been fully read off the
+            // socket (the client is still sending the
+            // oversized body and the kernel still has
+            // unread bytes in the receive buffer). The
+            // RST surfaces as `ConnectionReset` on the
+            // client, even though the 413 response was
+            // successfully written. The fix: drain the
+            // body off the socket (up to the global
+            // cap, which is the size the client was
+            // asked to send in the first place) before
+            // closing. After the drain, the kernel has
+            // no unread data, the close is a clean FIN,
+            // and the client's send completes without
+            // error.
+            let _ = drain_request_body(&mut stream, max_body);
             let _ = stream.shutdown(Shutdown::Both);
             return Ok(());
         }
@@ -2849,6 +2866,59 @@ enum ReadOutcome {
     BodyTooLarge { limit: usize },
 }
 
+/// Drain up to `max_bytes` off `stream`'s receive
+/// buffer. Used by the 413 path AFTER the 413
+/// response is written, so a client that is still
+/// sending the oversized body can complete its
+/// send without seeing `ConnectionReset` (the OS
+/// would otherwise send RST on close because of
+/// the unread body bytes in the receive buffer).
+///
+/// Bounded by THREE things:
+///   1. `max_bytes` (a soft cap; a single read can
+///      exceed it by up to one buffer's worth, so
+///      the final value can be slightly over)
+///   2. A per-read timeout of `READ_TIMEOUT` (the
+///      loop bails on `Err` so a misbehaving
+///      client that never sends more data does
+///      not block the server forever)
+///   3. A TOTAL wall-clock budget of `TOTAL_BUDGET`
+///      (sum of per-read waits, not per-read
+///      alone -- without the total cap, a
+///      well-behaved client sending a 1 MiB body
+///      one byte at a time would block the
+///      server for up to
+///      `(max_bytes / 4 KiB) * READ_TIMEOUT` = 256
+///      seconds for the default 1 MiB cap)
+///
+/// Best-effort: a read error, a peer hangup, a
+/// per-read timeout, OR a total-budget timeout
+/// is silently treated as "no more data". The
+/// function returns the number of bytes drained
+/// so a future caller / test can assert on it;
+/// the production caller ignores the return
+/// value.
+fn drain_request_body(stream: &mut TcpStream, max_bytes: usize) -> usize {
+    use std::time::{Duration, Instant};
+    const READ_TIMEOUT: Duration = Duration::from_millis(1_000);
+    const TOTAL_BUDGET: Duration = Duration::from_millis(5_000);
+    let previous_timeout = stream.read_timeout().ok().flatten();
+    let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
+    let start = Instant::now();
+    let mut buf = [0u8; 4096];
+    let mut drained: usize = 0;
+    while drained < max_bytes && start.elapsed() < TOTAL_BUDGET {
+        let want = std::cmp::min(buf.len(), max_bytes.saturating_sub(drained));
+        match stream.read(&mut buf[..want]) {
+            Ok(0) => break,
+            Ok(n) => drained += n,
+            Err(_) => break,
+        }
+    }
+    let _ = stream.set_read_timeout(previous_timeout);
+    drained
+}
+
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
@@ -3384,6 +3454,53 @@ mod tests {
             ReadOutcome::Complete { body, .. } => assert_eq!(body, payload),
             ReadOutcome::BodyTooLarge { .. } => panic!("not too large"),
         }
+    }
+
+    #[test]
+    fn drain_request_body_consumes_unread_bytes() {
+        // The 413 path must drain the body off the
+        // socket AFTER writing the 413 response,
+        // so the client can complete its send
+        // without `ConnectionReset`. A naive
+        // `Shutdown::Both` with the body unread
+        // causes the OS to send RST. The drain is
+        // bounded by `max_bytes` so a misbehaving
+        // client cannot make the server read
+        // forever.
+        let (mut client, mut server) = socket_pair();
+        let payload = vec![0xAA_u8; 8192];
+        client.write_all(&payload).expect("write payload");
+        // Give the kernel a moment to deliver the
+        // bytes to the server's read buffer.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let drained = drain_request_body(&mut server, payload.len());
+        assert_eq!(
+            drained, payload.len(),
+            "drain_request_body must consume all unread bytes"
+        );
+        // A second drain returns 0 (peer-closed /
+        // no more data).
+        let drained_again = drain_request_body(&mut server, payload.len());
+        assert_eq!(drained_again, 0);
+    }
+
+    #[test]
+    fn drain_request_body_caps_at_max_bytes() {
+        // A client that sends more than `max_bytes`
+        // -- the per-call cap -- gets the drain
+        // stopped at `max_bytes`. The remaining
+        // bytes are dropped (the server will close
+        // the connection immediately after, so the
+        // kernel discards them on its own). The
+        // payload is large enough that the kernel
+        // has more than `max_bytes` queued at the
+        // time the server starts reading.
+        let (mut client, mut server) = socket_pair();
+        let payload = vec![0xBB_u8; 16 * 1024];
+        client.write_all(&payload).expect("write payload");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let drained = drain_request_body(&mut server, 1024);
+        assert_eq!(drained, 1024, "drain must stop at the cap");
     }
 
     #[test]
