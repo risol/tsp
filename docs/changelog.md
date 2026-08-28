@@ -12,6 +12,57 @@ All notable changes to TSP will be documented in this file.
   request bodies, cancellation, static assets, and response handling.
 - v2-only root workflow. The former TypeScript/Bun application host and its
   compatibility surface are no longer shipped.
+- `config.bodyLimit` per-page request body cap (FREEZE.md §11). POST / PUT /
+  PATCH / DELETE with body over the per-page cap return 413; the cap is
+  silently clamped to the global `TSP_MAX_BODY_BYTES`. Hand-rolled parser
+  supports `int`, `int * int * ...`, and underscore separators.
+- `config.cache` per-page default `Cache-Control` header (plan §55, FREEZE.md
+  §11). The runtime applies the value as a default header; the page's own
+  `Response.headers` Cache-Control always wins.
+- `config.timeoutMs` per-page request timeout (spec §7 v2.0 core PageConfig).
+  Overrides the global `TSP_TIMEOUT_MS` per request; `0` disables the watchdog.
+- `tspserver_v2 check` reports three new categories of spec §46 export-
+  validation violations at check time (the runtime still serves the page;
+  full generation-build enforcement lands with the AST detector in a
+  future slice):
+  - `config.methods` mismatch (declared set vs. actual exports)
+  - unknown runtime exports (`export function NAME(...)` whose NAME is
+    not a standard HTTP method handler)
+  - `export default` violation (top-level default export is silently
+    ignored at runtime; `check` surfaces it)
+- `TSP3001: handler returned unsupported value <Type>. Expected HtmlNode or
+  Response.` typed error for invalid handler return values (spec §6.3 / plan
+  §10.4 / FREEZE item 5). The wrap-side helper distinguishes top-level
+  contract violations (`TSP3001`) from nested JSX-child errors
+  (`TSP3102`) via the `__child__` flag.
+- `tspserver_v2 --version` flag and a fully-documented `--help` output
+  that lists every env var the host honors (including the previously
+  undocumented `TSP_TIMEOUT_MS` and `TSP_DEVELOPMENT`).
+
+### Fixed
+- Pre-existing port collision between `multi_route_dispatch_does_not_alias_to_first_request`
+  and `metrics_endpoint_serves_prometheus_text_after_priming_requests` (both
+  baselined on `30_000 + pid%500/1000`); the multi-route test now uses a
+  unique `43_000 + pid%500` range.
+- TCP teardown race in the 413 path: the host now drains the body off the
+  socket AFTER writing the 413 response, so a client sending a body larger
+  than the kernel buffer no longer sees `ConnectionReset`. The drain is
+  bounded by `max_bytes`, a 1-second per-read timeout, and a 5-second
+  total wall-clock budget. The body-limit e2e's 1.5 MiB scenario
+  (per-page cap > global) is now pinned end-to-end.
+- `wait_for_marker` regression: a previous "TCP-buffer" fix had removed
+  the `child.stderr = Some(stderr);` put-back, breaking 11+ tests that
+  call `wait_for_marker` twice on the same child (boot + hot-reload).
+  The put-back is restored.
+- `http_send_raw` test helper is now tolerant of a trailing
+  `ConnectionReset` on the LAST read (the response body has already been
+  received; the RST just terminates the stream). The tolerance is
+  restricted to AFTER the first successful read.
+
+### Test count
+332 tests, all green on 5 consecutive full-suite runs.
+Breakdown: 267 lib + 4 worker_integration + 15 process_model + 38
+start_order e2e + 8 tsp_worker_test_stub.
 
 ## [0.1.0] - 2026-03-02
 

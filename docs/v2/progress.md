@@ -2815,3 +2815,29 @@ contract violations from nested JSX-child errors.
 - The `TSP3001` typed error for invalid handler
   return is now wired through the wrap. The
   spec/plan wording is used verbatim.
+
+## Day end (2026-08-28) -- doc integration
+
+A single commit consolidates the day's work into
+`docs/changelog.md` under `[Unreleased]`. The
+changelog entry lists every feature added, every
+bug fixed, and the final test count (332 tests,
+all green on 5 consecutive runs). The 11 commits
+on the parent `D:/GitHub/tsp` repo this session are
+(chronological order):
+  * `f7ddf13d95` bodyLimit
+  * `156aac5c29` cache
+  * `2a89f30038` unknown exports check
+  * `8090a166d8` progress.md (3 PageConfig slices)
+  * `347f906f65` default export check
+  * `20cffb3917` timeoutMs
+  * `80c805618a` progress.md (3 more PageConfig slices)
+  * `09e113d602` TSP3001 typed error
+  * `7b27300e54` progress.md (TSP3001 slice)
+  * `c4f7eff7f8` fix: 413 drains body, multi-route port
+  * `a0b5e81103` polish: --version + help text
+
+The changelog entry is the canonical "what
+landed today" record. The per-slice rationale
+lives in each commit's message and in the
+session updates above.
