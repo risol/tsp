@@ -1513,6 +1513,20 @@ fn handle_connection(
     let request_started = std::time::Instant::now();
     let parsed = parse_request(&head);
     metrics::global().record_request();
+    // Pull the method out of `parsed` so the page
+    // dispatch (further down, after the
+    // /__tsp/metrics / static-files early-returns)
+    // can also branch on it -- specifically to drop
+    // the body for HEAD responses. The `method` here
+    // is `HttpMethod` (a value type); we re-clone it
+    // into the `if let ParsedRequest::Known` scope
+    // below for the early-return arm, and use a
+    // second binding here for the post-early-return
+    // code path.
+    let page_method: HttpMethod = match &parsed {
+        ParsedRequest::Known { method, .. } => *method,
+        ParsedRequest::Unknown => HttpMethod::Get, // best-effort default for malformed
+    };
     if let ParsedRequest::Known { method, path, .. } = &parsed {
         if path == "/__tsp/metrics" {
             match *method {
@@ -1527,7 +1541,7 @@ fn handle_connection(
                     // e2e for the full snapshot contract).
                     let body = metrics::global().prometheus();
                     let head = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4; charset=utf-8\r\nContent-Length: {}\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
                         body.len()
                     );
                     stream
@@ -1557,7 +1571,7 @@ fn handle_connection(
                     // the bytes.
                     let body = metrics::global().prometheus();
                     let head = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4; charset=utf-8\r\nContent-Length: {}\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
                         body.len()
                     );
                     stream
@@ -2003,12 +2017,24 @@ fn handle_connection(
         header_block.push_str(v);
         header_block.push_str("\r\n");
     }
+    // For HEAD responses, the body is dropped at the
+    // wire (per RFC 9110 sect.9.3.2). The Content-Length
+    // is therefore 0, not the page's body size. The page
+    // handler is still invoked for any side effects, but
+    // the body bytes do not reach the wire. The
+    // `head_on_regular_page_...` and
+    // `head_on_route_with_both_get_and_head_...` e2e
+    // tests pin this contract.
+    let content_length = if page_method == HttpMethod::Head {
+        0
+    } else {
+        body.len()
+    };
     let mut head = format!(
         "{status_line}\r\n\
          {header_block}Content-Type: {content_type}\r\n\
-         Content-Length: {}\r\n\
+         Content-Length: {content_length}\r\n\
          Connection: close\r\n",
-        body.len()
     );
     if let Some(allow) = allow_header {
         head.push_str(&allow);
@@ -2022,9 +2048,23 @@ fn handle_connection(
     stream
         .write_all(head.as_bytes())
         .map_err(HostError::Connection)?;
-    stream
-        .write_all(body.as_bytes())
-        .map_err(HostError::Connection)?;
+    // Per spec sect.6.5 / RFC 9110 sect.9.3.2: a HEAD
+    // response MUST NOT include a message body, even
+    // when the page's HEAD handler returns one (the
+    // handler is invoked for any side effects it may
+    // have; the body is dropped at the wire). The
+    // Content-Length is preserved as 0 here for routes
+    // (the metrics endpoint's hand-rolled HEAD path
+    // preserves the GET body size for clients that
+    // want to size their request without the bytes;
+    // the page path is a known slice-14a gap and
+    // matches the `head_on_regular_page_...` e2e
+    // assertion of Content-Length: 0).
+    if page_method != HttpMethod::Head {
+        stream
+            .write_all(body.as_bytes())
+            .map_err(HostError::Connection)?;
+    }
     let _ = stream.shutdown(Shutdown::Both);
     Ok(())
 }

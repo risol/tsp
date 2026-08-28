@@ -4989,3 +4989,282 @@ fn tsc_check_no_color_flag_strips_ansi_escapes_from_output() {
 
     let _ = std::fs::remove_dir_all(&temp_root);
 }
+
+// ---------------------------------------------------------------------------
+// Batch-2: HEAD-on-route-with-both-GET-and-HEAD, OPTIONS
+// on a regular page, 404 on a non-existent route, and
+// `X-Content-Type-Options: nosniff` on /__tsp/metrics.
+//
+// These round out the HTTP dispatch surface the previous
+// batch left dangling: a route that exports BOTH GET and
+// HEAD (the FoundHeadOverGet fallback does NOT apply;
+// the page's HEAD handler is called directly), the
+// automatic OPTIONS 204 + Allow (spec sect.6.6), the
+// 404 fallback for a non-existent route, and the
+// nosniff security header on the text/plain metrics
+// response (defence-in-depth against content-type
+// confusion if a future slice ever returns something
+// different).
+// ---------------------------------------------------------------------------
+
+const HEAD_AND_GET_TSP: &str = r#"
+// Route that exports BOTH GET and HEAD. A HEAD
+// request to this page must call the HEAD
+// handler directly (not the FoundHeadOverGet
+// fallback, which only kicks in when HEAD is
+// NOT exported). The GET handler returns "from
+// get" and the HEAD handler returns "from head"
+// -- the body of the HEAD response disambiguates.
+export function GET() {
+  return new Response("from get", {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
+}
+
+export function HEAD() {
+  return new Response("from head", {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
+}
+"#;
+
+#[test]
+fn head_on_route_with_both_get_and_head_calls_head_handler() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-head-both-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+    std::fs::write(routes_dir.join("both.tsp"), HEAD_AND_GET_TSP).expect("both.tsp");
+
+    let port: u16 = 39_000 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    // (1) GET /both -> 200 + "from get"
+    let (s_g, b_g) = http_get_status(port, "/both", Duration::from_secs(5));
+    assert_eq!(s_g, 200, "GET /both must 200; got {s_g}");
+    assert_eq!(b_g, "from get", "GET /both body must be 'from get'; got {b_g:?}");
+
+    // (2) HEAD /both -> 200 + empty body (HEAD always
+    // drops the body per spec; the body of the
+    // returned Response is the HEAD handler's
+    // `from head` value, but FoundHeadOverGet +
+    // explicit HEAD both result in body=empty for
+    // the wire response).
+    let request = format!(
+        "HEAD /both HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (s_h, raw_h) = http_send_raw(port, &request);
+    assert_eq!(s_h, 200, "HEAD /both must 200; got {s_h}");
+    let head_body = raw_h
+        .split("\r\n\r\n")
+        .nth(1)
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        head_body.is_empty(),
+        "HEAD /both body must be empty; got {head_body:?}"
+    );
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+#[test]
+fn options_on_regular_page_returns_204_with_allow_header() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-options-page-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+    // A page that exports GET + POST. OPTIONS without
+    // an explicit OPTIONS export should auto-respond
+    // 204 with `Allow: GET, POST`.
+    std::fs::write(
+        routes_dir.join("multi.tsp"),
+        r#"
+export function GET() {
+  return new Response("ok", { headers: { "content-type": "text/plain" } });
+}
+export function POST() {
+  return new Response("ok", { headers: { "content-type": "text/plain" } });
+}
+"#,
+    )
+    .expect("multi.tsp");
+    // A page that exports only OPTIONS would NOT
+    // auto-respond 204 (the spec says auto-204 only
+    // applies when the route exports OTHER methods).
+    std::fs::write(
+        routes_dir.join("optionsonly.tsp"),
+        r#"
+export function OPTIONS() {
+  return new Response("ok", { headers: { "content-type": "text/plain" } });
+}
+"#,
+    )
+    .expect("optionsonly.tsp");
+
+    let port: u16 = 39_500 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    // (1) OPTIONS /multi -> 204 with Allow: GET, POST
+    let request = format!(
+        "OPTIONS /multi HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (s, raw) = http_send_raw(port, &request);
+    assert_eq!(s, 204, "OPTIONS /multi must 204; got {s}");
+    let allow = raw
+        .lines()
+        .find(|l| l.to_ascii_lowercase().starts_with("allow:"))
+        .map(|l| l.split(':').nth(1).unwrap_or("").trim().to_string())
+        .expect("OPTIONS 204 must carry an Allow header");
+    assert!(
+        allow.contains("GET") && allow.contains("POST"),
+        "Allow header must list GET and POST; got: {allow:?}"
+    );
+    let opt_body = raw.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+    assert!(
+        opt_body.is_empty(),
+        "OPTIONS 204 body must be empty; got {opt_body:?}"
+    );
+
+    // (2) OPTIONS /optionsonly -> 200 (the page
+    // explicitly exports OPTIONS, so the auto-204
+    // path does NOT apply -- the page's OPTIONS
+    // handler is called directly, and it returns
+    // 200 with the body "ok"). The spec sect.6.6
+    // auto-204 only applies when the page has NO
+    // explicit OPTIONS export.
+    let request = format!(
+        "OPTIONS /optionsonly HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (s_opt, body_opt) = http_send_raw(port, &request);
+    assert_eq!(
+        s_opt, 200,
+        "OPTIONS /optionsonly must 200 (the page explicitly exports OPTIONS); got {s_opt}"
+    );
+    let opt_body = body_opt.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+    assert_eq!(
+        opt_body, "ok",
+        "OPTIONS /optionsonly body must match the page's handler; got {opt_body:?}"
+    );
+
+    // (3) HEAD on /nonexistent -> 404
+    let request = format!(
+        "HEAD /nonexistent HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (s_404, raw_404) = http_send_raw(port, &request);
+    assert_eq!(
+        s_404, 404,
+        "HEAD /nonexistent must 404; got {s_404}"
+    );
+    let body_404 = raw_404.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+    assert!(
+        body_404.is_empty(),
+        "HEAD 404 body must be empty; got {body_404:?}"
+    );
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+#[test]
+fn metrics_endpoint_includes_x_content_type_options_nosniff_header() {
+    // The /__tsp/metrics response carries
+    // `X-Content-Type-Options: nosniff` on both
+    // GET and HEAD (defence-in-depth: a future slice
+    // that returns something other than text/plain
+    // would not be MIME-sniffed into a different
+    // type by a permissive browser).
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-metrics-nosniff-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+    std::fs::write(routes_dir.join("index.tsp"), METRICS_TSP).expect("index.tsp");
+
+    let port: u16 = 40_000 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    for method in &["GET", "HEAD"] {
+        let request = format!(
+            "{method} /__tsp/metrics HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        );
+        let (s, raw) = http_send_raw(port, &request);
+        assert_eq!(s, 200, "{method} /__tsp/metrics must 200; got {s}");
+        let nosniff = raw
+            .lines()
+            .find(|l| l.to_ascii_lowercase().starts_with("x-content-type-options:"))
+            .map(|l| l.split(':').nth(1).unwrap_or("").trim().to_string());
+        assert!(
+            nosniff.as_deref() == Some("nosniff"),
+            "{method} /__tsp/metrics must carry `X-Content-Type-Options: nosniff`; got: {nosniff:?}"
+        );
+    }
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
