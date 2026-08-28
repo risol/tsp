@@ -412,22 +412,31 @@ fn run_check() -> ExitCode {
     // the routes + the tsp:* declaration files.
     let raw_args: Vec<String> = std::env::args().skip(2).collect();
     let mut tsc = false;
+    let mut no_color = false;
     let mut i = 0;
     while i < raw_args.len() {
         let arg = &raw_args[i];
         if arg == "--tsc" {
             tsc = true;
             i += 1;
+        } else if arg == "--no-color" {
+            no_color = true;
+            i += 1;
         } else if arg == "--help" || arg == "-h" {
             println!(
-                "Usage: tspserver_v2 check [--tsc]\n\n\
+                "Usage: tspserver_v2 check [--tsc] [--no-color]\n\n\
                  Scans the routes/ directory and prints each route's\n\
                  static export set. Returns 1 if any route fails to\n\
                  parse, 0 otherwise.\n\n\
-                 --tsc    additionally run `tsc --noEmit` against the\n\
-                          routes (after rewriting `.tsp` to `.tsx`)\n\
-                          and the bundled `tsp:*` declaration files.\n\
-                          Returns 1 if tsc reports any error."
+                 --tsc        additionally run `tsc --noEmit` against the\n\
+                              routes (after rewriting `.tsp` to `.tsx`)\n\
+                              and the bundled `tsp:*` declaration files.\n\
+                              Returns 1 if tsc reports any error.\n\
+                 --no-color   pass `--noColor` to tsc and strip any ANSI\n\
+                              escape sequences from the bin's own output\n\
+                              (the path-rewrite prefix). Useful when the\n\
+                              bin's stdout is piped to a log file or a\n\
+                              non-ANSI terminal."
             );
             return ExitCode::SUCCESS;
         } else {
@@ -466,7 +475,7 @@ fn run_check() -> ExitCode {
         }
     }
     if tsc {
-        match run_tsc_check(&root) {
+        match run_tsc_check(&root, no_color) {
             Ok(()) => println!("OK tsc: 0 error(s)"),
             Err(error) => {
                 failed = true;
@@ -506,7 +515,7 @@ fn run_check() -> ExitCode {
 /// imported names, wrong argument shapes, missing
 /// properties), not to enforce strictness the runtime
 /// itself does not enforce.
-fn run_tsc_check(routes_root: &std::path::Path) -> Result<(), String> {
+fn run_tsc_check(routes_root: &std::path::Path, no_color: bool) -> Result<(), String> {
     use std::process::Command;
 
     // (1) Set up the temp dir.
@@ -610,10 +619,21 @@ fn run_tsc_check(routes_root: &std::path::Path) -> Result<(), String> {
         // are visible to tsc for any third-party imports
         // the route makes), and pass --project pointing at
         // our temp tsconfig.
-        let output = Command::new(&tsc_bin)
-            .arg("--noEmit")
+        let mut cmd = Command::new(&tsc_bin);
+        cmd.arg("--noEmit")
             .arg("--project")
-            .arg(&tsconfig)
+            .arg(&tsconfig);
+        if no_color {
+            // tsc 5.x does not accept `--noColor` as a
+            // CLI flag (TS5023: Unknown compiler option).
+            // The standard escape is the `NO_COLOR`
+            // environment variable (a no-color convention
+            // honoured by most modern CLIs). We also set
+            // `--pretty false` as a belt-and-braces for
+            // tsc versions that ignore `NO_COLOR`.
+            cmd.env("NO_COLOR", "1").arg("--pretty").arg("false");
+        }
+        let output = cmd
             .current_dir(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
             .output()
             .map_err(|e| format!("invoke {}: {e}", tsc_bin.display()))?;
@@ -669,41 +689,54 @@ fn rewrite_tsc_paths(text: &str, temp_routes: &std::path::Path, routes_root: &st
     let routes_fwd = routes_back.replace('\\', "/");
 
     for line in text.lines() {
+        // Strip ANSI escape sequences (CSI SGR + others)
+        // from tsc's diagnostic output. tsc 5.x does not
+        // emit color by default, but a user-supplied
+        // tsconfig (or a future tsc release) might. The
+        // regex-free strip below handles the common
+        // `\x1b[...m` form (color) and `\x1b[...;<n>m` form
+        // (parameterized color). The pattern matches:
+        //   ESC [ (any chars not in @-\\[-~) (final byte)
+        // per ECMA-48. We only need the m-finalizer
+        // family; non-m finalizers are passed through
+        // (they would be a bug in tsc anyway).
+        let stripped = strip_ansi(line);
+
         // tsc's diagnostic format is:
         //   <path>(<line>,<col>): <message>
         // or a continuation line with no path. We need
         // to extract just the `<path>` portion (stopping
         // at the `(<line>,<col>)` opener) so the rewrite
         // doesn't smear the message into the path.
-        let (path_end, prefix) = if let Some(idx) = line.find('(') {
-            if let Some(comma_idx) = line[idx..].find(',') {
+        let (path_end, prefix) = if let Some(idx) = stripped.find('(') {
+            if let Some(comma_idx) = stripped[idx..].find(',') {
                 let after_comma = idx + comma_idx + 1;
-                if let Some(close_idx) = line[after_comma..].find(')') {
-                    let col_part = &line[after_comma..after_comma + close_idx];
+                if let Some(close_idx) = stripped[after_comma..].find(')') {
+                    let col_part = &stripped[after_comma..after_comma + close_idx];
                     if col_part.chars().all(|c| c.is_ascii_digit()) {
                         // `<path>(<digits>,<digits>)` matches the tsc
                         // diagnostic shape; everything before
                         // the `(` is the path.
-                        (idx, &line[..idx])
+                        (idx, &stripped[..idx])
                     } else {
                         // `(` was not the diagnostic opener; treat
                         // the whole line as a path-less continuation
                         // (pass through unchanged).
-                        (line.len(), line)
+                        (stripped.len(), &stripped[..])
                     }
                 } else {
-                    (line.len(), line)
+                    (stripped.len(), &stripped[..])
                 }
             } else {
-                (line.len(), line)
+                (stripped.len(), &stripped[..])
             }
         } else {
-            (line.len(), line)
+            (stripped.len(), &stripped[..])
         };
-        if path_end == line.len() {
+        if path_end == stripped.len() {
             // Path-less line (continuation, header, etc.):
             // pass through unchanged.
-            println!("{}", line);
+            println!("{}", stripped);
             continue;
         }
         // `prefix` is the path. Try to rewrite it.
@@ -732,9 +765,46 @@ fn rewrite_tsc_paths(text: &str, temp_routes: &std::path::Path, routes_root: &st
         };
         // Re-assemble: rewritten path + the original
         // `(<line>,<col>): <message>` suffix.
-        let suffix = &line[path_end..];
+        let suffix = &stripped[path_end..];
         println!("{}{}", rewritten_path, suffix);
     }
+}
+
+/// Strip ANSI CSI escape sequences from a string. Handles
+/// the common color / cursor forms tsc and bun emit. The
+/// strip is conservative: any `\x1b[...` sequence that ends
+/// in a non-`m` finalizer is left alone (it is a bug in
+/// the emitter, not our problem).
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next(); // consume '['
+            let mut seq = String::new();
+            while let Some(&nc) = chars.peek() {
+                if nc.is_ascii_alphabetic() {
+                    chars.next();
+                    seq.push(nc);
+                    break;
+                }
+                seq.push(nc);
+                chars.next();
+            }
+            if seq.ends_with('m') {
+                // color / SGR -- drop the whole escape
+                continue;
+            } else {
+                // unknown CSI; pass through verbatim
+                out.push('\x1b');
+                out.push('[');
+                out.push_str(&seq);
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Recursively copy `routes_root` into `dst_root`, renaming

@@ -4589,4 +4589,403 @@ fn check_with_tsc_flag_catches_user_type_errors_and_passes_clean_routes() {
     let _ = std::fs::remove_dir_all(&broken_root);
 }
 
+// ---------------------------------------------------------------------------
+// /__tsp/metrics HEAD + 405 + HEAD-on-regular-page (spec
+// sect.6.5 / Amendment 10)
+//
+// Three small e2e pinning the metrics endpoint's
+// method-handling contract AND a regular page's
+// HEAD-over-GET fallback (FoundHeadOverGet path).
+// Together they round out the metrics / dispatch
+// surface:
+//   - GET /__tsp/metrics -> 200, full body
+//     (covered by `metrics_endpoint_serves_...`)
+//   - HEAD /__tsp/metrics -> 200, empty body, same
+//     Content-Length and Content-Type as GET so
+//     clients can size their request without the
+//     bytes (the FoundHeadOverGet pattern)
+//   - POST /__tsp/metrics -> 405 with `Allow: GET, HEAD`
+//     (REST-correct; the metrics endpoint documents
+//     exactly two methods)
+//   - HEAD /<page> (where the page only exports GET)
+//     -> 200, empty body (FoundHeadOverGet fallback)
+//   - HEAD /<page> where the page does NOT export GET
+//     or HEAD -> 405
+// ---------------------------------------------------------------------------
 
+/// Send a raw HTTP/1.1 request and capture the full
+/// response. Used by the HEAD / POST tests below; the
+/// existing `http_get_status` strips headers, but the
+/// HEAD / 405 / Allow-header assertions need them.
+fn http_send_raw(port: u16, raw_request: &str) -> (u16, String) {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    let mut stream = TcpStream::connect(("127.0.0.1", port))
+        .expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("set_read_timeout");
+    stream
+        .write_all(raw_request.as_bytes())
+        .expect("write request");
+    let mut raw = String::new();
+    stream
+        .read_to_string(&mut raw)
+        .expect("read response");
+    let status_line = raw.lines().next().unwrap_or("");
+    let status: u16 = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    (status, raw)
+}
+
+#[test]
+fn head_on_metrics_endpoint_returns_200_with_empty_body() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-metrics-head-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+    std::fs::write(routes_dir.join("index.tsp"), METRICS_TSP).expect("index.tsp");
+
+    let port: u16 = 37_000 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    // (1) Send a HEAD /__tsp/metrics. The response
+    // must be 200, with the same Content-Type and
+    // Content-Length as a GET would produce, but
+    // with an empty body.
+    let request = format!(
+        "HEAD /__tsp/metrics HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (status, raw) = http_send_raw(port, &request);
+    assert_eq!(status, 200, "HEAD /__tsp/metrics must 200; got {status}");
+    assert!(
+        raw.lines().next().unwrap_or("").contains("200"),
+        "HEAD response status line must show 200; got: {:?}",
+        raw.lines().next()
+    );
+    assert!(
+        raw.to_ascii_lowercase().contains("content-type: text/plain"),
+        "HEAD response must carry the same Content-Type as GET; got: {raw:?}"
+    );
+    // The Content-Length is the GET body's byte count.
+    // A client can use this to allocate a buffer
+    // without making a follow-up GET.
+    let cl_header = raw
+        .lines()
+        .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+        .expect("Content-Length header must be present on HEAD");
+    let cl_value: usize = cl_header
+        .split(':')
+        .nth(1)
+        .and_then(|v| v.trim().parse().ok())
+        .expect("Content-Length must be a non-negative integer");
+    assert!(cl_value > 0, "HEAD Content-Length must be > 0 (the GET body size); got {cl_value}");
+
+    // (2) The body must be empty. We separate headers
+    // from body with `\r\n\r\n`; the body length must
+    // be 0 regardless of what Content-Length says
+    // (a faithful HEAD impl never sends body bytes).
+    let body = raw.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+    assert!(
+        body.is_empty(),
+        "HEAD response body must be empty (FoundHeadOverGet pattern); got {body:?} (len={})",
+        body.len()
+    );
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+#[test]
+fn post_on_metrics_endpoint_returns_405_with_allow_header() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-metrics-405-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+    std::fs::write(routes_dir.join("index.tsp"), METRICS_TSP).expect("index.tsp");
+
+    let port: u16 = 37_500 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    // POST /__tsp/metrics -> 405 with Allow: GET, HEAD
+    // (REST-correct: the metrics endpoint documents
+    // exactly two methods, anything else is rejected
+    // with the documented alternative).
+    let request = format!(
+        "POST /__tsp/metrics HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    let (status, raw) = http_send_raw(port, &request);
+    assert_eq!(
+        status, 405,
+        "POST /__tsp/metrics must 405 (the endpoint only accepts GET/HEAD); got {status}"
+    );
+    assert!(
+        raw.to_ascii_lowercase().contains("allow:"),
+        "405 response must carry an `Allow:` header; got: {raw:?}"
+    );
+    let allow_line = raw
+        .lines()
+        .find(|l| l.to_ascii_lowercase().starts_with("allow:"))
+        .expect("Allow header must be present on 405");
+    let allow_value = allow_line.split(':').nth(1).unwrap_or("").trim();
+    assert!(
+        allow_value.contains("GET") && allow_value.contains("HEAD"),
+        "Allow header must list both GET and HEAD; got: {allow_value:?}"
+    );
+
+    // (2) Same for PUT and DELETE.
+    for method in &["PUT", "DELETE", "PATCH"] {
+        let request = format!(
+            "{method} /__tsp/metrics HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let (status, _) = http_send_raw(port, &request);
+        assert_eq!(
+            status, 405,
+            "{method} /__tsp/metrics must 405; got {status}"
+        );
+    }
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+const HEAD_GET_ONLY_TSP: &str = r#"
+// Page that only exports GET. A HEAD request to
+// this page must use the FoundHeadOverGet path:
+// the host runs the GET handler but drops the
+// body. The e2e below asserts the response is
+// 200 with an empty body.
+export function GET() {
+  return new Response("hello world", {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
+}
+"#;
+
+const HEAD_NO_GET_TSP: &str = r#"
+// Page that only exports POST. A HEAD request
+// to this page must 405 (the route has neither
+// GET nor HEAD exported; the host cannot fall
+// back).
+export function POST() {
+  return new Response("ok", {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
+}
+"#;
+
+#[test]
+fn head_on_regular_page_uses_get_export_and_drops_body() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-head-page-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+    // (1) GET-only page: HEAD must 200 with empty
+    // body (the FoundHeadOverGet path).
+    std::fs::write(routes_dir.join("getonly.tsp"), HEAD_GET_ONLY_TSP)
+        .expect("getonly.tsp");
+    // (2) POST-only page: HEAD must 405.
+    std::fs::write(routes_dir.join("postonly.tsp"), HEAD_NO_GET_TSP)
+        .expect("postonly.tsp");
+
+    let port: u16 = 38_000 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    // (1a) GET /getonly -> 200 + body
+    let (s, b) = http_get_status(port, "/getonly", Duration::from_secs(5));
+    assert_eq!(s, 200, "GET /getonly must 200; got {s}");
+    assert_eq!(b, "hello world", "GET /getonly body must match; got {b:?}");
+
+    // (1b) HEAD /getonly -> 200 + empty body. The
+    // FoundHeadOverGet path runs the GET handler
+    // and drops the body. The Content-Length on
+    // the HEAD response is 0 (the body is empty);
+    // the GET's body size is NOT preserved on the
+    // HEAD response -- this is a known gap
+    // (progress.md §14a, slice 14a note:
+    // "Content-Length-preserving refactor"). The
+    // metrics endpoint's HEAD path DOES preserve
+    // Content-Length (it's hand-rolled in
+    // host.rs:1517); the page path is the gap.
+    // This e2e pins the CURRENT behavior (0), so a
+    // future fix to preserve the GET's body length
+    // must update this test to match the new
+    // contract.
+    let request = format!(
+        "HEAD /getonly HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (s_head, raw_head) = http_send_raw(port, &request);
+    assert_eq!(s_head, 200, "HEAD /getonly must 200; got {s_head}");
+    let head_body = raw_head
+        .split("\r\n\r\n")
+        .nth(1)
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        head_body.is_empty(),
+        "HEAD /getonly must drop the body (FoundHeadOverGet); got {head_body:?} (len={})",
+        head_body.len()
+    );
+    let cl = raw_head
+        .lines()
+        .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+        .and_then(|l| l.split(':').nth(1))
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .expect("HEAD must carry Content-Length");
+    assert_eq!(
+        cl, 0,
+        "HEAD /getonly Content-Length must be 0 (the body is dropped); got {cl}"
+    );
+
+    // (2) HEAD /postonly -> 405 (no GET or HEAD exported).
+    let request = format!(
+        "HEAD /postonly HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (s_405, raw_405) = http_send_raw(port, &request);
+    assert_eq!(s_405, 405, "HEAD /postonly must 405 (no GET/HEAD); got {s_405}");
+    // The 405 must carry an Allow header listing the
+    // methods the page DOES export.
+    let allow = raw_405
+        .lines()
+        .find(|l| l.to_ascii_lowercase().starts_with("allow:"))
+        .map(|l| l.split(':').nth(1).unwrap_or("").trim().to_string())
+        .expect("HEAD 405 must carry an Allow header");
+    assert!(
+        allow.contains("POST"),
+        "Allow header must list POST (the page's only export); got: {allow:?}"
+    );
+    assert!(
+        !allow.contains("GET"),
+        "Allow header must NOT list GET (the page does not export GET); got: {allow:?}"
+    );
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+#[test]
+fn tsc_check_no_color_flag_strips_ansi_escapes_from_output() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-tsc-nocolor-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+    std::fs::write(routes_dir.join("broken.tsp"), TSC_BROKEN_TSP).expect("broken.tsp");
+
+    // (1) With --no-color. The bin must pass
+    // --noColor to tsc and the resulting stdout
+    // must not contain ANSI escape sequences
+    // (the `\x1b[` form).
+    let output = std::process::Command::new(master)
+        .arg("check")
+        .arg("--tsc")
+        .arg("--no-color")
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .current_dir(std::path::Path::new("D:/GitHub/tsp"))
+        .output()
+        .expect("check --tsc --no-color spawn");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "broken + --no-color must exit 1; \
+         stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        !stdout.contains("\x1b["),
+        "--no-color stdout must NOT contain ANSI escape \
+         sequences (\\x1b[); got: {stdout:?}"
+    );
+    assert!(
+        !stderr.contains("\x1b["),
+        "--no-color stderr must NOT contain ANSI escape \
+         sequences; got: {stderr:?}"
+    );
+    assert!(
+        stdout.contains("TS2353"),
+        "TS2353 diagnostic must still surface under \
+         --no-color (the flag does not silence tsc, \
+         only the color codes); got: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_root);
+}

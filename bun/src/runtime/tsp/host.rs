@@ -1514,22 +1514,92 @@ fn handle_connection(
     let parsed = parse_request(&head);
     metrics::global().record_request();
     if let ParsedRequest::Known { method, path, .. } = &parsed {
-        if *method == HttpMethod::Get && path == "/__tsp/metrics" {
-            let body = metrics::global().prometheus();
-            let head = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            );
-            stream
-                .write_all(head.as_bytes())
-                .map_err(HostError::Connection)?;
-            stream
-                .write_all(body.as_bytes())
-                .map_err(HostError::Connection)?;
-            metrics::global().record_response("HTTP/1.1 200 OK");
-            metrics::global().record_duration(request_started.elapsed().as_millis() as u64);
-            let _ = stream.shutdown(Shutdown::Both);
-            return Ok(());
+        if path == "/__tsp/metrics" {
+            match *method {
+                HttpMethod::Get => {
+                    // Slice 22+: GET returns the Prometheus
+                    // body. The body is generated AFTER
+                    // record_request but BEFORE
+                    // record_response + record_duration
+                    // -- a snapshot of mid-request state
+                    // (see host.rs:1517-1532 and the
+                    // `metrics_endpoint_serves_prometheus_text_...`
+                    // e2e for the full snapshot contract).
+                    let body = metrics::global().prometheus();
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    stream
+                        .write_all(head.as_bytes())
+                        .map_err(HostError::Connection)?;
+                    stream
+                        .write_all(body.as_bytes())
+                        .map_err(HostError::Connection)?;
+                    metrics::global().record_response("HTTP/1.1 200 OK");
+                    metrics::global().record_duration(
+                        request_started.elapsed().as_millis() as u64,
+                    );
+                    let _ = stream.shutdown(Shutdown::Both);
+                    return Ok(());
+                }
+                HttpMethod::Head => {
+                    // Spec sect.6.5: HEAD with no
+                    // explicit HEAD export uses GET
+                    // and drops the body. The
+                    // metrics endpoint has no
+                    // separate HEAD handler, so
+                    // return the same headers GET
+                    // would but with an empty
+                    // body. The Content-Length is
+                    // the GET body size so a client
+                    // can size its request without
+                    // the bytes.
+                    let body = metrics::global().prometheus();
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    stream
+                        .write_all(head.as_bytes())
+                        .map_err(HostError::Connection)?;
+                    metrics::global().record_response("HTTP/1.1 200 OK");
+                    metrics::global().record_duration(
+                        request_started.elapsed().as_millis() as u64,
+                    );
+                    let _ = stream.shutdown(Shutdown::Both);
+                    return Ok(());
+                }
+                _ => {
+                    // 405 Method Not Allowed. The
+                    // metrics endpoint only
+                    // documents GET + HEAD; any
+                    // other method gets a 405 with
+                    // an `Allow: GET, HEAD` header
+                    // so the client knows what to
+                    // retry with. The 405 is a
+                    // proper REST response and
+                    // does NOT count as a tsc /
+                    // page-router error.
+                    let body = b"405 Method Not Allowed: /__tsp/metrics only accepts GET and HEAD\r\n";
+                    let head = format!(
+                        "HTTP/1.1 405 Method Not Allowed\r\nAllow: GET, HEAD\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    stream
+                        .write_all(head.as_bytes())
+                        .map_err(HostError::Connection)?;
+                    stream
+                        .write_all(body)
+                        .map_err(HostError::Connection)?;
+                    metrics::global().record_response("HTTP/1.1 405 Method Not Allowed");
+                    metrics::global().record_duration(
+                        request_started.elapsed().as_millis() as u64,
+                    );
+                    let _ = stream.shutdown(Shutdown::Both);
+                    return Ok(());
+                }
+            }
         }
         if matches!(*method, HttpMethod::Get | HttpMethod::Head) {
             if let Some(root) = public_root {
