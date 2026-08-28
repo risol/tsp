@@ -5268,3 +5268,208 @@ fn metrics_endpoint_includes_x_content_type_options_nosniff_header() {
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&temp_root);
 }
+
+// ---------------------------------------------------------------------------
+// Batch-3: nosniff on regular page responses, and
+// `tspserver_v2 routes --json` for tooling integration.
+//
+// Two small surfaces that round out the host
+// hardening and CLI tooling: the nosniff header is
+// the defence-in-depth companion to the metrics
+// endpoint's nosniff; the routes --json flag gives
+// tools / CI a stable JSON shape (the human-readable
+// tab format is kept for shells).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn regular_page_response_includes_x_content_type_options_nosniff() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-nosniff-page-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+    std::fs::write(
+        routes_dir.join("ok.tsp"),
+        r#"
+export function GET() {
+  return new Response("hello", {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
+}
+"#,
+    )
+    .expect("ok.tsp");
+
+    let port: u16 = 40_500 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    // (1) GET /ok -> 200 + body + nosniff
+    let request = format!(
+        "GET /ok HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (s, raw) = http_send_raw(port, &request);
+    assert_eq!(s, 200, "GET /ok must 200; got {s}");
+    let nosniff = raw
+        .lines()
+        .find(|l| l.to_ascii_lowercase().starts_with("x-content-type-options:"))
+        .map(|l| l.split(':').nth(1).unwrap_or("").trim().to_string());
+    assert_eq!(
+        nosniff.as_deref(),
+        Some("nosniff"),
+        "regular page response must carry `X-Content-Type-Options: nosniff`; got: {nosniff:?}"
+    );
+
+    // (2) HEAD /ok -> 200 + empty body + nosniff
+    let request = format!(
+        "HEAD /ok HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (s_h, raw_h) = http_send_raw(port, &request);
+    assert_eq!(s_h, 200, "HEAD /ok must 200; got {s_h}");
+    let nosniff_h = raw_h
+        .lines()
+        .find(|l| l.to_ascii_lowercase().starts_with("x-content-type-options:"))
+        .map(|l| l.split(':').nth(1).unwrap_or("").trim().to_string());
+    assert_eq!(
+        nosniff_h.as_deref(),
+        Some("nosniff"),
+        "HEAD on regular page must carry `X-Content-Type-Options: nosniff`; got: {nosniff_h:?}"
+    );
+
+    // (3) 404 (non-existent route) must also carry nosniff
+    let request = format!(
+        "GET /nonexistent HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (s_404, raw_404) = http_send_raw(port, &request);
+    assert_eq!(s_404, 404, "GET /nonexistent must 404; got {s_404}");
+    let nosniff_404 = raw_404
+        .lines()
+        .find(|l| l.to_ascii_lowercase().starts_with("x-content-type-options:"))
+        .map(|l| l.split(':').nth(1).unwrap_or("").trim().to_string());
+    assert_eq!(
+        nosniff_404.as_deref(),
+        Some("nosniff"),
+        "404 response must carry `X-Content-Type-Options: nosniff`; got: {nosniff_404:?}"
+    );
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+#[test]
+fn routes_command_json_flag_emits_stable_json_array() {
+    // `tspserver_v2 routes --json` emits a JSON array
+    // suitable for tooling / CI consumption. The
+    // human-readable tab-separated default is
+    // preserved (not asserted here; covered by the
+    // existing routes smoke).
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-routes-json-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+    std::fs::write(
+        routes_dir.join("page1.tsp"),
+        r#"
+export function GET() {
+  return new Response("ok", { headers: { "content-type": "text/plain" } });
+}
+export function POST() {
+  return new Response("ok", { headers: { "content-type": "text/plain" } });
+}
+"#,
+    )
+    .expect("page1.tsp");
+    std::fs::write(
+        routes_dir.join("page2.tsp"),
+        r#"
+export function DELETE() {
+  return new Response("ok", { headers: { "content-type": "text/plain" } });
+}
+"#,
+    )
+    .expect("page2.tsp");
+
+    let output = std::process::Command::new(master)
+        .arg("routes")
+        .arg("--json")
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .current_dir(std::path::Path::new("D:/GitHub/tsp"))
+        .output()
+        .expect("routes --json spawn");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "routes --json must exit 0; \
+         stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // The output must be a JSON array (starts with `[`
+    // and ends with `]`).
+    assert!(
+        stdout.trim_start().starts_with('['),
+        "routes --json must start with `[`; got: {stdout:?}"
+    );
+    assert!(
+        stdout.trim_end().ends_with(']'),
+        "routes --json must end with `]`; got: {stdout:?}"
+    );
+    // Each entry must carry the path, source, and
+    // methods fields.
+    assert!(
+        stdout.contains("\"path\":\"/page1\""),
+        "routes --json must include page1 path; got: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("\"path\":\"/page2\""),
+        "routes --json must include page2 path; got: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("\"methods\":[\"GET\",\"POST\"]"),
+        "routes --json must include page1 methods [GET,POST]; got: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("\"methods\":[\"DELETE\"]"),
+        "routes --json must include page2 methods [DELETE]; got: {stdout:?}"
+    );
+    // The source field must point at a real file
+    // (the absolute path to page1.tsp under temp_root).
+    assert!(
+        stdout.contains("page1.tsp") && stdout.contains("page2.tsp"),
+        "routes --json must include the source filenames; got: {stdout:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_root);
+}

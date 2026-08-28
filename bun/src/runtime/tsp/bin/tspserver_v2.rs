@@ -383,6 +383,32 @@ fn resolve_worker_bin() -> Result<PathBuf, String> {
 }
 
 fn run_routes() -> ExitCode {
+    // Parse optional flag. Default output is
+    // tab-separated (`<path>\t<source>\t<methods>`)
+    // for human / shell consumption; `--json` emits
+    // a JSON array for tooling / CI.
+    let raw_args: Vec<String> = std::env::args().skip(2).collect();
+    let mut json = false;
+    let mut i = 0;
+    while i < raw_args.len() {
+        let arg = &raw_args[i];
+        if arg == "--json" {
+            json = true;
+            i += 1;
+        } else if arg == "--help" || arg == "-h" {
+            println!(
+                "Usage: tspserver_v2 routes [--json]\n\n\
+                 Prints one line per route in the routes/ directory:\n\
+                   <path>\\t<source>\\t<methods>\n\
+                 --json    emit a JSON array of {{path, source, methods}} instead."
+            );
+            return ExitCode::SUCCESS;
+        } else {
+            eprintln!("tsp routes: unexpected argument `{arg}`");
+            return ExitCode::from(2);
+        }
+    }
+
     let root = resolve_routes_dir();
     let table = match RouteTable::scan(&root) {
         Ok(table) => table,
@@ -391,18 +417,90 @@ fn run_routes() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    for route in table.iter() {
-        match bun_runtime_tsp::page::prepare(&route) {
-            Ok(page) => println!(
-                "{}\t{}\t{}",
-                route.path,
-                route.source.display(),
-                page.methods.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(",")
-            ),
-            Err(error) => println!("{}\t{}\tERROR: {error}", route.path, route.source.display()),
+    if json {
+        // Hand-rolled JSON (no serde dep). Each entry
+        // is `{"path": "...", "source": "...", "methods":
+        // [..]}`. Errors are surfaced via an extra
+        // `"error": "..."` field on the same row.
+        println!("[");
+        let mut first = true;
+        for route in table.iter() {
+            match bun_runtime_tsp::page::prepare(&route) {
+                Ok(page) => {
+                    if !first {
+                        println!(",");
+                    }
+                    first = false;
+                    let methods: Vec<&str> =
+                        page.methods.iter().map(|m| m.as_str()).collect();
+                    print!(
+                        "  {{\"path\":{},\"source\":{},\"methods\":[{}]}}",
+                        json_string(&route.path),
+                        json_string(&route.source.display().to_string()),
+                        methods
+                            .iter()
+                            .map(|m| json_string(m))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    );
+                }
+                Err(error) => {
+                    if !first {
+                        println!(",");
+                    }
+                    first = false;
+                    print!(
+                        "  {{\"path\":{},\"source\":{},\"error\":{}}}",
+                        json_string(&route.path),
+                        json_string(&route.source.display().to_string()),
+                        json_string(&error.to_string())
+                    );
+                }
+            }
+        }
+        if !first {
+            println!();
+        }
+        println!("]");
+    } else {
+        for route in table.iter() {
+            match bun_runtime_tsp::page::prepare(&route) {
+                Ok(page) => println!(
+                    "{}\t{}\t{}",
+                    route.path,
+                    route.source.display(),
+                    page.methods.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(",")
+                ),
+                Err(error) => println!("{}\t{}\tERROR: {error}", route.path, route.source.display()),
+            }
         }
     }
     ExitCode::SUCCESS
+}
+
+/// Hand-rolled JSON string escape. Wraps the input in
+/// double quotes and escapes the JSON-required
+/// characters (`"`, `\`, and control chars).
+fn json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\x08' => out.push_str("\\b"),
+            '\x0c' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn run_check() -> ExitCode {

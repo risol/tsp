@@ -1621,7 +1621,7 @@ fn handle_connection(
                     crate::static_files::load(root, path).map_err(HostError::Connection)?
                 {
                     let head = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: public, max-age=3600\r\nConnection: close\r\n\r\n",
+                        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nX-Content-Type-Options: nosniff\r\nCache-Control: public, max-age=3600\r\nConnection: close\r\n\r\n",
                         asset.content_type,
                         asset.body.len()
                     );
@@ -2034,6 +2034,7 @@ fn handle_connection(
         "{status_line}\r\n\
          {header_block}Content-Type: {content_type}\r\n\
          Content-Length: {content_length}\r\n\
+         X-Content-Type-Options: nosniff\r\n\
          Connection: close\r\n",
     );
     if let Some(allow) = allow_header {
