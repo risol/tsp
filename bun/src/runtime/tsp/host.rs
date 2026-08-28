@@ -1696,6 +1696,77 @@ fn handle_connection(
             let (dispatch_path, fragment_name, dispatch_query) = fragment_target(&path, &query)
                 .unwrap_or_else(|| (path.clone(), None, query.clone()));
             let matched = routes.lookup(&dispatch_path, method);
+            // FREEZE.md §11 / `config.bodyLimit`: a page
+            // may declare a per-page body cap. If the
+            // request body is larger than the page's
+            // cap, return 413 BEFORE running the page
+            // (the page would otherwise start
+            // processing a body it has no business
+            // reading). The cap is applied only to
+            // POST / PUT / PATCH / DELETE; GET / HEAD
+            // / OPTIONS are not expected to carry a
+            // body. The per-page cap is silently
+            // clamped to the global
+            // `TSP_MAX_BODY_BYTES` (the spec says
+            // "cannot exceed global hard limit"; a
+            // larger declared value would be a
+            // configuration error and we just use the
+            // global instead).
+            let page_body_limit: Option<usize> = match &matched {
+                MatchResult::Found { route, .. }
+                | MatchResult::FoundHeadOverGet { route } => {
+                    match crate::page::prepare(route) {
+                        Ok(page) => {
+                            let global = resolve_max_body_bytes();
+                            page.config_body_limit
+                                .map(|n| n.min(global))
+                        }
+                        Err(_) => None,
+                    }
+                }
+                _ => None,
+            };
+            if let Some(limit) = page_body_limit {
+                if matches!(
+                    method,
+                    HttpMethod::Post
+                        | HttpMethod::Put
+                        | HttpMethod::Patch
+                        | HttpMethod::Delete
+                ) && body.len() > limit
+                {
+                    metrics::global()
+                        .record_response("HTTP/1.1 413 Payload Too Large");
+                    metrics::global().record_duration(
+                        request_started.elapsed().as_millis() as u64,
+                    );
+                    let body_text = format_error_body(
+                        TspError::BodyTooLarge,
+                        &format!(
+                            "TSP v2: request body ({} bytes) exceeds the page's \
+                             `config.bodyLimit` ({} bytes)\n",
+                            body.len(),
+                            limit
+                        ),
+                    );
+                    let head = format!(
+                        "HTTP/1.1 413 Payload Too Large\r\n\
+                         Content-Type: text/plain; charset=utf-8\r\n\
+                         Content-Length: {}\r\n\
+                         X-Content-Type-Options: nosniff\r\n\
+                         Connection: close\r\n\r\n",
+                        body_text.len()
+                    );
+                    stream
+                        .write_all(head.as_bytes())
+                        .map_err(HostError::Connection)?;
+                    stream
+                        .write_all(body_text.as_bytes())
+                        .map_err(HostError::Connection)?;
+                    let _ = stream.shutdown(Shutdown::Both);
+                    return Ok(());
+                }
+            }
             let params: std::collections::HashMap<String, String> = match &matched {
                 MatchResult::Found { route, .. } | MatchResult::FoundHeadOverGet { route } => {
                     route.params.clone()

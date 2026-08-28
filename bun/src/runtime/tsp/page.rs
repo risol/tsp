@@ -41,6 +41,16 @@ pub struct PageSource {
     /// already wins on 405 dispatch), so this is
     /// strictly a check-time validation.
     pub config_methods: Option<Vec<HttpMethod>>,
+    /// `config.bodyLimit` if the page declared one
+    /// (FREEZE.md §11). The runtime applies this
+    /// AFTER route matching: if the body is
+    /// larger than this limit, the host returns
+    /// 413. The per-page limit MUST be <= the
+    /// global `TSP_MAX_BODY_BYTES` (spec
+    /// "cannot exceed global hard limit"); a
+    /// larger value falls back to the global at
+    /// runtime.
+    pub config_body_limit: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -92,11 +102,13 @@ pub fn prepare(route: &Route) -> Result<PageSource, PrepareError> {
     let byte_len = text.len();
     let methods = detect_methods(&text);
     let config_methods = detect_config_methods(&text);
+    let config_body_limit = detect_config_body_limit(&text);
     Ok(PageSource {
         text,
         byte_len,
         methods,
         config_methods,
+        config_body_limit,
     })
 }
 
@@ -209,6 +221,77 @@ pub fn detect_config_methods(text: &str) -> Option<Vec<HttpMethod>> {
         out.push(method);
     }
     Some(out)
+}
+
+/// Detect `config.bodyLimit` in a .tsp file
+/// (FREEZE.md §11). The page's
+/// `export const config = { bodyLimit: N }` is the
+/// single source of truth for the per-page body
+/// size cap (in bytes). Returns `None` when the
+/// page did not declare one (the runtime falls
+/// back to the global `TSP_MAX_BODY_BYTES`).
+///
+/// The detector is hand-rolled (no regex dep) and
+/// tolerates the common shapes:
+///   bodyLimit: 1024
+///   bodyLimit: 2 * 1024 * 1024
+///   bodyLimit: 0
+///   "bodyLimit": 1024
+/// It rejects negative values, NaN, and Infinity
+/// (the `usize` cast would underflow / panic). On
+/// any unparseable value, the function returns
+/// `None` so the check does not surface a wrong
+/// value as a successful parse.
+pub fn detect_config_body_limit(text: &str) -> Option<usize> {
+    // Find `bodyLimit:` in the source. Anchor on
+    // the colon so `something.bodyLimit` does not
+    // match.
+    let idx = text.find("bodyLimit:")?;
+    let after = &text[idx + "bodyLimit:".len()..];
+    // Skip the optional value body up to the next
+    // `,` or `}`. We allow the value to be a
+    // single integer (with optional underscores
+    // for readability) or a small expression of
+    // the form `<int> [* <int>]+`. Anything more
+    // complex is out of scope.
+    let end = after
+        .find(|c: char| c == ',' || c == '}' || c == '\n')
+        .unwrap_or(after.len());
+    let raw = after[..end].trim();
+    // Strip surrounding quotes (single / double)
+    // if the user used a string literal (rare but
+    // legal).
+    let raw = if (raw.starts_with('"') && raw.ends_with('"') && raw.len() >= 2)
+        || (raw.starts_with('\'') && raw.ends_with('\'') && raw.len() >= 2)
+    {
+        &raw[1..raw.len() - 1]
+    } else {
+        raw
+    };
+    // Strip underscores (numeric separator).
+    let raw = raw.replace('_', "");
+    // Compute the value. We support a small subset
+    // of arithmetic: a chain of `int * int * int * ...`
+    // (one or more multiplications). More complex
+    // expressions are rejected so the user gets an
+    // explicit error rather than a silent fallback
+    // to None.
+    let parts: Vec<&str> = raw.split('*').map(|p| p.trim()).collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let mut product: usize = 1;
+    for part in &parts {
+        let n: usize = match part.parse() {
+            Ok(n) => n,
+            Err(_) => return None,
+        };
+        product = match product.checked_mul(n) {
+            Some(p) => p,
+            None => return None,
+        };
+    }
+    Some(product)
 }
 
 #[cfg(test)]
@@ -376,6 +459,87 @@ export const config = {
             detect_config_methods(src),
             Some(vec![HttpMethod::Get, HttpMethod::Delete])
         );
+    }
+
+    // -----------------------------------------------------------------
+    // `config.bodyLimit` detection (FREEZE.md §11, slice 11 of plan)
+    //
+    // Hand-rolled parser for `bodyLimit: N` (bytes).
+    // Supports the common shapes (single int, single
+    // int with underscores, `int * int` expression,
+    // string-quoted int). Rejects negative numbers,
+    // NaN, Infinity, and multi-level expressions.
+    // On any unparseable value, returns None.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn detect_config_body_limit_none_when_absent() {
+        let src = r#"
+export const config = {
+  methods: ["GET"],
+};
+"#;
+        assert_eq!(detect_config_body_limit(src), None);
+    }
+
+    #[test]
+    fn detect_config_body_limit_simple_int() {
+        let src = r#"
+export const config = { bodyLimit: 4096 };
+"#;
+        assert_eq!(detect_config_body_limit(src), Some(4096));
+    }
+
+    #[test]
+    fn detect_config_body_limit_expression() {
+        let src = r#"
+export const config = { bodyLimit: 2 * 1024 * 1024 };
+"#;
+        assert_eq!(detect_config_body_limit(src), Some(2 * 1024 * 1024));
+    }
+
+    #[test]
+    fn detect_config_body_limit_underscore_separator() {
+        // Numeric separators (TypeScript 5+)
+        // are allowed in the value.
+        let src = r#"
+export const config = { bodyLimit: 1_048_576 };
+"#;
+        assert_eq!(detect_config_body_limit(src), Some(1_048_576));
+    }
+
+    #[test]
+    fn detect_config_body_limit_allows_zero() {
+        // `bodyLimit: 0` is allowed (the user might
+        // want to reject ALL bodies, which is a
+        // legitimate use case for endpoints that
+        // don't accept bodies).
+        let src = r#"
+export const config = { bodyLimit: 0 };
+"#;
+        assert_eq!(detect_config_body_limit(src), Some(0));
+    }
+
+    #[test]
+    fn detect_config_body_limit_rejects_unparseable() {
+        // `Infinity` would panic the `usize` cast
+        // if we let it through. The detector
+        // rejects it.
+        let src = r#"
+export const config = { bodyLimit: Infinity };
+"#;
+        assert_eq!(detect_config_body_limit(src), None);
+    }
+
+    #[test]
+    fn detect_config_body_limit_rejects_negative() {
+        // `parse::<usize>()` rejects negative
+        // numbers; the detector surfaces the
+        // unparseable value as None.
+        let src = r#"
+export const config = { bodyLimit: -1 };
+"#;
+        assert_eq!(detect_config_body_limit(src), None);
     }
 
     #[test]

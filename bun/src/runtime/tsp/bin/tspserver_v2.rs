@@ -525,7 +525,10 @@ fn run_check() -> ExitCode {
                 "Usage: tspserver_v2 check [--tsc] [--no-color]\n\n\
                  Scans the routes/ directory and prints each route's\n\
                  static export set. Returns 1 if any route fails to\n\
-                 parse, 0 otherwise.\n\n\
+                 parse, 0 otherwise. Also validates `PageConfig`\n\
+                 fields (FREEZE.md §11): a `config.methods` mismatch\n\
+                 (declared set vs. actual exports) is reported as\n\
+                 an ERROR and the check exits 1.\n\n\
                  --tsc        additionally run `tsc --noEmit` against the\n\
                               routes (after rewriting `.tsp` to `.tsx`)\n\
                               and the bundled `tsp:*` declaration files.\n\

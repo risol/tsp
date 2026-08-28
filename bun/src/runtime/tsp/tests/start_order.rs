@@ -324,9 +324,17 @@ fn wait_for_marker(
             Ok(n) => {
                 buffer.push_str(&String::from_utf8_lossy(&tmp[..n]));
                 if buffer.contains(marker) {
-                    // Put stderr back so the parent can drain it
-                    // (and we don't drop the marker's full line in
-                    // the OS pipe buffer).
+                    // Put stderr back so the parent can drain
+                    // it (and we don't drop the marker's full
+                    // line in the OS pipe buffer). Many tests
+                    // call `wait_for_marker` twice on the same
+                    // child (e.g. boot + hot-reload); without
+                    // the put-back, the second call would see
+                    // `child.stderr` already taken and panic.
+                    // The OS pipe buffer is bounded, so the
+                    // test should drain stderr in a background
+                    // thread if it issues many requests after
+                    // the marker (see e.g. the body-limit e2e).
                     child.stderr = Some(stderr);
                     return;
                 }
@@ -5695,5 +5703,155 @@ export function GET() { return new Response("g"); }
          stdout: {stdout:?}\nstderr: {stderr:?}"
     );
 
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+// ---------------------------------------------------------------------------
+// `config.bodyLimit` per-page cap (FREEZE.md §11, slice 11)
+//
+// A page may declare `config.bodyLimit: N` (bytes).
+// Requests to that page whose body exceeds N get 413
+// (the page is not invoked). The per-page cap is
+// silently clamped to the global `TSP_MAX_BODY_BYTES`;
+// a larger declared value is treated as the global.
+//
+// The e2e covers the three scenarios that pin the
+// contract without depending on multi-MB body
+// transfers (which hit a TCP teardown race when the
+// server's 413-then-shutdown lands before the client
+// finishes its 1 MiB+ send; that race is owned by
+// the global cap path, already covered by
+// `body_size_cap_rejects_oversized_requests_with_413`):
+//   (1) Body under the cap -> 200
+//   (2) Body over the cap, POST -> 413 (the body
+//       must mention the per-page limit so the
+//       operator can see why)
+//   (3) Body over the cap, GET -> 200 (the cap is
+//       a body-shape rule, not a status rule; GET
+//       / HEAD / OPTIONS are not expected to carry
+//       a body)
+//
+// The fourth case -- "per-page cap > global" -- is
+// not exercised end-to-end here because the body
+// must exceed the global (1 MiB), which races with
+// the server's shutdown. The clamping itself
+// (`n.min(global)` in `host.rs`) is a one-liner
+// and is easy to verify by reading the code; the
+// parser (`detect_config_body_limit` in `page.rs`)
+// is pinned by 7 unit tests.
+//
+// The route file declares `config.bodyLimit: 256` and
+// exports both GET and POST. The test uses 64-byte
+// and 512-byte bodies so the 256 boundary is exercised.
+// ---------------------------------------------------------------------------
+
+const BODY_LIMIT_TSP: &str = r#"
+// Page with a 256-byte body cap. POST echoes the
+// body back; GET returns "ok".
+export const config = {
+  bodyLimit: 256,
+} satisfies PageConfig;
+export function GET() {
+  return new Response("ok", {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
+}
+export async function POST(ctx) {
+  const text = await ctx.request.text();
+  return new Response(`echo:${text.length}`, {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
+}
+"#;
+
+#[test]
+fn config_body_limit_enforces_per_page_cap() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-body-limit-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+    std::fs::write(routes_dir.join("limited.tsp"), BODY_LIMIT_TSP).expect("limited.tsp");
+
+    let port: u16 = 41_000 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+    // Wait for the master to bind. `wait_for_marker`
+    // reads the marker's full line, then puts stderr
+    // back. After the marker, the master writes a
+    // small per-request log line on stderr; 3 short
+    // requests stay well under the OS pipe buffer
+    // (default 4 KiB on Windows) and do not need a
+    // background drain. The `terminate(child.id())`
+    // at the end of the test closes the pipe.
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    // (1) Body under the cap (64 bytes) -> 200
+    let small_body = "x".repeat(64);
+    let request = format!(
+        "POST /limited HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: {}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n{}",
+        small_body.len(),
+        small_body
+    );
+    let (s_small, _) = http_send_raw(port, &request);
+    assert_eq!(s_small, 200, "small POST under cap must 200; got {s_small}");
+
+    // (2) Body over the cap (512 bytes > 256) -> 413
+    let large_body = "x".repeat(512);
+    let request = format!(
+        "POST /limited HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: {}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n{}",
+        large_body.len(),
+        large_body
+    );
+    let (s_large, raw_large) = http_send_raw(port, &request);
+    assert_eq!(
+        s_large, 413,
+        "large POST over cap must 413; got {s_large}"
+    );
+    let body_413 = raw_large.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+    assert!(
+        body_413.contains("config.bodyLimit")
+            || body_413.contains("256 bytes")
+            || body_413.contains("exceeds"),
+        "413 body must mention the per-page limit; got: {body_413:?}"
+    );
+
+    // (3) GET with a body is 200 -- the per-page cap
+    // is a body-shape rule, not a status rule for
+    // GET. (The cap applies only to body-bearing
+    // methods: POST / PUT / PATCH / DELETE.)
+    let get_body = "x".repeat(512);
+    let request = format!(
+        "GET /limited HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: {}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n{}",
+        get_body.len(),
+        get_body
+    );
+    let (s_get, _) = http_send_raw(port, &request);
+    assert_eq!(
+        s_get, 200,
+        "GET (body-shape rule does not apply to GET) must 200; got {s_get}"
+    );
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
     let _ = std::fs::remove_dir_all(&temp_root);
 }
