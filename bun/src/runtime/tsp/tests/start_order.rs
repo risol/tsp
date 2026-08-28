@@ -6300,3 +6300,148 @@ fn config_cache_sets_default_cache_control_header() {
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&temp_root);
 }
+
+// ---------------------------------------------------------------------------
+// `config.timeoutMs` per-page request timeout (spec §7 v2.0
+// core PageConfig)
+//
+// A page may declare `config.timeoutMs: N` (milliseconds)
+// on its `export const config = { ... } satisfies PageConfig`.
+// The per-page value OVERRIDES the global `TSP_TIMEOUT_MS`
+// for that one request. `0` means "no timeout" (the
+// abort signal is still created but the watchdog never
+// fires) -- same as the global `0`.
+//
+// The e2e covers the three contract scenarios:
+//   (1) `config.timeoutMs: 100` and the page sleeps for
+//       2_000ms -- the per-page watchdog fires at 100ms
+//       and the request returns 504
+//   (2) No `config.timeoutMs` and the page sleeps for
+//       200ms -- the request uses the global default
+//       (30s) and the page completes with 200
+//   (3) `config.timeoutMs: 0` and the page sleeps for
+//       500ms -- the per-page `0` means "no timeout"
+//       and the page completes with 200 (the abort
+//       signal is wired but the watchdog never fires)
+// ---------------------------------------------------------------------------
+
+const TIMEOUT_FAST_TSP: &str = r#"
+export const config = {
+  timeoutMs: 100,
+} satisfies PageConfig;
+// Sleep 2 seconds (well over the 100ms
+// per-page timeout). The watchdog fires
+// at 100ms, the worker is killed, and
+// the host returns 504.
+export async function GET() {
+  await Bun.sleep(2_000);
+  return new Response("done", {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
+}
+"#;
+
+const TIMEOUT_NONE_TSP: &str = r#"
+// No `config.timeoutMs`: the request
+// uses the global `TSP_TIMEOUT_MS`
+// (default 30s). The 200ms sleep is
+// well within that, so the page
+// completes with 200.
+export async function GET() {
+  await Bun.sleep(200);
+  return new Response("done", {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
+}
+"#;
+
+const TIMEOUT_ZERO_TSP: &str = r#"
+export const config = {
+  timeoutMs: 0,
+} satisfies PageConfig;
+// `0` means "no timeout": the abort
+// signal is still wired to the page
+// but the watchdog never fires. The
+// 500ms sleep completes and the page
+// returns 200.
+export async function GET() {
+  await Bun.sleep(500);
+  return new Response("done", {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
+}
+"#;
+
+#[test]
+fn config_timeout_ms_overrides_global_request_timeout() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-config-timeout-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+    std::fs::write(routes_dir.join("fast.tsp"), TIMEOUT_FAST_TSP)
+        .expect("fast.tsp");
+    std::fs::write(routes_dir.join("none.tsp"), TIMEOUT_NONE_TSP)
+        .expect("none.tsp");
+    std::fs::write(routes_dir.join("zero.tsp"), TIMEOUT_ZERO_TSP)
+        .expect("zero.tsp");
+
+    let port: u16 = 41_800 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    // (1) `config.timeoutMs: 100` + 2s sleep -> 504
+    let request = format!(
+        "GET /fast HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (s_fast, _raw_fast) = http_send_raw(port, &request);
+    assert_eq!(
+        s_fast, 504,
+        "`config.timeoutMs: 100` with a 2s sleep must 504; got {s_fast}"
+    );
+
+    // (2) No `config.timeoutMs` + 200ms sleep -> 200
+    let request = format!(
+        "GET /none HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (s_none, _raw_none) = http_send_raw(port, &request);
+    assert_eq!(
+        s_none, 200,
+        "page without `config.timeoutMs` (using the 30s global) must 200 for a 200ms sleep; got {s_none}"
+    );
+
+    // (3) `config.timeoutMs: 0` + 500ms sleep -> 200
+    let request = format!(
+        "GET /zero HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (s_zero, _raw_zero) = http_send_raw(port, &request);
+    assert_eq!(
+        s_zero, 200,
+        "`config.timeoutMs: 0` (no watchdog) with a 500ms sleep must 200; got {s_zero}"
+    );
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}

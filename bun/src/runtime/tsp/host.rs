@@ -1794,6 +1794,28 @@ fn handle_connection(
                     .and_then(|p| p.config_cache.map(|c| c.header_value())),
                 _ => None,
             };
+            // `config.timeoutMs` (spec §7 v2.0
+            // core PageConfig): a page may
+            // declare a per-page request timeout
+            // (in milliseconds). The per-page
+            // value OVERRIDES the global
+            // `resolve_request_timeout()` for
+            // this one request. `0` means
+            // "no timeout" (the abort signal is
+            // still wired to the page, but the
+            // watchdog never fires) -- same as
+            // the global `0`. The per-page value
+            // is NOT silently clamped to the
+            // global; the page is the authority
+            // on its own timeout budget.
+            let effective_timeout_ms: u64 = match &matched {
+                MatchResult::Found { route, .. }
+                | MatchResult::FoundHeadOverGet { route } => crate::page::prepare(route)
+                    .ok()
+                    .and_then(|p| p.config_timeout_ms)
+                    .unwrap_or(timeout_ms),
+                _ => timeout_ms,
+            };
             // Slice 16k: resolve the request's session
             // view (spec sect.16) against the runtime
             // SessionService. `None` cookie -> fresh
@@ -1877,7 +1899,7 @@ fn handle_connection(
                             bun,
                             &ctx,
                             &ctx_json,
-                            timeout_ms,
+                            effective_timeout_ms,
                             &cancellation,
                         )
                     } else {
@@ -1889,7 +1911,7 @@ fn handle_connection(
                             bun,
                             &ctx,
                             &ctx_json,
-                            timeout_ms,
+                            effective_timeout_ms,
                             &cancellation,
                         )
                     };
@@ -2065,7 +2087,7 @@ fn handle_connection(
                         bun,
                         &ctx,
                         &ctx_json,
-                        timeout_ms,
+                        effective_timeout_ms,
                         &cancellation,
                     );
                     // The render result is the raw

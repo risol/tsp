@@ -69,6 +69,23 @@ pub struct PageSource {
     /// surface a wrong value as a successful
     /// parse).
     pub config_cache: Option<CachePolicy>,
+    /// `config.timeoutMs` if the page declared
+    /// one (spec §7 "v2.0 core PageConfig").
+    /// The runtime applies this AFTER route
+    /// matching: the per-page timeout overrides
+    /// the global `TSP_TIMEOUT_MS` for that
+    /// one request. A page may declare a
+    /// smaller value to fail fast on a slow
+    /// endpoint, or a larger value to allow a
+    /// long-running operation. A value of
+    /// `0` means "no timeout" (the per-request
+    /// abort signal is still created and wired
+    /// to the page, but the watchdog never
+    /// fires) -- same as the global `0`. The
+    /// per-page value is NOT silently clamped
+    /// to the global; the page is the authority
+    /// on its own timeout budget.
+    pub config_timeout_ms: Option<u64>,
     /// Names of `export function NAME(` calls
     /// in the file where `NAME` is NOT one of
     /// the standard HTTP method handlers
@@ -190,6 +207,7 @@ pub fn prepare(route: &Route) -> Result<PageSource, PrepareError> {
     let config_methods = detect_config_methods(&text);
     let config_body_limit = detect_config_body_limit(&text);
     let config_cache = detect_config_cache(&text);
+    let config_timeout_ms = detect_config_timeout_ms(&text);
     let unknown_exports = detect_unknown_exports(&text);
     let has_default_export = detect_default_export(&text);
     Ok(PageSource {
@@ -199,6 +217,7 @@ pub fn prepare(route: &Route) -> Result<PageSource, PrepareError> {
         config_methods,
         config_body_limit,
         config_cache,
+        config_timeout_ms,
         unknown_exports,
         has_default_export,
     })
@@ -493,6 +512,59 @@ pub fn detect_config_body_limit(text: &str) -> Option<usize> {
     let mut product: usize = 1;
     for part in &parts {
         let n: usize = match part.parse() {
+            Ok(n) => n,
+            Err(_) => return None,
+        };
+        product = match product.checked_mul(n) {
+            Some(p) => p,
+            None => return None,
+        };
+    }
+    Some(product)
+}
+
+/// Detect `config.timeoutMs` in a .tsp file
+/// (spec §7 "v2.0 core PageConfig"). The
+/// page's `export const config = { timeoutMs: N }`
+/// is the source of truth for the per-page
+/// request timeout (in milliseconds). Returns
+/// `None` when the page did not declare one
+/// (the runtime falls back to the global
+/// `TSP_TIMEOUT_MS`).
+///
+/// The detector is hand-rolled (no regex dep)
+/// and tolerates the same shapes as
+/// `detect_config_body_limit`:
+///   timeoutMs: 1000
+///   timeoutMs: 60_000       (underscore separator)
+///   timeoutMs: 5 * 1000     (small expression)
+///   timeoutMs: 0            (disables the watchdog)
+/// It rejects negative numbers, NaN, and
+/// Infinity (the `u64` cast would underflow
+/// / panic). On any unparseable value, the
+/// function returns `None` so the check does
+/// not surface a wrong value as a successful
+/// parse.
+pub fn detect_config_timeout_ms(text: &str) -> Option<u64> {
+    // Find `timeoutMs:` in the source. Anchor
+    // on the colon so `something.timeoutMs`
+    // does not match. The detector shares the
+    // same line-shape rule as the other
+    // PageConfig detectors in this module.
+    let idx = text.find("timeoutMs:")?;
+    let after = &text[idx + "timeoutMs:".len()..];
+    let end = after
+        .find(|c: char| c == ',' || c == '}' || c == '\n')
+        .unwrap_or(after.len());
+    let raw = after[..end].trim();
+    let raw = raw.replace('_', "");
+    let parts: Vec<&str> = raw.split('*').map(|p| p.trim()).collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let mut product: u64 = 1;
+    for part in &parts {
+        let n: u64 = match part.parse() {
             Ok(n) => n,
             Err(_) => return None,
         };
@@ -835,6 +907,76 @@ export const config = { bodyLimit: Infinity };
 export const config = { bodyLimit: -1 };
 "#;
         assert_eq!(detect_config_body_limit(src), None);
+    }
+
+    #[test]
+    fn detect_config_timeout_ms_none_when_absent() {
+        let src = r#"
+export function GET() { return new Response("ok"); }
+"#;
+        assert_eq!(detect_config_timeout_ms(src), None);
+    }
+
+    #[test]
+    fn detect_config_timeout_ms_simple_int() {
+        let src = r#"
+export const config = { timeoutMs: 1000 } satisfies PageConfig;
+export function GET() { return new Response("ok"); }
+"#;
+        assert_eq!(detect_config_timeout_ms(src), Some(1000));
+    }
+
+    #[test]
+    fn detect_config_timeout_ms_underscore_separator() {
+        let src = r#"
+export const config = { timeoutMs: 60_000 } satisfies PageConfig;
+export function GET() { return new Response("ok"); }
+"#;
+        assert_eq!(detect_config_timeout_ms(src), Some(60_000));
+    }
+
+    #[test]
+    fn detect_config_timeout_ms_expression() {
+        // `5 * 1000` -- small expression form
+        // (same as `detect_config_body_limit`).
+        let src = r#"
+export const config = { timeoutMs: 5 * 1000 } satisfies PageConfig;
+export function GET() { return new Response("ok"); }
+"#;
+        assert_eq!(detect_config_timeout_ms(src), Some(5_000));
+    }
+
+    #[test]
+    fn detect_config_timeout_ms_allows_zero() {
+        // `0` means "no timeout" (the abort
+        // signal is still created but the
+        // watchdog never fires).
+        let src = r#"
+export const config = { timeoutMs: 0 } satisfies PageConfig;
+export function GET() { return new Response("ok"); }
+"#;
+        assert_eq!(detect_config_timeout_ms(src), Some(0));
+    }
+
+    #[test]
+    fn detect_config_timeout_ms_rejects_negative() {
+        // `parse::<u64>()` rejects negative
+        // numbers; the detector surfaces the
+        // unparseable value as None.
+        let src = r#"
+export const config = { timeoutMs: -1 } satisfies PageConfig;
+"#;
+        assert_eq!(detect_config_timeout_ms(src), None);
+    }
+
+    #[test]
+    fn detect_config_timeout_ms_rejects_unparseable() {
+        // `Infinity` / `NaN` are not valid
+        // `u64` literals.
+        let src = r#"
+export const config = { timeoutMs: Infinity } satisfies PageConfig;
+"#;
+        assert_eq!(detect_config_timeout_ms(src), None);
     }
 
     #[test]
