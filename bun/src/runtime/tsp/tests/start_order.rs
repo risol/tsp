@@ -6302,28 +6302,125 @@ fn config_cache_sets_default_cache_control_header() {
 }
 
 // ---------------------------------------------------------------------------
+// Spec §6.3 / FREEZE item 5 / plan §10.4:
+// `HandlerResult = HtmlNode | Response`. An invalid
+// handler return value (object / number / boolean /
+// undefined / null) is a contract violation and
+// MUST be surfaced as a typed `TSP3001` error in
+// the 500 body so the user can grep for it.
+//
+// The e2e boots the real binary, hits a page that
+// returns each of the four forbidden shapes
+// (`{redirect: ...}`, `42`, `true`, `undefined`),
+// and pins:
+//   - the response is 500
+//   - the body contains the `TSP3001:` prefix
+//   - the body names the invalid type
+//     (`Object` / `Number` / `Boolean` / `Undefined`)
+// ---------------------------------------------------------------------------
+
+const TSP3001_OBJECT_TSP: &str = r#"
+export function GET() {
+  // `{ redirect: ... }` is the canonical
+  // example from FREEZE item 5.
+  return { redirect: "/x" };
+}
+"#;
+
+const TSP3001_NUMBER_TSP: &str = r#"
+export function GET() {
+  return 42;
+}
+"#;
+
+const TSP3001_BOOLEAN_TSP: &str = r#"
+export function GET() {
+  return true;
+}
+"#;
+
+const TSP3001_UNDEFINED_TSP: &str = r#"
+export function GET() {
+  return undefined;
+}
+"#;
+
+#[test]
+fn handler_returned_unsupported_value_surfaces_tsp3001() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-tsp3001-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+    std::fs::write(routes_dir.join("object.tsp"), TSP3001_OBJECT_TSP)
+        .expect("object.tsp");
+    std::fs::write(routes_dir.join("number.tsp"), TSP3001_NUMBER_TSP)
+        .expect("number.tsp");
+    std::fs::write(routes_dir.join("boolean.tsp"), TSP3001_BOOLEAN_TSP)
+        .expect("boolean.tsp");
+    std::fs::write(routes_dir.join("undefined.tsp"), TSP3001_UNDEFINED_TSP)
+        .expect("undefined.tsp");
+
+    let port: u16 = 42_200 + (std::process::id() as u16 % 500);
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+
+    // Each case: 500 + `TSP3001:` prefix in the
+    // body + the capitalized type name in the
+    // body. The type name is captured per case
+    // so the assertion is local and clear.
+    let cases: &[(&str, &str)] = &[
+        ("/object", "Object"),
+        ("/number", "Number"),
+        ("/boolean", "Boolean"),
+        ("/undefined", "Undefined"),
+    ];
+    for (path, type_name) in cases {
+        let request = format!(
+            "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        );
+        let (s, raw) = http_send_raw(port, &request);
+        assert_eq!(s, 500, "GET {path} must 500; got {s}");
+        // The 500 body is JSON. The `message`
+        // field carries the `TSP3001:` prefix
+        // (the inner catch serializes the
+        // Error message verbatim).
+        assert!(
+            raw.contains("TSP3001:"),
+            "GET {path}: 500 body must contain `TSP3001:` prefix; got: {raw}"
+        );
+        assert!(
+            raw.contains(type_name),
+            "GET {path}: 500 body must name the invalid type `{type_name}`; got: {raw}"
+        );
+    }
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+// ---------------------------------------------------------------------------
 // `config.timeoutMs` per-page request timeout (spec §7 v2.0
 // core PageConfig)
-//
-// A page may declare `config.timeoutMs: N` (milliseconds)
-// on its `export const config = { ... } satisfies PageConfig`.
-// The per-page value OVERRIDES the global `TSP_TIMEOUT_MS`
-// for that one request. `0` means "no timeout" (the
-// abort signal is still created but the watchdog never
-// fires) -- same as the global `0`.
-//
-// The e2e covers the three contract scenarios:
-//   (1) `config.timeoutMs: 100` and the page sleeps for
-//       2_000ms -- the per-page watchdog fires at 100ms
-//       and the request returns 504
-//   (2) No `config.timeoutMs` and the page sleeps for
-//       200ms -- the request uses the global default
-//       (30s) and the page completes with 200
-//   (3) `config.timeoutMs: 0` and the page sleeps for
-//       500ms -- the per-page `0` means "no timeout"
-//       and the page completes with 200 (the abort
-//       signal is wired but the watchdog never fires)
-// ---------------------------------------------------------------------------
 
 const TIMEOUT_FAST_TSP: &str = r#"
 export const config = {
