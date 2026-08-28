@@ -4567,6 +4567,25 @@ fn check_with_tsc_flag_catches_user_type_errors_and_passes_clean_routes() {
         "broken `check --tsc` stdout must mention `cost`; \
          stdout was:\n{broken_stdout}"
     );
+    // The diagnostic path is rewritten from the temp
+    // dir (e.g. `<Temp>/tsp-tsc-check-XXX/routes/`)
+    // to the user's routes root, so the user can
+    // copy/click straight to the original .tsp.
+    // Assert the temp-dir prefix is NOT in the stdout
+    // and the routes-root path IS.
+    assert!(
+        !broken_stdout.contains("tsp-tsc-check-"),
+        "broken `check --tsc` must NOT leak the temp \
+         dir prefix in the diagnostic path; stdout was:\
+         \n{broken_stdout}"
+    );
+    assert!(
+        broken_stdout.contains("broken.tsx")
+            || broken_stdout.contains("broken.tsp"),
+        "broken `check --tsc` stdout must reference \
+         the broken file (the rewrite must preserve the \
+         filename); stdout was:\n{broken_stdout}"
+    );
     let _ = std::fs::remove_dir_all(&broken_root);
 }
 

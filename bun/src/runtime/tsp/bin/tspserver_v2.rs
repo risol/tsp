@@ -617,11 +617,23 @@ fn run_tsc_check(routes_root: &std::path::Path) -> Result<(), String> {
             .current_dir(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
             .output()
             .map_err(|e| format!("invoke {}: {e}", tsc_bin.display()))?;
-        // Forward tsc's stdout (the error list) to the user
-        // so they see the same diagnostic they would from a
-        // direct tsc invocation.
-        print!("{}", String::from_utf8_lossy(&output.stdout));
-        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+        // tsc prints absolute paths in its diagnostics
+        // (it sees the temp dir, not the routes root). For
+        // the user, those paths are noise -- their source
+        // lives at `<routes>/foo.tsp`, not at
+        // `<some temp dir>/routes/foo.tsx`. Rewrite each
+        // diagnostic's path prefix so the user can copy /
+        // click straight to the original file.
+        rewrite_tsc_paths(
+            &String::from_utf8_lossy(&output.stdout),
+            &temp_routes,
+            routes_root,
+        );
+        rewrite_tsc_paths(
+            &String::from_utf8_lossy(&output.stderr),
+            &temp_routes,
+            routes_root,
+        );
         if output.status.success() {
             Ok(())
         } else {
@@ -635,6 +647,94 @@ fn run_tsc_check(routes_root: &std::path::Path) -> Result<(), String> {
 
     cleanup();
     result
+}
+
+/// Rewrite `tsc` diagnostic paths from
+/// `<temp>/routes/<rest>` to `<routes_root>/<rest>` so
+/// the user sees a path that actually exists on their
+/// disk. The rewrite is conservative: only paths that
+/// start with the temp `routes/` prefix are touched;
+/// anything else (e.g. a path inside `node_modules/`)
+/// passes through unchanged. The output is written
+/// directly to stdout / stderr (the function takes the
+/// raw tsc output as input).
+fn rewrite_tsc_paths(text: &str, temp_routes: &std::path::Path, routes_root: &std::path::Path) {
+    // tsc on Windows emits paths with forward slashes
+    // (`C:/...`), but the host's `PathBuf` round-trips
+    // with backslashes. Build both candidate prefixes
+    // so either representation matches.
+    let temp_back = temp_routes.to_string_lossy().to_string();
+    let temp_fwd = temp_back.replace('\\', "/");
+    let routes_back = routes_root.to_string_lossy().to_string();
+    let routes_fwd = routes_back.replace('\\', "/");
+
+    for line in text.lines() {
+        // tsc's diagnostic format is:
+        //   <path>(<line>,<col>): <message>
+        // or a continuation line with no path. We need
+        // to extract just the `<path>` portion (stopping
+        // at the `(<line>,<col>)` opener) so the rewrite
+        // doesn't smear the message into the path.
+        let (path_end, prefix) = if let Some(idx) = line.find('(') {
+            if let Some(comma_idx) = line[idx..].find(',') {
+                let after_comma = idx + comma_idx + 1;
+                if let Some(close_idx) = line[after_comma..].find(')') {
+                    let col_part = &line[after_comma..after_comma + close_idx];
+                    if col_part.chars().all(|c| c.is_ascii_digit()) {
+                        // `<path>(<digits>,<digits>)` matches the tsc
+                        // diagnostic shape; everything before
+                        // the `(` is the path.
+                        (idx, &line[..idx])
+                    } else {
+                        // `(` was not the diagnostic opener; treat
+                        // the whole line as a path-less continuation
+                        // (pass through unchanged).
+                        (line.len(), line)
+                    }
+                } else {
+                    (line.len(), line)
+                }
+            } else {
+                (line.len(), line)
+            }
+        } else {
+            (line.len(), line)
+        };
+        if path_end == line.len() {
+            // Path-less line (continuation, header, etc.):
+            // pass through unchanged.
+            println!("{}", line);
+            continue;
+        }
+        // `prefix` is the path. Try to rewrite it.
+        let rewritten_path = if prefix.starts_with(&temp_back) {
+            let rel = prefix.strip_prefix(&temp_back).unwrap();
+            let rel = rel.trim_start_matches('\\').trim_start_matches('/');
+            let mut new_path = std::path::PathBuf::from(&routes_back);
+            for part in rel.split(['\\', '/']) {
+                if !part.is_empty() {
+                    new_path.push(part);
+                }
+            }
+            new_path.to_string_lossy().to_string()
+        } else if prefix.starts_with(&temp_fwd) {
+            let rel = prefix.strip_prefix(&temp_fwd).unwrap();
+            let rel = rel.trim_start_matches('/');
+            let mut new_path = std::path::PathBuf::from(&routes_fwd);
+            for part in rel.split('/') {
+                if !part.is_empty() {
+                    new_path.push(part);
+                }
+            }
+            new_path.to_string_lossy().to_string()
+        } else {
+            prefix.to_string()
+        };
+        // Re-assemble: rewritten path + the original
+        // `(<line>,<col>): <message>` suffix.
+        let suffix = &line[path_end..];
+        println!("{}{}", rewritten_path, suffix);
+    }
 }
 
 /// Recursively copy `routes_root` into `dst_root`, renaming
