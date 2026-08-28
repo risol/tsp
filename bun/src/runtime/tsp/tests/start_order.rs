@@ -5707,6 +5707,124 @@ export function GET() { return new Response("g"); }
 }
 
 // ---------------------------------------------------------------------------
+// Spec §46: "no unknown runtime exports" (plan §48).
+//
+// A `.tsp` file may only export the standard HTTP
+// method handlers (GET / POST / PUT / PATCH /
+// DELETE / OPTIONS / HEAD) and the optional
+// `config` object. Any other `export function
+// NAME(...)` is an "unknown runtime export" and
+// should be surfaced by `tspserver_v2 check` as
+// a quality-of-experience warning (the page still
+// serves; the user gets a clear message at
+// check time). The full spec §46 treatment
+// (unknown exports are a generation-build
+// failure) lands with the AST detector in a
+// future slice.
+//
+// The e2e runs `check` against a routes dir with
+// two files:
+//   (1) `clean.tsp` -- only exports GET. `check`
+//       must NOT report unknown exports for it.
+//   (2) `helper.tsp` -- exports GET AND a
+//       `helper()` function. `check` MUST report
+//       the helper as an unknown runtime export
+//       and exit 1.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn check_reports_unknown_runtime_exports() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-unknown-exports-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("routes");
+    std::fs::create_dir_all(&routes_dir).expect("routes dir");
+
+    std::fs::write(
+        routes_dir.join("clean.tsp"),
+        r#"
+export function GET() { return new Response("ok"); }
+"#,
+    )
+    .expect("clean.tsp");
+
+    std::fs::write(
+        routes_dir.join("helper.tsp"),
+        r#"
+export function GET() { return new Response("ok"); }
+// `helper` is not a standard HTTP method
+// handler. spec §46 forbids it.
+export function helper() { return 1; }
+export function another_helper() { return 2; }
+"#,
+    )
+    .expect("helper.tsp");
+
+    let output = std::process::Command::new(master)
+        .arg("check")
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .current_dir(std::path::Path::new("D:/GitHub/tsp"))
+        .output()
+        .expect("check spawn");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // (1) clean.tsp: OK, no unknown-export error
+    assert!(
+        stdout.contains("OK /clean [GET]"),
+        "clean.tsp must report OK [GET]; stdout: {stdout:?}"
+    );
+    assert!(
+        !stderr.contains("clean.tsp: unknown runtime export"),
+        "clean.tsp must NOT report an unknown-export error; stderr: {stderr:?}"
+    );
+
+    // (2) helper.tsp: ERROR lines naming both
+    // `helper` and `another_helper` in source
+    // order. The order is reported so the user
+    // can find the second / third violation in a
+    // long file.
+    assert!(
+        stderr.contains("unknown runtime export"),
+        "helper.tsp must surface the unknown-export violation; stderr: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("helper.tsp"),
+        "unknown-export error must name the source file; stderr: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("\"helper\""),
+        "unknown-export error must name the `helper` function; stderr: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("\"another_helper\""),
+        "unknown-export error must name the `another_helper` function; stderr: {stderr:?}"
+    );
+
+    // Exit code: must be 1 (the unknown exports
+    // surface as a non-zero exit, like other
+    // `check` errors).
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "check must exit 1 when an unknown runtime export is found; \
+         stdout: {stdout:?}\nstderr: {stderr:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+// ---------------------------------------------------------------------------
 // `config.bodyLimit` per-page cap (FREEZE.md §11, slice 11)
 //
 // A page may declare `config.bodyLimit: N` (bytes).

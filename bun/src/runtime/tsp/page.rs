@@ -69,6 +69,26 @@ pub struct PageSource {
     /// surface a wrong value as a successful
     /// parse).
     pub config_cache: Option<CachePolicy>,
+    /// Names of `export function NAME(` calls
+    /// in the file where `NAME` is NOT one of
+    /// the standard HTTP method handlers
+    /// (spec §46 "no unknown runtime exports",
+    /// plan §48). An empty vector means the
+    /// page has no unknown exports. The
+    /// `tspserver_v2 check` subcommand reports
+    /// a non-empty vector as an ERROR (and
+    /// exits 1) so the user gets a clear
+    /// message at check time rather than at
+    /// runtime. The runtime itself does NOT
+    /// refuse to register the page (it still
+    /// serves the page's recognised HTTP method
+    /// exports); the unknown export is a
+    /// quality-of-experience check, not a hard
+    /// generation-build failure. The full
+    /// spec §46 treatment (unknown export is a
+    /// build-time failure) lands with the AST
+    /// detector in a future slice.
+    pub unknown_exports: Vec<String>,
 }
 
 /// `config.cache` policy values. The wire form
@@ -149,6 +169,7 @@ pub fn prepare(route: &Route) -> Result<PageSource, PrepareError> {
     let config_methods = detect_config_methods(&text);
     let config_body_limit = detect_config_body_limit(&text);
     let config_cache = detect_config_cache(&text);
+    let unknown_exports = detect_unknown_exports(&text);
     Ok(PageSource {
         text,
         byte_len,
@@ -156,6 +177,7 @@ pub fn prepare(route: &Route) -> Result<PageSource, PrepareError> {
         config_methods,
         config_body_limit,
         config_cache,
+        unknown_exports,
     })
 }
 
@@ -187,6 +209,81 @@ fn exports_method(text: &str, method: HttpMethod) -> bool {
         let trimmed = line.trim_start();
         trimmed.starts_with(&needle_async) || trimmed.starts_with(&needle_sync)
     })
+}
+
+/// All `export function NAME(` names in `text`
+/// where `NAME` is NOT one of the standard
+/// HTTP method handlers (spec §46: "no unknown
+/// runtime exports"). Used by
+/// `detect_unknown_exports` to build the
+/// canonical list of names. The detector
+/// follows the same `export function` /
+/// `export async function` line-start rules
+/// as `exports_method` above; the full
+/// AST-based re-export edge case (e.g.
+/// `export { foo as GET }`) lands with the
+/// AST detector in a future slice.
+fn all_exported_function_names(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        // Skip comment lines and string-only lines.
+        if trimmed.starts_with("//") || trimmed.starts_with("/*") {
+            continue;
+        }
+        let after = if let Some(rest) = trimmed.strip_prefix("export async function ") {
+            rest
+        } else if let Some(rest) = trimmed.strip_prefix("export function ") {
+            rest
+        } else {
+            continue;
+        };
+        // Find the `(` that opens the parameter
+        // list. The name ends at the first `(`.
+        // A name cannot contain `(` itself (TS
+        // function names are identifiers), so the
+        // first `(` is unambiguous.
+        let Some(paren) = after.find('(') else {
+            continue;
+        };
+        let name = after[..paren].trim();
+        if name.is_empty() {
+            continue;
+        }
+        out.push(name.to_string());
+    }
+    out
+}
+
+/// Detect `export function NAME(` calls in a
+/// `.tsp` file where `NAME` is NOT one of the
+/// standard HTTP method handlers (spec §46
+/// "no unknown runtime exports"). The returned
+/// `Vec<String>` lists the names in source
+/// order. An empty vector means the file has
+/// no unknown runtime exports (all `export
+/// function` calls are recognised HTTP
+/// method handlers or are non-runtime
+/// exports that don't match the detector's
+/// `export function` rule).
+///
+/// The detector is hand-rolled (no regex dep)
+/// and follows the same line-start rules as
+/// the other PageConfig detectors in this
+/// module. A `.tsp` file that re-exports a
+/// function via `export { foo as GET }` will
+/// NOT be detected here (it would also be
+/// missed by `detect_methods`); the AST-based
+/// detector that catches this is deferred.
+pub fn detect_unknown_exports(text: &str) -> Vec<String> {
+    let known: Vec<&'static str> = HttpMethod::ALL.iter().map(|m| m.as_str()).collect();
+    let mut out: Vec<String> = Vec::new();
+    for name in all_exported_function_names(text) {
+        if !known.iter().any(|k| *k == name) {
+            out.push(name);
+        }
+    }
+    out
 }
 
 /// Detect `config.methods` in a .tsp file (FREEZE.md
@@ -752,6 +849,110 @@ export const config = { cache: no_store };
         assert_eq!(CachePolicy::NoStore.header_value(), "no-store");
         assert_eq!(CachePolicy::Private.header_value(), "private");
         assert_eq!(CachePolicy::Public.header_value(), "public");
+    }
+
+    #[test]
+    fn detect_unknown_exports_none_when_only_methods() {
+        // A page that exports only the
+        // standard HTTP methods has no
+        // unknown runtime exports (spec
+        // §46).
+        let src = r#"
+export function GET() { return new Response("ok"); }
+export function POST() { return new Response("ok"); }
+"#;
+        assert!(detect_unknown_exports(src).is_empty());
+    }
+
+    #[test]
+    fn detect_unknown_exports_finds_helper() {
+        // A page that defines a helper in
+        // addition to its handler has the
+        // helper flagged as an unknown
+        // runtime export. The user can fix
+        // by moving the helper to a
+        // non-`.tsp` module.
+        let src = r#"
+function helper() { return 42; }
+export { helper };
+export function GET() { return new Response(String(helper())); }
+"#;
+        let unknowns = detect_unknown_exports(src);
+        // `export { helper };` is a re-export
+        // (not `export function helper(...)`)
+        // so the current detector misses it;
+        // the AST detector in a future slice
+        // will catch it. The point of this
+        // test is the inline `export function`
+        // form.
+        let inline_src = r#"
+export function helper() { return 42; }
+export function GET() { return new Response(String(helper())); }
+"#;
+        let inline_unknowns = detect_unknown_exports(inline_src);
+        assert_eq!(inline_unknowns, vec!["helper".to_string()]);
+        // The `export { helper };` form is
+        // outside the detector's scope.
+        assert!(unknowns.is_empty());
+    }
+
+    #[test]
+    fn detect_unknown_exports_lists_multiple_unknowns_in_source_order() {
+        // Multiple `export function X(`
+        // calls in one file are all reported
+        // in source order (the order helps
+        // the user find the second + third
+        // one in a long file).
+        let src = r#"
+export function GET() { return new Response("ok"); }
+export function aaa() { return 1; }
+export function POST() { return new Response("ok"); }
+export function bbb() { return 2; }
+"#;
+        let unknowns = detect_unknown_exports(src);
+        assert_eq!(
+            unknowns,
+            vec!["aaa".to_string(), "bbb".to_string()],
+            "unknowns must be reported in source order; got: {unknowns:?}"
+        );
+    }
+
+    #[test]
+    fn detect_unknown_exports_skips_comment_lines() {
+        // `// export function helper()` is a
+        // comment, not a real export.
+        let src = r#"
+// export function helper() { return 1; }
+export function GET() { return new Response("ok"); }
+"#;
+        assert!(detect_unknown_exports(src).is_empty());
+    }
+
+    #[test]
+    fn detect_unknown_exports_handles_async_form() {
+        // `export async function` is the
+        // async-component form (plan
+        // sect.12.2); the detector must
+        // accept it for both methods and
+        // unknown exports.
+        let src = r#"
+export async function GET() { return new Response("ok"); }
+export async function helper() { return 1; }
+"#;
+        let unknowns = detect_unknown_exports(src);
+        assert_eq!(unknowns, vec!["helper".to_string()]);
+    }
+
+    #[test]
+    fn detect_unknown_exports_handles_indented_export() {
+        // Indentation is allowed (the
+        // detector trims line start).
+        let src = r#"
+    export function GET() { return new Response("ok"); }
+    export function helper() { return 1; }
+"#;
+        let unknowns = detect_unknown_exports(src);
+        assert_eq!(unknowns, vec!["helper".to_string()]);
     }
 
     #[test]

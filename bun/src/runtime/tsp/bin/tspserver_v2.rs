@@ -528,7 +528,11 @@ fn run_check() -> ExitCode {
                  parse, 0 otherwise. Also validates `PageConfig`\n\
                  fields (FREEZE.md §11): a `config.methods` mismatch\n\
                  (declared set vs. actual exports) is reported as\n\
-                 an ERROR and the check exits 1.\n\n\
+                 an ERROR and the check exits 1. Also reports any\n\
+                 `export function NAME(...)` whose name is not a\n\
+                 standard HTTP method handler as an unknown runtime\n\
+                 export (spec §46); a clean run must have no such\n\
+                 exports.\n\n\
                  --tsc        additionally run `tsc --noEmit` against the\n\
                               routes (after rewriting `.tsp` to `.tsx`)\n\
                               and the bundled `tsp:*` declaration files.\n\
@@ -591,6 +595,35 @@ fn run_check() -> ExitCode {
                         // scan result; the ERROR line
                         // above already set `failed`.
                     }
+                }
+                // Spec §46: "no unknown runtime
+                // exports". The static check
+                // reports any `export function
+                // NAME(...)` whose name is not a
+                // standard HTTP method handler.
+                // The runtime still serves the
+                // page (the unknown export is
+                // silently ignored), but a clean
+                // `check` run should make the
+                // violation visible so the user
+                // can move the helper to a
+                // non-`.tsp` module. The full
+                // spec §46 treatment (unknown
+                // exports are a build-time
+                // generation failure) lands with
+                // the AST detector in a future
+                // slice; for now this is a
+                // quality-of-experience check.
+                if !page.unknown_exports.is_empty() {
+                    failed = true;
+                    eprintln!(
+                        "ERROR {}: unknown runtime export(s) {:?} \
+                         (spec §46 \"no unknown runtime exports\"); \
+                         only the standard HTTP method handlers are \
+                         allowed as top-level `export function` calls",
+                        route.source.display(),
+                        page.unknown_exports,
+                    );
                 }
                 println!(
                     "OK {} [{}]",
