@@ -105,11 +105,12 @@ JSC nor Windows-specific state, but it does rule out that startup-mode change
 as a sufficient fix. It has therefore been removed rather than retaining an
 unproven performance and runtime-semantics change.
 
-The next CI run leaves stdout and stderr inherited by the Actions step. This
-avoids a pipe-liveness hazard: the worker inherits the master's handles, so a
-PowerShell smoke test that redirects output can block while waiting for EOF
-after the master process is killed. The startup markers and Bun crash report
-therefore appear directly in the raw Actions log.
+The next CI run redirects stdout and stderr to concrete files through the
+Windows command processor, not to PowerShell-owned pipes and not to the
+runner's non-interactive console handles. Workers inherit those file handles.
+On failure, the smoke script prints all startup markers and the final 200 lines
+from each file before deleting its temporary directory. This avoids both the
+pipe-liveness hazard and the lack of a usable console in GitHub Actions.
 
 ## Required next step
 
