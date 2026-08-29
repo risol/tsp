@@ -488,16 +488,37 @@ pub fn initialize(eval_mode: bool) {
     initialize_with(eval_mode, false);
 }
 
+/// Initialize JSC for the persistent TSP worker process.
+///
+/// The Windows embedded-worker process has no JavaScript parent and needs no
+/// JSC background compiler or parallel GC threads at startup. Keep JIT enabled
+/// on the worker thread, but defer those optional background facilities to
+/// avoid the Windows standalone-startup path. A `BUN_JSC_<option>` environment
+/// override is still applied by `JSCInitialize` afterwards for diagnostics.
+pub fn initialize_for_tsp_worker(eval_mode: bool) {
+    initialize_with_startup_mode(eval_mode, false, cfg!(windows));
+}
+
 /// `short_lived_globals`: `bun test --isolate`/`--parallel`, where each file gets a fresh global and per-global JIT code is discarded with it.
 pub fn initialize_with(eval_mode: bool, short_lived_globals: bool) {
+    initialize_with_startup_mode(eval_mode, short_lived_globals, false);
+}
+
+fn initialize_with_startup_mode(
+    eval_mode: bool,
+    short_lived_globals: bool,
+    disable_background_threads: bool,
+) {
     // The counter lives in `bun_core` so this crate doesn't depend on
     // `bun_analytics`.
     bun_core::analytics::Features::jsc_inc();
     let env = bun_sys::environ();
-    // One-shot eval invocations (`bun -e ...` / `bun --print ...`) exit before
-    // any long-running event loop; tell JSC to skip the worker threads it
-    // otherwise spawns eagerly at VM creation (see `JSCInitialize`).
-    let one_shot = is_one_shot_eval_invocation();
+    // One-shot eval invocations exit before any long-running event loop. The
+    // Windows TSP worker uses the same conservative JSC startup mode: it keeps
+    // the JIT itself, but skips the optional background compiler and parallel
+    // GC workers that JSC otherwise creates eagerly at VM construction.
+    let disable_background_threads =
+        disable_background_threads || is_one_shot_eval_invocation();
     // SAFETY: `env` borrows the libc `environ` global for the duration of the
     // call; `on_jsc_invalid_env_var` is `extern "C"` and only reads the (ptr,len)
     // it is handed. JSCInitialize is called exactly once at startup.
@@ -507,7 +528,7 @@ pub fn initialize_with(eval_mode: bool, short_lived_globals: bool) {
             env.len(),
             on_jsc_invalid_env_var,
             eval_mode,
-            one_shot,
+            disable_background_threads,
             short_lived_globals,
         )
     };

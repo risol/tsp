@@ -96,6 +96,26 @@ cannot be verified from the accessible job metadata. Do not treat the absence
 of a visible marker in the job summary as evidence that the worker reached or
 passed a particular native phase.
 
+## Windows mitigation under validation
+
+The Windows standalone worker now asks JSC to keep execution on the worker
+thread during startup: concurrent JIT compilation and parallel GC marking are
+disabled, while JIT itself remains enabled. This is deliberately scoped to the
+TSP worker process on Windows; Linux and macOS retain the default JSC startup
+mode. `BUN_JSC_useConcurrentJIT` and `BUN_JSC_numberOfGCMarkers` remain usable
+as explicit diagnostic overrides.
+
+This mitigation is based on the confirmed crash boundary and upstream Windows
+JSC allocator/background-thread crash classes. It is a compatibility workaround
+pending Windows CI validation, not a claim that the exact upstream native frame
+has been identified.
+
+The rebuilt Windows release executable passed the redirected-stdio smoke test
+locally with two workers, HTTP requests, metrics, and hot reload. The release
+build compiled the Rust and C++ JSC changes successfully; its final attempt to
+overwrite the bootstrap `bun.exe` was blocked by the expected Windows file
+lock, so the smoke test used the newly linked `bun-profile.exe` copy.
+
 ## Required next step
 
 Obtain one untruncated Windows worker stderr/crash report containing either:
@@ -103,10 +123,9 @@ Obtain one untruncated Windows worker stderr/crash report containing either:
 - the complete `bun.report` URL and decoded native backtrace; or
 - the last startup marker from the diagnostic above.
 
-Only after that evidence should a functional workaround be selected, such as
-changing JSC thread/allocator options or altering VM creation. Disabling
-concurrent JIT/GC or changing context IDs speculatively would change runtime
-semantics/performance without proving this crash path.
+Use the next Windows CI result to validate the scoped startup mitigation. If it
+still fails, use the startup trace or full crash report to choose the next
+boundary; do not change VM context IDs or unrelated TSP protocol behavior.
 
 ## Regression-prevention rules
 

@@ -282,11 +282,11 @@ extern "C" void Bun__REPRL__registerFuzzilliFunctions(Zig::GlobalObject*);
 extern "C" long Bun__crashHandlerFromJSCFrame(void*, void*, void*, void*);
 #endif
 
-extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(const char* ptr, size_t length), bool evalMode, bool oneShotStartup, bool shortLivedGlobals)
+extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(const char* ptr, size_t length), bool evalMode, bool disableBackgroundThreads, bool shortLivedGlobals)
 {
     static std::once_flag jsc_init_flag;
     // NOLINTBEGIN
-    std::call_once(jsc_init_flag, [evalMode, oneShotStartup, shortLivedGlobals, envp, envc, onCrash]() {
+    std::call_once(jsc_init_flag, [evalMode, disableBackgroundThreads, shortLivedGlobals, envp, envc, onCrash]() {
         JSC::Config::enableRestrictedOptions();
         // JSC options come from BUN_JSC_* (applied in the callback below), not JSC_*.
         JSC::Config::disableEnvironmentOptions();
@@ -334,17 +334,12 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
             JSC::Options::showPrivateScriptsInStackTraces() = true;
 #endif
 
-            if (oneShotStartup) {
-                // One-shot invocations (`bun -e ...` / `bun --print ...`) run a
-                // trivial amount of JavaScript and then exit; they never reach a
-                // long-running event loop. Creating the JSC worker threads that
-                // VM construction otherwise spawns eagerly — the concurrent JIT
-                // worklist thread and the Heap parallel-marking helpers — is pure
-                // overhead here (clone3 + faulting fresh thread stacks) and none
-                // of those threads do useful work before the process exits. Run
-                // the DFG/FTL on the executing thread and use a single GC marker.
-                // A `BUN_JSC_<option>` environment override below can still flip
-                // either knob back on for debugging.
+            if (disableBackgroundThreads) {
+                // One-shot invocations and the Windows TSP worker do not need
+                // JSC's eager background compiler or parallel GC startup. Run
+                // the DFG/FTL on the executing thread and use a single GC
+                // marker. A `BUN_JSC_<option>` environment override below can
+                // still flip either knob back on for diagnostics.
                 JSC::Options::useConcurrentJIT() = false;
                 JSC::Options::numberOfGCMarkers() = 1;
             }
