@@ -68,7 +68,14 @@ done
 metrics=$(curl -fsS --max-time 30 "http://127.0.0.1:$port/__tsp/metrics")
 [[ "$metrics" == *"tsp_requests_total"* ]] || { cat "$server_log" >&2; exit 1; }
 
-sed -i 's/Hello from TSP v2/Hello after reload/' "$routes/index.tsp"
+# Hot-reload trigger: rewrite the route file in place. The
+# previously-used `sed -i 's/.../.../' file` form is GNU-specific;
+# BSD sed (macOS) parses the trailing path as a backup-suffix
+# argument and aborts with `invalid command code f`. The
+# `sed > new && mv` pipeline is portable across every POSIX
+# `sed` and avoids leaving a `.bak` artefact on disk.
+sed 's/Hello from TSP v2/Hello after reload/' "$routes/index.tsp" >"$routes/index.tsp.next"
+mv "$routes/index.tsp.next" "$routes/index.tsp"
 for _ in $(seq 1 150); do
   body=$(curl -fsS --max-time 2 "http://127.0.0.1:$port/" || true)
   if [[ "$body" == *"Hello after reload"* ]]; then
