@@ -180,7 +180,7 @@ struct EmbeddedVm {
 impl EmbeddedVm {
     fn initialize() -> Result<Self, String> {
         startup_trace("jsc-initialize:begin");
-        crate::jsc::initialize_for_tsp_worker(false);
+        crate::jsc::initialize(false);
         startup_trace("jsc-initialize:end");
         bun_ast::initialize_store();
         startup_trace("ast-store:end");

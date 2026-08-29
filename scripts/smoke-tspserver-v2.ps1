@@ -21,8 +21,8 @@ $info.FileName = $server
 $info.WorkingDirectory = (Split-Path -Parent $server)
 $info.UseShellExecute = $false
 $info.CreateNoWindow = $true
-$info.RedirectStandardOutput = $true
-$info.RedirectStandardError = $true
+$info.RedirectStandardOutput = $false
+$info.RedirectStandardError = $false
 $info.Environment["TSP_PORT"] = "$Port"
 $info.Environment["TSP_ROUTES_DIR"] = $routes
 $info.Environment["TSP_EMBEDDED_WORKER"] = "1"
@@ -42,8 +42,7 @@ try {
   }
   if (!$ready) {
     if (!$process.HasExited) { $process.Kill($true); $process.WaitForExit() }
-    $stderr = $process.StandardError.ReadToEnd()
-    throw "v2 server did not become ready. $stderr"
+    throw "v2 server did not become ready; see the inherited worker stderr above."
   }
 
   for ($index = 0; $index -lt 5; $index++) {

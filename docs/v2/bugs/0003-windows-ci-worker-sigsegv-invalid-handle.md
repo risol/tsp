@@ -96,25 +96,20 @@ cannot be verified from the accessible job metadata. Do not treat the absence
 of a visible marker in the job summary as evidence that the worker reached or
 passed a particular native phase.
 
-## Windows mitigation under validation
+## Rejected mitigation: disable JSC background threads
 
-The Windows standalone worker now asks JSC to keep execution on the worker
-thread during startup: concurrent JIT compilation and parallel GC marking are
-disabled, while JIT itself remains enabled. This is deliberately scoped to the
-TSP worker process on Windows; Linux and macOS retain the default JSC startup
-mode. `BUN_JSC_useConcurrentJIT` and `BUN_JSC_numberOfGCMarkers` remain usable
-as explicit diagnostic overrides.
+Disabling concurrent JIT compilation and parallel GC marking for the Windows
+TSP worker did not change the failing CI boundary. The rebuilt executable also
+passed the redirected-stdio smoke test locally, so the result rules out neither
+JSC nor Windows-specific state, but it does rule out that startup-mode change
+as a sufficient fix. It has therefore been removed rather than retaining an
+unproven performance and runtime-semantics change.
 
-This mitigation is based on the confirmed crash boundary and upstream Windows
-JSC allocator/background-thread crash classes. It is a compatibility workaround
-pending Windows CI validation, not a claim that the exact upstream native frame
-has been identified.
-
-The rebuilt Windows release executable passed the redirected-stdio smoke test
-locally with two workers, HTTP requests, metrics, and hot reload. The release
-build compiled the Rust and C++ JSC changes successfully; its final attempt to
-overwrite the bootstrap `bun.exe` was blocked by the expected Windows file
-lock, so the smoke test used the newly linked `bun-profile.exe` copy.
+The next CI run leaves stdout and stderr inherited by the Actions step. This
+avoids a pipe-liveness hazard: the worker inherits the master's handles, so a
+PowerShell smoke test that redirects output can block while waiting for EOF
+after the master process is killed. The startup markers and Bun crash report
+therefore appear directly in the raw Actions log.
 
 ## Required next step
 
@@ -123,9 +118,9 @@ Obtain one untruncated Windows worker stderr/crash report containing either:
 - the complete `bun.report` URL and decoded native backtrace; or
 - the last startup marker from the diagnostic above.
 
-Use the next Windows CI result to validate the scoped startup mitigation. If it
-still fails, use the startup trace or full crash report to choose the next
-boundary; do not change VM context IDs or unrelated TSP protocol behavior.
+Use the next Windows CI result to obtain the startup trace or full crash report
+before choosing the next boundary. Do not change VM context IDs, JSC startup
+options, or unrelated TSP protocol behavior speculatively.
 
 ## Regression-prevention rules
 
