@@ -67,7 +67,7 @@ fn canonicalize_best_effort(path: &Path) -> PathBuf {
     // which is common during the build pipeline (a module might
     // reference a sibling that has not been written yet). For
     // slice 9 we just normalise: absolute + cleaned.
-    match std::fs::canonicalize(path) {
+    match crate::path::canonicalize(path) {
         Ok(p) => p,
         Err(_) => {
             // Fallback: `absolutize` against CWD.
@@ -231,8 +231,7 @@ impl ModuleGraph {
     /// root, because a future slice needs the forward edges for
     /// shared dep invalidation (slice 11).
     pub fn from_routes_dir(routes_dir: &Path) -> Result<Self, GraphError> {
-        let canonical_root = routes_dir
-            .canonicalize()
+        let canonical_root = crate::path::canonicalize(routes_dir)
             .unwrap_or_else(|_| routes_dir.to_path_buf());
         let mut graph = Self::new();
         visit_dir(&canonical_root, &canonical_root, &mut graph)?;
@@ -376,8 +375,9 @@ fn resolve_imports(root: &Path, importer: &Path, text: &str) -> Result<Vec<Modul
                 specifier: specifier_text.into_owned(),
             });
         };
-        let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-        let canonical_resolved = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
+        let canonical_root = crate::path::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        let canonical_resolved =
+            crate::path::canonicalize(&resolved).unwrap_or_else(|_| resolved.clone());
         if !canonical_resolved.starts_with(&canonical_root) {
             return Err(GraphError::UnsupportedImport {
                 importer: importer.to_path_buf(),

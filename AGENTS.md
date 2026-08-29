@@ -56,8 +56,36 @@ The packaged `tspserver_v2` accepts configuration through `TSP_PORT`,
 shown by `tspserver_v2 --help`. Worker processes are created by the same
 executable; no separate worker binary is required.
 
+## Native runtime and allocator boundaries
+
+The TSP native runtime is embedded in Bun and uses Bun's mimalloc-backed Rust
+global allocator. libc, C++, WebKit/JSC, and Bun APIs may use different
+allocation domains. Pointer compatibility does not imply allocator ownership
+compatibility.
+
+- Every FFI buffer must have an explicit allocator owner and matching free
+  function.
+- Never release libc/glibc-owned memory through Rust's global allocator, Bun,
+  mimalloc, or a C++ `delete` operator.
+- On Linux, do not call `std::fs::canonicalize` from TSP production code. Its
+  `realpath(path, NULL)` implementation can return glibc-owned memory.
+- Use `bun/src/runtime/tsp/path.rs` and `crate::path::canonicalize` for TSP
+  path resolution. It supplies a caller-owned buffer and copies the result.
+- Prefer caller-owned FFI output buffers. If foreign memory must cross a
+  boundary, copy it into memory owned by the receiving allocator before
+  storing it in an owning Rust or C++ type.
+- Native-runtime comments and wrappers must document allocation ownership when
+  the boundary is not obvious.
+
+See `docs/v2/adr/0002-cross-allocator-ownership.md` and
+`docs/v2/bugs/0002-mimalloc-operator-delete-sigsegv.md` for the rationale and
+the verified regression.
+
 ## Verification
 
 Before changing the native runtime, run the focused Rust tests and the smoke
 test. Changes to route discovery, generation, workers, or response handling
 must preserve the frozen contract in `docs/v2/FREEZE.md`.
+
+Changes to path handling, FFI, allocators, or embedded workers must also run a
+Linux embedded-worker release build and the TSP v2 smoke test.

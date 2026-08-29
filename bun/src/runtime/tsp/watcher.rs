@@ -265,7 +265,7 @@ impl DependencyIndex {
 }
 
 fn canonical_watch_path(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    crate::path::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn collect_dependency_files(

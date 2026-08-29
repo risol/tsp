@@ -40,6 +40,7 @@ pub mod jsx;
 pub mod metrics;
 pub mod module_graph;
 pub mod page;
+pub(crate) mod path;
 pub mod pipeline;
 pub mod router;
 pub mod services;

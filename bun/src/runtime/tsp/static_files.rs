@@ -18,7 +18,7 @@ pub fn load(root: &Path, request_path: &str) -> io::Result<Option<StaticFile>> {
     let Some(relative) = decode_path(request_path) else {
         return Ok(None);
     };
-    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let canonical_root = crate::path::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let mut candidate = canonical_root.clone();
     for segment in relative.split('/') {
         if segment.is_empty() || segment == "." {
@@ -35,7 +35,7 @@ pub fn load(root: &Path, request_path: &str) -> io::Result<Option<StaticFile>> {
     if !candidate.is_file() {
         return Ok(None);
     }
-    let canonical = candidate.canonicalize()?;
+    let canonical = crate::path::canonicalize(&candidate)?;
     if !canonical.starts_with(&canonical_root) {
         return Ok(None);
     }

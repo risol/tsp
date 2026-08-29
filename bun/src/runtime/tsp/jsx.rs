@@ -319,7 +319,7 @@ fn resolve_local_module(
 }
 
 fn file_url(path: &std::path::Path, generation: Option<u64>) -> String {
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let canonical = crate::path::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let mut value = canonical.to_string_lossy().replace('\\', "/");
     // Windows `canonicalize` returns the device path form
     // `\\?\C:\...`; the leading `\\?\` is a Win32-only marker
@@ -2803,5 +2803,4 @@ export function GET() {
         );
     }
 }
-
 
