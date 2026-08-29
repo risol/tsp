@@ -1,72 +1,101 @@
-# BUG-0003: Windows embedded worker SIGSEGV during VM startup
+# BUG-0003: Windows embedded worker SIGSEGV during native startup
 
-> Status: **Fix candidate in source; remote Windows CI validation pending**
-> Discovered: 2026-08-29 in GitHub Actions `smoke-windows` on `4ce77078e`
-> Latest evidence: [Windows smoke job on `9db7c6a6d9`](https://github.com/risol/tsp/actions/runs/33235574129/job/99055958371)
+> Status: **Open — native crash remains unresolved**
+> Discovered: 2026-08-29 in GitHub Actions `smoke-windows`
+> Latest evidence: [Windows smoke job on `c5dad11e9d`](https://github.com/risol/tsp/actions/runs/33238622842/job/99064105135)
 > Affected: TSP v2 embedded-worker startup on Windows
 > Severity: CI blocker
 
 ## Summary
 
-The TSP master starts and listens, but a Windows worker process crashes before
-the Hello/Ready handshake. The master then observes Winsock error 10054 and
-retries the worker connection. The crash is therefore in the worker process,
-not in route discovery or the TSP wire protocol.
+The TSP master starts and listens. A Windows worker repeatedly connects to the
+master, then Bun prints a native segmentation fault and exits before the
+Hello/Ready handshake. The master subsequently observes Winsock error 10054
+and retries the worker connection.
 
-The first fix attempt preserved packed Windows `Fd` values across the output
-adapter. That change fixes a real latent representation bug, but the latest
-Windows smoke job still failed after it was deployed. It is not sufficient
-evidence for the observed BUG-0003 crash and must not be described as its root
-cause.
-
-## Root cause
-
-The worker is a standalone child process with one JavaScript thread. It is not
-a Bun `WebWorker`: there is no parent VM and no `WorkerMessagingProxy`. The
-TSP worker nevertheless initialized its VM with:
+This establishes the failure boundary:
 
 ```text
-is_main_thread: true
-worker_ptr: null
+master startup: passed
+TCP accept: passed
+worker native startup: failed
+TSP Hello/Ready protocol: never reached
+10054: consequence of worker termination
 ```
 
-That combination publishes the VM in `MAIN_THREAD_VM` and selects the normal
-main-global initialization path, while the C++ worker-specific path is only
-meaningful when a worker owner is present. This is an invalid lifecycle model
-for the standalone worker and leaves JSC startup dependent on the wrong global
-and VM classification. The failure occurs before the protocol handshake,
-which explains why the master only sees a reset connection.
+The bug is real and reproducible in the Windows GitHub Actions environment.
+It is not currently justified to call it a TSP protocol or route-discovery
+bug.
 
-The exact symbolicated native frame is not available from the public Actions
-page, so the claim above is the source-level root cause and trigger boundary;
-the CI rerun is required to confirm the platform-specific crash is gone.
+## Evidence and current diagnosis
 
-## Fix
+The latest run still failed after both earlier hypotheses were changed:
 
-`bun/src/runtime/tsp_worker.rs` now initializes the standalone worker with
-`is_main_thread: false`. This keeps the VM local to the worker thread, avoids
-publishing it as the process-wide Bun main VM, and selects the isolated global
-path used by other non-main VM initialization paths. The worker still runs on
-the process's OS entry thread; “not main VM” is a runtime ownership decision,
-not an OS thread claim.
+1. Preserving the packed Windows `Fd` value across the opaque
+   `QuietWriter` adapter fixed a real latent representation defect, but did not
+   stop this crash.
+2. Initializing the standalone worker with `is_main_thread: false` corrected
+   the VM ownership classification, but did not stop this crash either.
 
-The earlier `bun/src/sys/lib.rs` change is retained as independent hardening:
-it preserves packed `Fd` values in the opaque `QuietWriter` slot and rejects
-`Fd::INVALID` before I/O. That defect is documented separately in
-`docs/v2/adr/0003-windows-fd-representation.md` and is not the proven cause of
-the CI crash.
+The worker initializes JavaScriptCore only after it connects to the master and
+before it reads `Hello`. The crash occurs in this native-only interval. The
+current evidence therefore points to a Bun/JSC Windows startup problem, but it
+does not identify the exact C++ function, allocator operation, or invalid
+pointer. The public Actions page does not expose the symbolicated crash frame,
+and the pasted log is interleaved/truncated.
 
-## Verification
+The `0xffffffffffffffff` fault address is not enough to identify the cause.
+Bun/JSC on Windows has other independent native crash classes that report the
+same address, including allocator and event-loop paths. It must not be used as
+proof of an invalid `Fd` without a matching stack frame.
 
-Completed locally with the rebuilt Windows executable:
+## Disproved hypotheses
 
-- `cargo check -p bun_bin --target x86_64-pc-windows-msvc --locked` — passed;
-- full Windows release Rust/native compilation and linking — passed;
-- `scripts/smoke-tspserver-v2.ps1` — passed with redirected stdio, two workers,
-  HTTP requests, metrics, and hot reload on Windows 10 22H2.
+### Packed `Fd` representation
 
-The local host is Windows 10, while GitHub Actions uses the Windows runner
-that reproduced the failure. The fix remains open until that job passes.
+`bun/src/sys/lib.rs` now preserves the packed Windows `Fd` representation in
+the opaque `QuietWriter` slot and short-circuits `Fd::INVALID`. The round-trip
+test passes. This remains required hardening, but the failing CI run after
+that change proves it is not a sufficient explanation for BUG-0003.
+
+### Main-thread VM classification
+
+`bun/src/runtime/tsp_worker.rs` now uses `is_main_thread: false` for the
+standalone worker. This is the correct ownership model because the process has
+no parent Bun VM or `WorkerMessagingProxy`. However, the subsequent Windows CI
+run still crashed, so this change is not the BUG-0003 fix.
+
+## Diagnostic change
+
+The Windows smoke jobs set `TSP_WORKER_STARTUP_TRACE=1`. The worker then emits
+the following stage markers to inherited stderr:
+
+```text
+tcp-connect:begin/end
+jsc-initialize:begin/end
+ast-store:end
+log-init:end
+virtual-machine-init:begin/end
+handshake:read-hello
+handshake:hello-received
+handshake:ready-sent
+```
+
+The last emitted marker on a failing run identifies the next native boundary to
+instrument or bisect. The trace is disabled unless the environment variable is
+present.
+
+## Required next step
+
+Obtain one untruncated Windows worker stderr/crash report containing either:
+
+- the complete `bun.report` URL and decoded native backtrace; or
+- the last startup marker from the diagnostic above.
+
+Only after that evidence should a functional workaround be selected, such as
+changing JSC thread/allocator options or altering VM creation. Disabling
+concurrent JIT/GC or changing context IDs speculatively would change runtime
+semantics/performance without proving this crash path.
 
 ## Regression-prevention rules
 
@@ -78,15 +107,17 @@ that reproduced the failure. The fix remains open until that job passes.
    `Fd` from `Fd::native()`.
 4. Treat `Fd::INVALID` as a sentinel and short-circuit it before platform I/O.
 5. Test workers with redirected/non-interactive stdio and multiple workers.
+6. Do not assign root cause from a fault address alone; require a native frame
+   or a reproducible stage boundary.
 
 The durable rules are also recorded in `AGENTS.md` and
 `docs/v2/adr/0003-windows-fd-representation.md`.
 
 ## Related files
 
-- `bun/src/runtime/tsp_worker.rs` — standalone worker VM lifecycle;
+- `bun/src/runtime/tsp_worker.rs` — standalone worker VM lifecycle and startup trace;
 - `bun/src/jsc/VirtualMachine.rs` — VM initialization options and global setup;
-- `bun/src/jsc/bindings/ZigGlobalObject.cpp` — C++ global-object selection;
+- `bun/src/jsc/bindings/ZigGlobalObject.cpp` — JSC initialization and global-object setup;
 - `bun/src/sys/lib.rs` — independent packed-`Fd` hardening;
 - `bun/src/runtime/tsp/worker/manager.rs` — Windows child spawn and handshake;
 - `scripts/smoke-tspserver-v2.ps1` — Windows integration smoke test;

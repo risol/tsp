@@ -22,6 +22,13 @@ pub fn requested() -> bool {
         .any(|argument| argument == b"--tsp-worker")
 }
 
+#[inline]
+fn startup_trace(stage: &str) {
+    if std::env::var_os("TSP_WORKER_STARTUP_TRACE").is_some() {
+        eprintln!("TSP worker startup: {stage}");
+    }
+}
+
 /// Run one embedded Bun VM and serve requests until the master shuts down.
 ///
 /// The first implementation accepts the generated wrapper path in
@@ -56,6 +63,7 @@ fn run_unix() -> i32 {
 
 #[cfg(not(unix))]
 fn run_tcp() -> i32 {
+    startup_trace("tcp-connect:begin");
     let endpoint = match std::env::var("TSP_WORKER_SOCKET") {
         Ok(endpoint) => endpoint,
         Err(_) => {
@@ -70,6 +78,7 @@ fn run_tcp() -> i32 {
             return 2;
         }
     };
+    startup_trace("tcp-connect:end");
     serve_stream(stream)
 }
 
@@ -77,6 +86,7 @@ fn serve_stream<S>(mut stream: S) -> i32
 where
     S: Read + Write,
 {
+    startup_trace("vm-init:begin");
     let mut vm = match EmbeddedVm::initialize() {
         Ok(vm) => vm,
         Err(error) => {
@@ -84,7 +94,9 @@ where
             return 2;
         }
     };
+    startup_trace("vm-init:end");
 
+    startup_trace("handshake:read-hello");
     match Message::read_from(&mut stream) {
         Ok(Message::Hello) => {}
         Ok(_) => {
@@ -96,6 +108,7 @@ where
             return 2;
         }
     }
+    startup_trace("handshake:hello-received");
     if let Err(error) = (Message::Ready {
         worker_id: std::process::id() as u64,
     })
@@ -104,6 +117,7 @@ where
         eprintln!("TSP worker: failed to send READY: {error}");
         return 2;
     }
+    startup_trace("handshake:ready-sent");
 
     loop {
         let message = match Message::read_from(&mut stream) {
@@ -165,9 +179,13 @@ struct EmbeddedVm {
 
 impl EmbeddedVm {
     fn initialize() -> Result<Self, String> {
+        startup_trace("jsc-initialize:begin");
         crate::jsc::initialize(false);
+        startup_trace("jsc-initialize:end");
         bun_ast::initialize_store();
+        startup_trace("ast-store:end");
         let log = Box::leak(Box::new(bun_ast::Log::init()));
+        startup_trace("log-init:end");
         let transform_options = bun_options_types::schema::api::TransformOptions {
             jsx: Some(bun_options_types::schema::api::Jsx {
                 factory: b"React.createElement".as_slice().into(),
@@ -189,8 +207,10 @@ impl EmbeddedVm {
             is_main_thread: false,
             ..Default::default()
         };
+        startup_trace("virtual-machine-init:begin");
         let ptr = crate::jsc::virtual_machine::VirtualMachine::init(options)
             .map_err(|error| format!("{error:?}"))?;
+        startup_trace("virtual-machine-init:end");
         let vm = unsafe { &mut *ptr };
         Ok(Self { vm, _log: log })
     }

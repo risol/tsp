@@ -127,6 +127,8 @@ jobs:
       - name: Run v2 smoke test on Windows
         if: matrix.os == 'windows-latest'
         shell: pwsh
+        env:
+          TSP_WORKER_STARTUP_TRACE: '1'
         run: ./scripts/smoke-tspserver-v2.ps1 -ServerBinary "${{ matrix.server }}"
 
       - name: Archive v2 release asset

@@ -222,6 +222,8 @@ jobs:
 
       - name: Run v2 smoke test (Windows)
         shell: pwsh
+        env:
+          TSP_WORKER_STARTUP_TRACE: '1'
         run: ./scripts/smoke-tspserver-v2.ps1 -ServerBinary dist/tsp-v2/tspserver_v2.exe
 
   smoke-macos:

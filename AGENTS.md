@@ -91,6 +91,12 @@ Windows handle boundaries have a separate representation rule:
   short-circuit it before invoking a platform API.
 - Worker smoke tests must use the same redirected/non-interactive stdio shape
   as CI; an interactive terminal is not equivalent to a Windows runner.
+- Do not infer a native root cause from a fault address alone. Require a
+  symbolicated frame or a reproducible startup-stage boundary before changing
+  allocator, JSC, or VM lifecycle behavior.
+- Keep worker startup diagnostics environment-gated; use
+  `TSP_WORKER_STARTUP_TRACE=1` when a Windows CI crash must be split between
+  JSC initialization, VM creation, and protocol handshake.
 
 See `docs/v2/adr/0002-cross-allocator-ownership.md` and
 `docs/v2/adr/0003-windows-fd-representation.md` for the rationale and
