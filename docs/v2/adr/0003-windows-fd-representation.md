@@ -2,9 +2,14 @@
 
 > Status: **Accepted (2026-08-29)**
 > Scope: Bun Windows runtime code used by the TSP embedded worker
-> Related bug: `docs/v2/bugs/0003-windows-ci-worker-sigsegv-invalid-handle.md`
+> Related investigation: `docs/v2/bugs/0003-windows-ci-worker-sigsegv-invalid-handle.md`
 
 ## Context
+
+This ADR records an independent latent defect found while investigating
+BUG-0003. It is a valid representation rule, but the packed-`Fd` defect did
+not explain the latest failing Windows CI run and is not the claimed root
+cause of BUG-0003.
 
 On Windows, Bun's `Fd` is not just a native `HANDLE`. It is a packed `u64`:
 the low 63 bits carry the value and bit 63 records whether the value is a

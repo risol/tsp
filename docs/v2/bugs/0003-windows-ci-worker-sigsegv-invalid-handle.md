@@ -1,115 +1,93 @@
-# BUG-0003: Windows CI worker SIGSEGV at `0xFFFFFFFFFFFFFFFF`
+# BUG-0003: Windows embedded worker SIGSEGV during VM startup
 
-> Status: **Fixed in source; Windows 11 CI rerun pending**
+> Status: **Fix candidate in source; remote Windows CI validation pending**
 > Discovered: 2026-08-29 in GitHub Actions `smoke-windows` on `4ce77078e`
-> Affected: TSP v2 embedded-worker startup with redirected Windows stdio
+> Latest evidence: [Windows smoke job on `9db7c6a6d9`](https://github.com/risol/tsp/actions/runs/33235574129/job/99055958371)
+> Affected: TSP v2 embedded-worker startup on Windows
 > Severity: CI blocker
 
 ## Summary
 
-The TSP master process started normally, but the child worker crashed during
-Bun VM startup before completing the Hello/Ready handshake. The observed
-fault address was `0xFFFFFFFFFFFFFFFF`; the master consequently saw Winsock
-error 10054 because the worker reset the TCP connection.
+The TSP master starts and listens, but a Windows worker process crashes before
+the Hello/Ready handshake. The master then observes Winsock error 10054 and
+retries the worker connection. The crash is therefore in the worker process,
+not in route discovery or the TSP wire protocol.
 
-The original investigation incorrectly treated the address as proof that a
-Win32 `HANDLE` was directly dereferenced. The relevant defect is a more
-specific representation error in Bun's output adapter: a packed Windows
-`Fd` was converted to a native handle and then reconstructed as a packed `Fd`.
-When standard output was unavailable, `Fd::INVALID` became the raw native
-value `INVALID_HANDLE_VALUE` and was later reinterpreted as a libuv `Fd` with
-value `-1`.
+The first fix attempt preserved packed Windows `Fd` values across the output
+adapter. That change fixes a real latent representation bug, but the latest
+Windows smoke job still failed after it was deployed. It is not sufficient
+evidence for the observed BUG-0003 crash and must not be described as its root
+cause.
 
 ## Root cause
 
-The affected path is exercised during worker VM creation:
+The worker is a standalone child process with one JavaScript thread. It is not
+a Bun `WebWorker`: there is no parent VM and no `WorkerMessagingProxy`. The
+TSP worker nevertheless initialized its VM with:
 
 ```text
-tspserver_v2 --tsp-worker
-  -> bun main startup / redirected stdio setup
-  -> VirtualMachine::init
-  -> ConsoleObject::init_in_place
-  -> QuietWriter::adapt_to_new_api
-  -> qw_set_fd(Fd)
-  -> native HANDLE stored in opaque slot
-  -> qw_fd() reconstructs packed Fd from that HANDLE
+is_main_thread: true
+worker_ptr: null
 ```
 
-On Windows, `Fd` is a packed `u64`; bit 63 distinguishes a system handle
-from a libuv descriptor. `Fd::INVALID` is the packed zero sentinel, while its
-Win32 decode is `INVALID_HANDLE_VALUE`. Therefore this conversion is not
-round-trippable:
+That combination publishes the VM in `MAIN_THREAD_VM` and selects the normal
+main-global initialization path, while the C++ worker-specific path is only
+meaningful when a worker owner is present. This is an invalid lifecycle model
+for the standalone worker and leaves JSC startup dependent on the wrong global
+and VM classification. The failure occurs before the protocol handshake,
+which explains why the master only sees a reset connection.
 
-```text
-Fd::INVALID (packed 0)
-  -> native() = HANDLE(-1)
-  -> from_native(0xFFFFFFFFFFFFFFFF)
-  -> FdKind::Uv(-1)          # wrong kind and wrong sentinel
-```
-
-The defect is in the Bun fork's Windows Fd/output boundary, not in TSP route
-discovery or the TSP TCP protocol. TSP is the code path that makes the
-separate Bun worker start, so it exposed the defect; this is why the symptom
-looked TSP-specific.
-
-`ParentDeathWatchdog` is not the root cause: it is disabled unless
-`BUN_FEATURE_FLAG_NO_ORPHANS` is enabled, and its Windows failure paths use
-`NULL`/`BOOL` checks rather than treating a failed handle as a valid pointer.
-The `is_main_thread: true` option is also intentionally retained: this worker
-is a separate process whose only JS thread is its process main thread, not a
-`WebWorker` with a `WorkerMessagingProxy`.
+The exact symbolicated native frame is not available from the public Actions
+page, so the claim above is the source-level root cause and trigger boundary;
+the CI rerun is required to confirm the platform-specific crash is gone.
 
 ## Fix
 
-`bun/src/sys/lib.rs` now:
+`bun/src/runtime/tsp_worker.rs` now initializes the standalone worker with
+`is_main_thread: false`. This keeps the VM local to the worker thread, avoids
+publishing it as the process-wide Bun main VM, and selects the isolated global
+path used by other non-main VM initialization paths. The worker still runs on
+the process's OS entry thread; “not main VM” is a runtime ownership decision,
+not an OS thread claim.
 
-1. stores the packed `Fd` value in the opaque `QuietWriter` slot;
-2. restores the same packed value, preserving the Windows kind bit;
-3. returns immediately when a quiet write receives `Fd::INVALID`.
-
-A regression test verifies round trips for the invalid sentinel, ordinary
-native descriptors, and the Windows libuv `-1` representation.
+The earlier `bun/src/sys/lib.rs` change is retained as independent hardening:
+it preserves packed `Fd` values in the opaque `QuietWriter` slot and rejects
+`Fd::INVALID` before I/O. That defect is documented separately in
+`docs/v2/adr/0003-windows-fd-representation.md` and is not the proven cause of
+the CI crash.
 
 ## Verification
 
-Completed locally:
+Completed locally with the rebuilt Windows executable:
 
-- `cargo check -p bun_sys --lib` — passed;
-- `cargo check -p bun_bin --target x86_64-pc-windows-msvc` — passed.
-- Full Windows release Rust/native compilation and linking — passed;
-- `scripts/smoke-tspserver-v2.ps1` with the rebuilt `tspserver_v2.exe` — passed
-  on Windows 10 22H2 with redirected stdout/stderr and two workers.
+- `cargo check -p bun_bin --target x86_64-pc-windows-msvc --locked` — passed;
+- full Windows release Rust/native compilation and linking — passed;
+- `scripts/smoke-tspserver-v2.ps1` — passed with redirected stdio, two workers,
+  HTTP requests, metrics, and hot reload on Windows 10 22H2.
 
-The standalone `cargo test -p bun_sys --lib` command cannot link in this
-checkout because it omits Bun's generated/native libraries; the test itself
-is included in the normal Bun build. The normal release command's final copy
-to `bun.exe` was blocked because the command was itself running from the old
-`bun.exe`; the newly linked `bun-profile.exe` was copied under the required
-`tspserver_v2.exe` basename and passed the smoke test. The current host is
-Windows 10 rather than the failing Windows 11 runner, so a GitHub Actions
-rerun is still required to close the CI-specific part of this bug.
+The local host is Windows 10, while GitHub Actions uses the Windows runner
+that reproduced the failure. The fix remains open until that job passes.
 
 ## Regression-prevention rules
 
-The durable rules are recorded in:
+1. Treat a standalone embedded worker process as an isolated VM, not as a
+   `WebWorker` and not as Bun's process-wide main VM.
+2. Do not pass `is_main_thread: true` to a VM that has no parent Bun main VM or
+   `WorkerMessagingProxy` owner.
+3. Preserve packed `Fd` values across opaque boundaries; never reconstruct an
+   `Fd` from `Fd::native()`.
+4. Treat `Fd::INVALID` as a sentinel and short-circuit it before platform I/O.
+5. Test workers with redirected/non-interactive stdio and multiple workers.
 
-- `AGENTS.md`, under **Native runtime and allocator boundaries**;
-- `docs/v2/adr/0003-windows-fd-representation.md`.
-
-Short version:
-
-1. Preserve packed `Fd` values across opaque boundaries.
-2. Never reconstruct `Fd` from `Fd::native()`.
-3. Treat `Fd::INVALID` as a sentinel and short-circuit it before platform I/O.
-4. Test workers with redirected/non-interactive stdio, not only an interactive
-   terminal.
+The durable rules are also recorded in `AGENTS.md` and
+`docs/v2/adr/0003-windows-fd-representation.md`.
 
 ## Related files
 
-- `bun/src/sys/lib.rs` — fixed `QuietWriter` Fd transport and regression test;
-- `bun/src/bun_core/util.rs` — Windows packed `Fd` representation;
-- `bun/src/runtime/tsp_worker.rs` — worker entry and VM startup;
-- `bun/src/runtime/tsp/worker/manager.rs` — Windows child spawn and redirected
-  stdio;
+- `bun/src/runtime/tsp_worker.rs` — standalone worker VM lifecycle;
+- `bun/src/jsc/VirtualMachine.rs` — VM initialization options and global setup;
+- `bun/src/jsc/bindings/ZigGlobalObject.cpp` — C++ global-object selection;
+- `bun/src/sys/lib.rs` — independent packed-`Fd` hardening;
+- `bun/src/runtime/tsp/worker/manager.rs` — Windows child spawn and handshake;
 - `scripts/smoke-tspserver-v2.ps1` — Windows integration smoke test;
-- `docs/v2/adr/0003-windows-fd-representation.md` — permanent boundary rule.
+- `docs/v2/adr/0003-windows-fd-representation.md` — `Fd` boundary rules.
