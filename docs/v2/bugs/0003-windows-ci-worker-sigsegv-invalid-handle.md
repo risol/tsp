@@ -2,7 +2,7 @@
 
 > Status: **Open — native crash remains unresolved**
 > Discovered: 2026-08-29 in GitHub Actions `smoke-windows`
-> Latest evidence: [Windows smoke job on `c5dad11e9d`](https://github.com/risol/tsp/actions/runs/33238622842/job/99064105135)
+> Latest evidence: [Windows smoke job on `f9f14e4219`](https://github.com/risol/tsp/actions/runs/33242655859/job/99074617924)
 > Affected: TSP v2 embedded-worker startup on Windows
 > Severity: CI blocker
 
@@ -36,6 +36,12 @@ The latest run still failed after both earlier hypotheses were changed:
    stop this crash.
 2. Initializing the standalone worker with `is_main_thread: false` corrected
    the VM ownership classification, but did not stop this crash either.
+
+In the latest run, checkout, toolchain setup, native compilation, and packaging
+all passed. Only the final Windows smoke step failed. This rules out a build
+artifact or package assembly failure, but the public job page exposes only the
+step annotation; its detailed log and worker trace are unavailable to the
+current unauthenticated API session.
 
 The worker initializes JavaScriptCore only after it connects to the master and
 before it reads `Hello`. The crash occurs in this native-only interval. The
@@ -84,6 +90,11 @@ handshake:ready-sent
 The last emitted marker on a failing run identifies the next native boundary to
 instrument or bisect. The trace is disabled unless the environment variable is
 present.
+
+The `f9f14e4219` diagnostic run failed in the smoke step, but its last marker
+cannot be verified from the accessible job metadata. Do not treat the absence
+of a visible marker in the job summary as evidence that the worker reached or
+passed a particular native phase.
 
 ## Required next step
 
