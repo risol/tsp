@@ -9242,8 +9242,11 @@ pub fn fetch_cache_directory_path() -> Vec<u8> {
 // ──────────────────────────────────────────────────────────────────────────
 
 /// `bun_core::output::QuietWriter` is an opaque `[*mut (); 4]`. We stash the
-/// raw fd in slot 0 and ignore the rest. (The buffering layer is routed to
-/// `QuietWriterAdapter` below.)
+/// packed `Fd` value in slot 0 and ignore the rest. The value must be the
+/// packed representation, not `Fd::native()`: on Windows the latter is a
+/// `HANDLE`, while `Fd` also carries the system-vs-libuv kind in bit 63.
+/// In particular, converting `INVALID_HANDLE_VALUE` through a raw pointer
+/// would turn it into the packed value for `FdKind::Uv(-1)`.
 #[inline]
 fn qw_fd(qw: &bun_core::output::QuietWriter) -> Fd {
     // SAFETY: `QuietWriter` is `#[repr(C)] { _opaque: [*mut (); 4] }` (asserted
@@ -9256,17 +9259,21 @@ fn qw_fd(qw: &bun_core::output::QuietWriter) -> Fd {
 #[inline]
 fn qw_set_fd(qw: &mut bun_core::output::QuietWriter, fd: Fd) {
     // SAFETY: `QuietWriter` is `#[repr(C)] { _opaque: [*mut (); 4] }`; slot 0
-    // carries fd-as-usize-as-ptr. Writing the first word through a same-align
-    // pointer cast of a live `&mut QuietWriter` is in-bounds, aligned, and
-    // exclusively borrowed.
+    // carries the packed Fd value as usize-as-ptr. Writing the first word
+    // through a same-align pointer cast of a live `&mut QuietWriter` is
+    // in-bounds, aligned, and exclusively borrowed. Do not use `fd.native()`:
+    // that loses the Windows Fd kind bit and maps Fd::INVALID to HANDLE -1.
     unsafe {
-        *core::ptr::from_mut(qw).cast::<*mut ()>() = fd.native() as usize as *mut ();
+        *core::ptr::from_mut(qw).cast::<*mut ()>() = fd.0 as usize as *mut ();
     }
 }
 
 /// Best-effort write-all loop. Returns `false` on I/O error / zero-write so
 /// `ScopedLogger::log` can disable the scope; "quiet" callers discard the bool.
 fn fd_write_all_quiet(fd: Fd, mut bytes: &[u8]) -> bool {
+    if fd == Fd::INVALID {
+        return false;
+    }
     while !bytes.is_empty() {
         match write(fd, bytes) {
             Ok(0) => return false, // short write → give up
@@ -9423,6 +9430,24 @@ bun_core::link_impl_OutputSink! {
 #[cfg(test)]
 mod owned_handle_tests {
     use super::*;
+
+    #[test]
+    fn quiet_writer_round_trips_packed_fd() {
+        let values = [Fd::INVALID, Fd::from_native(0 as _), Fd::from_native(1 as _)];
+        for fd in values {
+            let mut writer = bun_core::output::QuietWriter::ZEROED;
+            qw_set_fd(&mut writer, fd);
+            assert_eq!(qw_fd(&writer), fd);
+        }
+
+        #[cfg(windows)]
+        {
+            let fd = Fd::from_uv(-1);
+            let mut writer = bun_core::output::QuietWriter::ZEROED;
+            qw_set_fd(&mut writer, fd);
+            assert_eq!(qw_fd(&writer), fd);
+        }
+    }
 
     /// `renameat_concurrently_without_fallback` falls back to `delete_tree` +
     /// retry when the destination exists. The `delete_tree` is run via a `Dir`

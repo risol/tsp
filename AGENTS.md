@@ -77,9 +77,23 @@ compatibility.
 - Native-runtime comments and wrappers must document allocation ownership when
   the boundary is not obvious.
 
+Windows handle boundaries have a separate representation rule:
+
+- `bun_core::Fd` is a packed value on Windows; its high bit distinguishes a
+  system `HANDLE` from a libuv file descriptor.
+- Opaque Rust/C interfaces that carry an `Fd` must store and restore the packed
+  `Fd` value. Never serialize `Fd::native()` and then reconstruct it as an
+  `Fd`, because `INVALID_HANDLE_VALUE` and the kind bit can be misclassified.
+- Treat `Fd::INVALID` as a sentinel. Output, close, and adapter paths must
+  short-circuit it before invoking a platform API.
+- Worker smoke tests must use the same redirected/non-interactive stdio shape
+  as CI; an interactive terminal is not equivalent to a Windows runner.
+
 See `docs/v2/adr/0002-cross-allocator-ownership.md` and
-`docs/v2/bugs/0002-mimalloc-operator-delete-sigsegv.md` for the rationale and
-the verified regression.
+`docs/v2/adr/0003-windows-fd-representation.md` for the rationale and
+boundary rules. See `docs/v2/bugs/0002-mimalloc-operator-delete-sigsegv.md`
+and `docs/v2/bugs/0003-windows-ci-worker-sigsegv-invalid-handle.md` for the
+verified regressions.
 
 ## Verification
 
