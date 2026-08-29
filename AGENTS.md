@@ -79,6 +79,9 @@ compatibility.
 
 Windows handle boundaries have a separate representation rule:
 
+- A standalone embedded worker is an isolated VM, not Bun's process-wide main
+  VM and not a `WebWorker`; do not pass `is_main_thread: true` unless a parent
+  Bun VM or a `WorkerMessagingProxy` owns the VM.
 - `bun_core::Fd` is a packed value on Windows; its high bit distinguishes a
   system `HANDLE` from a libuv file descriptor.
 - Opaque Rust/C interfaces that carry an `Fd` must store and restore the packed
