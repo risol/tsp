@@ -706,6 +706,10 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
             + nanoid_prelude().len()
             + zod_prelude().len(),
     );
+    // Keep this as the first generated statement. BUG-0003 uses this
+    // tripwire to distinguish a crash before any synthetic module body
+    // executes from a crash in the eager prelude or page body.
+    out.push_str("console.log('TSP_PRELUDE_ENTERED');\n");
     // Compile nanoid 5.1.6 into the wrap preamble so pages can call
     // `nanoid()` / `customAlphabet()` / `random()` / `customRandom()`
     // directly, without an `import` step (the synthetic entry has no
@@ -727,17 +731,9 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
     // connection that the page must `close()` (returning it to the
     // per-worker pool). See plan §17.1 for the per-worker pool
     // boundary.
-    // Tripwire for the Windows first-call crash diagnostic (BUG-0003):
-    // the synthetic `bun:main` body is evaluated inside JSC's microtask
-    // drain, and the eager prelude references `Bun.randomUUIDv7`,
-    // `Bun.hash`, `Bun.gzipSync`, `Bun.password`, `Bun.env`, etc. If the
-    // fault is in a Windows HANDLE deref during one of those builtin
-    // reads, this log won't print. If it prints, the fault is later
-    // in the body (handler invocation, microtask scheduling,
-    // `__tspEmbeddedResponse` write). Output goes to the worker's
-    // stdout, which `scripts/smoke-tspserver-v2.ps1` captures into the
-    // diagnostic dump.
-    out.push_str("console.log('TSP_PRELUDE_ENTERED');\n");
+    // The tripwire above intentionally precedes nanoid and zod. Output goes
+    // to the worker's stdout, which `scripts/smoke-tspserver-v2.ps1` captures
+    // into the diagnostic dump.
     out.push_str(
         "const __tspSqlNs__ = require(\"bun\").SQL;\n"
     );
@@ -1779,6 +1775,23 @@ export async function POST(ctx) { return new Response('post-handler', { status: 
         );
     }
 
+    #[test]
+    fn wrap_for_bun_cli_places_windows_crash_tripwire_first() {
+        let wrapped = wrap_for_bun_cli("function GET() { return 'ok'; }", "GET", Some("{}"));
+        let tripwire = wrapped
+            .find("console.log('TSP_PRELUDE_ENTERED');")
+            .expect("BUG-0003 tripwire must be present");
+        assert_eq!(tripwire, 0, "BUG-0003 tripwire must be the first generated statement");
+        assert!(
+            tripwire < wrapped.find("const crypto = globalThis.crypto;").unwrap(),
+            "tripwire must precede the nanoid prelude"
+        );
+        assert!(
+            tripwire < wrapped.find("// === Inlined zod runtime").unwrap(),
+            "tripwire must precede the zod prelude"
+        );
+    }
+
     // -----------------------------------------------------------------
     // nanoid runtime inlining (slice 17a)
     //
@@ -2814,4 +2827,3 @@ export function GET() {
         );
     }
 }
-

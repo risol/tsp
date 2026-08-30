@@ -381,9 +381,6 @@ impl EventLoop {
 
         trace_at("drain-mt:drain-microtasks:begin");
 
-        jsc::mark_binding();
-        jsc_vm.release_weak_refs();
-
         match JSC__JSGlobalObject__drainMicrotasks(global_object) {
             drain_result::SUCCESS => {}
             drain_result::STOPPED => return Err(Stopped),
@@ -397,7 +394,9 @@ impl EventLoop {
         // `Cell` write through `&VirtualMachine` — no `&mut VM` formed (would
         // overlap `&mut self: EventLoop`, which is a value field of the VM).
         vm.is_inside_deferred_task_queue.set(true);
+        trace_at("drain-mt:deferred-tasks:begin");
         self.deferred_tasks.run();
+        trace_at("drain-mt:deferred-tasks:end");
         vm.is_inside_deferred_task_queue.set(false);
 
         // Guard on `event_loop_handle` being set, but drain via `uws_loop_mut()`:
