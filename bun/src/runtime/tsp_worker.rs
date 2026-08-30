@@ -322,6 +322,19 @@ impl EmbeddedVm {
         };
         startup_trace("request:load-entry:reload-end");
 
+        // A synchronous embedded wrapper can publish its response while the
+        // synthetic bun:main module is evaluated. Read that result before
+        // entering the first JSC microtask checkpoint; only asynchronous
+        // handlers or Response body reads need the normal promise wait.
+        if let Some(value) = self.read_global_string("__tspEmbeddedResponse")? {
+            startup_trace("request:response-ready");
+            return Ok(value);
+        }
+        if let Some(error) = self.read_global_string("__tspEmbeddedError")? {
+            startup_trace("request:error-ready");
+            return Err(error);
+        }
+
         startup_trace("load-entry:wait:begin");
         let _ = self
             .vm

@@ -103,9 +103,10 @@ All notable changes to TSP will be documented in this file.
   while the module-evaluation promise is pending; CI run `33323201126`
   proved that this ordering crashes inside `run_gc(false)`. The embedded
   wrapper now executes synchronous handlers and synchronous JSX trees without
-  creating the old unconditional Promise/async chain; asynchronous handlers
-  retain the promise-based fallback. Local Windows smoke passes; Windows CI
-  confirmation is pending.
+  creating the old unconditional Promise/async chain; the worker also reads
+  a synchronously published envelope before entering its first JSC microtask
+  checkpoint. Asynchronous handlers retain the promise-based fallback. Local
+  Windows smoke passes; Windows CI confirmation is pending.
 - The WebKit/JSC pin now uses `b9a6abf2d598`, which contains WebKit's
   `MicrotaskCallCache` invalidation when detached `CodeBlock` objects are
   deleted. Windows CI run `33319229316` still failed at the same JSC

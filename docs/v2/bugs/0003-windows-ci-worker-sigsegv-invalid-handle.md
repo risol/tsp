@@ -81,11 +81,12 @@ The candidate in commit `29761b6191` was rejected by Windows CI. Its explicit
 `run_gc(false)` call crashed before the first tick while the module-evaluation
 promise was still pending (`load-entry:pre-tick:gc:begin` was the last marker).
 This also proves that manual GC is not a valid preparation step for this
-state. The new candidate removes that ordering change and instead eliminates
-the unconditional Promise/async chain from the embedded wrapper for
-synchronous handlers and synchronous JSX trees; asynchronous handlers keep a
-promise fallback. Its Windows CI result is still required before the root
-cause can be declared closed.
+state. The new candidate removes that ordering change, eliminates the
+unconditional Promise/async chain from the embedded wrapper for synchronous
+handlers and synchronous JSX trees, and reads a synchronously published
+envelope before entering the first JSC microtask checkpoint. Asynchronous
+handlers keep a promise fallback. Its Windows CI result is still required
+before the root cause can be declared closed.
 
 ## Independent defects found during investigation
 
@@ -343,10 +344,11 @@ the cache invalidation, the local Windows smoke test passes the same path.
 
 ## Required validation
 
-Run Windows CI with the candidate embedded-worker wrapper change. The smoke
-test must pass the first request, repeated requests, and hot reload. If it
-still crashes, use the inherited stderr markers together with same-commit PDB
-symbolication before making another runtime change.
+Run Windows CI with the candidate embedded-worker wrapper and synchronous
+response short-circuit. The smoke test must pass the first request, repeated
+requests, and hot reload. If it still crashes, use the inherited stderr
+markers together with same-commit PDB symbolication before making another
+runtime change.
 
 ## Regression-prevention rules
 
