@@ -175,6 +175,10 @@ where
 struct EmbeddedVm {
     vm: &'static mut crate::jsc::VirtualMachineRef,
     _log: &'static mut bun_ast::Log,
+    // `VirtualMachine::set_main` stores a borrowed slice. Normal Bun entry
+    // paths live in process-lifetime argv storage; TSP paths arrive in an IPC
+    // request and would otherwise dangle after that request is dropped.
+    entry_path: Vec<u8>,
 }
 
 impl EmbeddedVm {
@@ -210,7 +214,39 @@ impl EmbeddedVm {
             .map_err(|error| format!("{error:?}"))?;
         startup_trace("virtual-machine-init:end");
         let vm = unsafe { &mut *ptr };
-        Ok(Self { vm, _log: log })
+
+        // `VirtualMachine::init` constructs the low-level VM and Transpiler,
+        // but every module-loading Bun entry point performs this second phase
+        // before evaluating user code. In particular, `configure_defines`
+        // materializes the define/env tables used by transpilation and
+        // `load_extra_env_and_source_code_printer` installs per-thread runtime
+        // state used by module loading and error reporting. Skipping this
+        // phase leaves a VM that can complete Hello/Ready yet crash during its
+        // first module evaluation on Windows.
+        startup_trace("runtime-config:begin");
+        {
+            let transpiler = &mut vm.transpiler;
+            transpiler.resolver.env_loader = std::ptr::NonNull::new(transpiler.env);
+            transpiler.options.env.behavior =
+                bun_options_types::schema::api::DotEnvBehavior::LoadAllWithoutInlining;
+            transpiler.configure_defines().map_err(|error| {
+                format!("failed to configure embedded worker defines: {error:?}")
+            })?;
+        }
+        startup_trace("runtime-config:defines:end");
+        bun_http::async_http::load_env(
+            vm.log_mut()
+                .ok_or_else(|| "embedded worker log is unavailable".to_string())?,
+            vm.env_loader(),
+        );
+        vm.load_extra_env_and_source_code_printer();
+        startup_trace("runtime-config:end");
+
+        Ok(Self {
+            vm,
+            _log: log,
+            entry_path: Vec::new(),
+        })
     }
 
     fn execute_request(
@@ -237,10 +273,14 @@ impl EmbeddedVm {
         // driving the event loop. This is especially strict on Windows,
         // where the embedded worker uses TCP for the master connection.
         let this = self as *mut Self;
+        startup_trace("request:api-lock:begin");
         unsafe {
-            (*this)
-                .vm
-                .run_with_api_lock(|| (*this).execute_path_with_api_lock(path))
+            let result = (*this).vm.run_with_api_lock(|| {
+                startup_trace("request:api-lock:acquired");
+                (*this).execute_path_with_api_lock(path)
+            });
+            startup_trace("request:api-lock:end");
+            result
         }
     }
 
@@ -258,19 +298,31 @@ impl EmbeddedVm {
         // (see docs/v2/bugs/0001). `clear_entry_point` removes the
         // `bun:main` entry only; shared modules (e.g. `tsp:server`
         // shims) keep their cache hits across requests.
+        startup_trace("request:clear-entry:begin");
         self.vm
             .clear_entry_point()
             .map_err(|error| format!("{error:?}"))?;
-        let _ = self
-            .vm
-            .load_entry_point(path.as_bytes())
+        startup_trace("request:clear-entry:end");
+        // Keep the previous backing allocation valid until
+        // `clear_entry_point` has completed its last read of `vm.main`.
+        // Replacing this buffer first could reallocate for a longer path and
+        // leave that cleanup call observing the old dangling slice.
+        self.entry_path.clear();
+        self.entry_path.extend_from_slice(path.as_bytes());
+        startup_trace("request:load-entry:begin");
+        let (vm, entry_path) = (&mut *self.vm, self.entry_path.as_slice());
+        let _ = vm
+            .load_entry_point(entry_path)
             .map_err(|error| format!("{error:?}"))?;
+        startup_trace("request:load-entry:end");
 
         for _ in 0..10_000 {
             if let Some(value) = self.read_global_string("__tspEmbeddedResponse")? {
+                startup_trace("request:response-ready");
                 return Ok(value);
             }
             if let Some(error) = self.read_global_string("__tspEmbeddedError")? {
+                startup_trace("request:error-ready");
                 return Err(error);
             }
             self.vm.event_loop_mut().tick();

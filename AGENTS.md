@@ -88,6 +88,20 @@ VM roles are defined relative to the current operating-system process:
   or `vm.worker.is_none()` independently. Main-thread publication, context id,
   and worker ownership must come from one `VmRole` value.
 
+An embedded VM has a separate module-readiness phase after low-level VM
+construction:
+
+- Before calling `load_entry_point`, wire the transpiler's resolver env loader,
+  run `configure_defines`, load the runtime environment, and install the
+  per-thread source-code printer. Follow the lifecycle shared by Bun's CLI and
+  WebWorker paths; a successful `VirtualMachine::init` or Hello/Ready handshake
+  does not prove module readiness.
+- `VirtualMachine::set_main` stores a borrowed slice. The backing entry-path
+  storage must remain valid for the VM lifetime. IPC request strings and other
+  per-request temporaries must be copied into VM-owned storage first.
+- Embedded-worker tests must execute at least one generated module; a startup-
+  only handshake test cannot validate the module-loading lifecycle.
+
 Windows handle boundaries have a separate representation rule:
 
 - `bun_core::Fd` is a packed value on Windows; its high bit distinguishes a
@@ -106,8 +120,10 @@ Windows handle boundaries have a separate representation rule:
   `TSP_WORKER_STARTUP_TRACE=1` when a Windows CI crash must be split between
   JSC initialization, VM creation, and protocol handshake.
 
-See `docs/v2/adr/0002-cross-allocator-ownership.md` and
-`docs/v2/adr/0003-windows-fd-representation.md` for the rationale and
+See `docs/v2/adr/0002-cross-allocator-ownership.md`,
+`docs/v2/adr/0003-windows-fd-representation.md`,
+`docs/v2/adr/0004-process-relative-vm-roles.md`, and
+`docs/v2/adr/0005-embedded-vm-module-readiness.md` for the rationale and
 boundary rules. See `docs/v2/bugs/0002-mimalloc-operator-delete-sigsegv.md`
 and `docs/v2/bugs/0003-windows-ci-worker-sigsegv-invalid-handle.md` for the
 verified regressions.
