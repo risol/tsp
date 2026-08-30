@@ -107,9 +107,10 @@ errors instead of continuing with a partially configured VM.
 
 The Windows smoke job sets `TSP_WORKER_STARTUP_TRACE=1`. The trace is disabled
 in normal execution and now covers construction, request entry, the
-`reload_entry_point` / `load_entry_point` call chain, and per-tick wait
-state. Embedding startup trace storage on the VM lets per-request VM methods
-emit the same stage markers as the worker request handler.
+`reload_entry_point` / `load_entry_point` call chain, and per-iteration
+`EventLoop::wait_for_promise` sub-stages. Embedding startup trace storage
+on the VM lets per-request VM methods emit the same stage markers as the
+worker request handler and the event loop.
 
 ```text
 tcp-connect:begin/end
@@ -153,6 +154,11 @@ request:load-entry:begin
 load-entry:reload-end
 load-entry:wait:begin
   (load-entry:wait:rejected, only if the entry promise rejected synchronously)
+  load-entry:wait:iter:0 / :iter:N          (first 4 iterations only)
+  load-entry:wait:tick:begin
+  load-entry:wait:tick:end                  (first 4 iterations only)
+  (load-entry:wait:auto-tick:begin / :end,  (first 4 iterations only, only if still pending after tick))
+  load-entry:wait:resolved                  (printed once when the wait loop exits cleanly)
 load-entry:wait:end
 request:load-entry:end
 request:response-ready or request:error-ready
@@ -168,12 +174,18 @@ After the lifecycle fix in `fix(tsp): complete embedded VM module setup`
 (every `entry-eval:*` marker prints `:end`, every `vm-core:*` prints `:end`),
 the Windows first-call crash remained inside `VirtualMachine::load_entry_point`
 between `request:load-entry:begin` and `(crash)` with no internal boundary.
-The markers above split that window so the next failing run can be attributed
-to one of:
+The first trace slice split that window into the five phases below; the
+Windows CI run on `31488de3e1` showed that phases 1–4 all printed `:end`
+cleanly, which moved the failure boundary one level deeper into
+`EventLoop::wait_for_promise` (Phase 5) and required the second trace
+slice to split it.
+
+Sub-stages after both slices:
 
 1. `entry-eval:generate-entry` — `ServerEntryPoint::generate` (synthetic
    `bun:main` body) or anything the high-tier hook transitively touches
-   (transpiler, resolver, file system).
+   (transpiler, resolver, file system). Excluded by the latest run: the
+   `:end` marker printed.
 2. `entry-eval:pre-exec` — the FFI call to `Bun__preExecutionBootstrap` for
    `internal/process/pre_execution` (only when `--trace-*` /
    `--stack-trace-limit` argv is set; not on the normal TSP path).
@@ -181,17 +193,31 @@ to one of:
    non-empty; not on the normal TSP path).
 4. `entry-eval:module-loader` — `JSModuleLoader::load_and_evaluate_module_ptr`
    resolver / fetcher / transpiler / JSC module loader callback chain
-   synchronously firing before the returned promise settles.
-5. `load-entry:wait` — promise resolution + event-loop tick, the most likely
-   candidate for a fault observed in async module evaluation, fetcher I/O,
-   or user code.
+   synchronously firing before the returned promise settles. Excluded by
+   the latest run: the `:end` marker printed, the promise was handed to
+   `wait_for_promise` and was still pending.
+5. `load-entry:wait:tick` — `EventLoop::tick` (microtask drain; this is
+   where the synthetic `bun:main` body runs and writes
+   `__tspEmbeddedResponse`).
+6. `load-entry:wait:auto-tick` — `EventLoop::auto_tick` → runtime hook
+   `tick` → `bun_runtime::jsc_hooks::auto_tick` → uSockets poll on
+   Windows (IOCP, `WSARecv` / `GetQueuedCompletionStatus`).
+7. `load-entry:wait:resolved` (with no preceding `:end`) — a fault
+   observed in promise-resolution bookkeeping (status polling, microtask
+   folding).
 
 The crash address `0xFFFFFFFFFFFFFFFF` (Windows `INVALID_HANDLE_VALUE` /
 `-1`) is consistent with a Windows HANDLE being dereferenced as a pointer.
-A new bun.report frame that lands in `ServerEntryPoint::generate`, a module
-loader callback, the transpiler / resolver path, or a Windows HANDLE / Fd
-helper will pin the root cause more precisely than the previous
-fault-address-only mapping.
+The latest CI run printed every `entry-eval:*` `:end` marker and reached
+`load-entry:wait:begin` but never printed `load-entry:wait:resolved` or
+any subsequent `wait:end` — the fault is therefore inside phase 5 or 6,
+most likely the `auto_tick` → uSockets Windows poll path. A new
+bun.report frame on the `31488de3e1` commit, symbolicated against the
+same-commit PDB (offsets can shift between separately linked binaries, so
+the previous mapping is supporting evidence only), should land in either
+`EventLoop::tick_turn` (microtask drain) or
+`bun_runtime::jsc_hooks::auto_tick` / `uws::Loop::wakeup` /
+`bun_io::waker::wake` to confirm.
 
 ## Required validation
 

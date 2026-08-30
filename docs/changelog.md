@@ -76,12 +76,23 @@ All notable changes to TSP will be documented in this file.
   attributable to one of: synthetic `bun:main` generation, pre-execution
   bootstrap, preload evaluation, `JSModuleLoader` evaluation, or
   promise resolution + event-loop tick.
+- Per-iteration markers inside `EventLoop::wait_for_promise`
+  (`bun/src/jsc/event_loop.rs`): `load-entry:wait:iter:0` /
+  `:iter:N`, `load-entry:wait:tick:begin` / `:tick:end`,
+  `load-entry:wait:auto-tick:begin` / `:auto-tick:end`, and
+  `load-entry:wait:resolved`. Rate-limited to the first four iterations
+  so a successful wait does not flood the trace. The Windows first-call
+  crash was bounded to this function by the previous slice's trace; the
+  new markers split `tick` (microtask drain) from `auto_tick`
+  (runtime hook → uSockets poll → Windows HANDLE) so the next run can
+  attribute the fault to one of those.
 
 ### Diagnostics
 - BUG-0003 (`docs/v2/bugs/0003-windows-ci-worker-sigsegv-invalid-handle.md`)
-  updated with the new trace layout, a per-stage attribution guide, and
-  a regression-prevention rule that requires the embedding startup
-  trace to be stashed on the VM. AGENTS.md mirrors that rule.
+  updated with the new trace layout, a per-stage attribution guide, the
+  `wait_for_promise` sub-stage markers, and the latest CI evidence
+  narrowing the fault to phase 5 or 6 of the wait. AGENTS.md mirrors
+  the stash-on-VM rule.
 
 ### Test count
 332 tests, all green on 5 consecutive full-suite runs.

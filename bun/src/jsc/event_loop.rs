@@ -1025,18 +1025,62 @@ impl EventLoop {
         if promise.status() != PromiseStatus::Pending {
             return Ok(());
         }
+        // Forward the embedding startup trace through the VM reference so the
+        // wait phase can be split into sub-stages. After the previous trace
+        // slice (entry-eval:*, load-entry:wait:begin) the Windows first-call
+        // crash is bounded to this function: the segment between
+        // `wait:begin` and (no `wait:end`) is `tick` (microtask drain) or
+        // `auto_tick` (runtime hook → uSockets poll → Windows HANDLE).
+        //
+        // The trace callback is a `fn` pointer stored on the VM (NIL → 0,
+        // Some → fn-ptr); copy it locally so the borrow on `self` is
+        // released before the per-iteration `self.tick()` / `self.auto_tick()`
+        // calls (which need `&mut self` and would otherwise conflict with
+        // an `Fn` closure capturing `self`).
+        let trace: Option<fn(&str)> = self.vm_ref().startup_trace;
+        let trace_at = |stage: &'static str| {
+            if let Some(callback) = trace {
+                callback(stage);
+            }
+        };
+        // Rate-limit the per-iteration markers to the first few loops so a
+        // successful wait does not flood the trace. The Windows first-call
+        // crash is deterministic on iteration 1, so a small cap is enough
+        // to capture it; raise it if the crash ever moves deeper.
+        let mut iter: u32 = 0;
         while promise.status() == PromiseStatus::Pending {
+            if iter < 4 {
+                trace_at(if iter == 0 {
+                    "load-entry:wait:iter:0"
+                } else {
+                    "load-entry:wait:iter:N"
+                });
+            }
+            iter += 1;
             if jsc_vm.execution_forbidden()
                 || !self.vm_ref().script_allowed()
                 || self.global_ref().has_pending_termination_exception()
             {
                 return Err(jsc::Stopped);
             }
+            if iter <= 4 {
+                trace_at("load-entry:wait:tick:begin");
+            }
             self.tick();
+            if iter <= 4 {
+                trace_at("load-entry:wait:tick:end");
+            }
             if promise.status() == PromiseStatus::Pending {
+                if iter <= 4 {
+                    trace_at("load-entry:wait:auto-tick:begin");
+                }
                 self.auto_tick();
+                if iter <= 4 {
+                    trace_at("load-entry:wait:auto-tick:end");
+                }
             }
         }
+        trace_at("load-entry:wait:resolved");
         Ok(())
     }
 
