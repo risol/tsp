@@ -89,11 +89,14 @@ All notable changes to TSP will be documented in this file.
 
 ### Diagnostics
 - BUG-0003 (`docs/v2/bugs/0003-windows-ci-worker-sigsegv-invalid-handle.md`)
-  records the final boundary: the embedded worker's synthetic wrapper was
-  eagerly reading optional Bun native APIs during every route startup. The
-  wrapper now exposes those APIs, including SQL, through lazy getters. The
-  Windows diagnostic notes that worker stdout is discarded and therefore must
-  not be used as an execution tripwire.
+  now records the reproducible boundary: the embedded worker manager redirects
+  stdin to null and uses a native socket for control, while the generated
+  wrapper still installed the obsolete subprocess-bridge stdin listener. The
+  listener was removed; the earlier lazy optional-Bun-API change remains
+  independent hardening, not the root-cause explanation.
+- Candidate fix removes the obsolete generated-worker stdin listener. The
+  result must be confirmed by the Windows embedded-worker smoke job before
+  BUG-0003 can be marked fixed.
 
 ### Fixed
 - ~~Windows first-call SIGSEGV in the TSP embedded worker at

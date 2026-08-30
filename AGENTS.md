@@ -151,6 +151,9 @@ must preserve the frozen contract in `docs/v2/FREEZE.md`.
 - On Windows, TSP worker stdout may be discarded by the worker manager. Native
   diagnostics must use inherited stderr or an explicit diagnostic sink rather
   than assuming `console.log` is captured.
+- Embedded-worker generated code must not access standard-input handles that
+  the worker manager redirects to null. The old subprocess stdin abort marker
+  is not an embedded-worker control channel; use the native worker protocol.
 
 Changes to path handling, FFI, allocators, or embedded workers must also run a
 Linux embedded-worker release build and the TSP v2 smoke test.

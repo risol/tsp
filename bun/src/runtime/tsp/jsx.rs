@@ -940,15 +940,14 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
              \x20 __tspReqInit.duplex = 'half';\n\
              }\n\
              __tspContext.request = new Request(__tspReqUrl, __tspReqInit);\n\
-             // Slice 16n' (Phase 8): make ctx.signal a real,\n\
-             // abortable AbortSignal. The host writes `ABORT_MARKER`\n\
-             // (the single marker byte jsc_bridge.rs writes to bun\n\
-             // stdin) when the per-request timeout fires. A controller\n\
-             // is created once at module scope, the stdin listener\n\
-             // (also module-scope) aborts it in time for the page's\n\
-             // cooperative-cancel code (spec 13.7).\n\
+             // Keep ctx.signal as a real AbortSignal for route code. The\n\
+             // embedded worker is started with stdin redirected to null and\n\
+             // receives control messages over its native worker socket. The\n\
+             // old subprocess bridge used a stdin abort marker, but that\n\
+             // channel does not exist for the embedded worker. Do not access\n\
+             // process.stdin from generated route code; native Cancel ->\n\
+             // AbortController wiring belongs to the worker protocol.\n\
              const __tspAbortCtrl__ = new AbortController();\n\
-             globalThis.process?.stdin?.on('data', () => { try { __tspAbortCtrl__.abort(); } catch (__e__) {} });\n\
              __tspContext.signal = __tspAbortCtrl__.signal;\n\
              __tspContext.fragment = (__name__, __params__) => {\n\
              \x20 const __q__ = new URLSearchParams({route: __tspContext.path, name: String(__name__), token: __tspContext.__tsp_fragment_token, ...(__params__ || {})});\n\
@@ -1344,20 +1343,17 @@ mod tests {
         assert!(wrapped.contains("new URL("), "got: {wrapped}");
         assert!(wrapped.contains("searchParams"), "got: {wrapped}");
         assert!(wrapped.contains("new Request("), "got: {wrapped}");
-        // Slice 16n': the signal is backed by a module-scope
-        // AbortController that the stdin 'data' listener aborts
-        // on the host's ABORT_MARKER (spec 13.7 timeout).
+        // The embedded worker must not access process.stdin: its stdin is
+        // redirected to null and control traffic uses the native worker
+        // socket. The signal remains live, while cancellation wiring belongs
+        // to that protocol boundary.
         assert!(
             wrapped.contains("const __tspAbortCtrl__ = new AbortController()"),
             "got: {wrapped}"
         );
         assert!(
-            wrapped.contains("globalThis.process?.stdin?.on('data'"),
-            "got: {wrapped}"
-        );
-        assert!(
-            wrapped.contains("__tspAbortCtrl__.abort()"),
-            "got: {wrapped}"
+            !wrapped.contains("process.stdin?.on"),
+            "embedded wrapper must not register a standard-input listener; got: {wrapped}"
         );
         assert!(
             wrapped.contains("__tspContext.signal = __tspAbortCtrl__.signal"),

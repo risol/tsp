@@ -1,6 +1,6 @@
 # BUG-0003: Windows embedded worker SIGSEGV during first module evaluation
 
-> Status: **Fix implemented; Windows CI verification in progress**
+> Status: **Fix candidate implemented; Windows CI verification in progress**
 > Discovered: 2026-08-29 in GitHub Actions `smoke-windows`
 > Latest evidence: [Windows CI run on `8174842d49`](https://github.com/risol/tsp/actions/runs/33300360586)
 > Affected: TSP v2 embedded-worker request execution on Windows
@@ -25,9 +25,12 @@ first generated module execution: failed
 ```
 
 The failure is at TSP's generated-wrapper/Bun embedding boundary, not in the
-TSP protocol, route discovery, TCP, or generic JSC startup. Bun's Windows
-embedded runtime is the trigger, but the avoidable bug in TSP was eagerly
-touching unrelated native Bun APIs for every route.
+TSP protocol, route discovery, TCP, or generic JSC startup. The worker manager
+uses a native socket for its embedded-worker control protocol and starts the
+worker with stdin redirected to null. The generated wrapper still installed
+the old subprocess-bridge stdin listener. On Windows that stale access can
+cross Bun's null-stdio boundary with an invalid HANDLE and crash during the
+first microtask drain.
 
 ## Evidence and root cause
 
@@ -45,12 +48,19 @@ are now prepared before Ready and module loading. Later CI traces passed all of
 those stages and still crashed in the first event-loop turn, so that defect was
 real but not the remaining root cause.
 
-The remaining root cause was in `wrap_for_bun_cli`. The synthetic entry eagerly
-evaluated a large set of Bun native properties while constructing
-`__tspUtilNs__`, and eagerly executed `require("bun").SQL`, even when the route
-did not import or use those APIs. This made a simple JSX/Hello route initialize
-unrelated native subsystems during the first embedded Windows microtask drain.
-That is an invalid initialization boundary for TSP's embedded worker.
+The remaining root cause was in `wrap_for_bun_cli`. The synthetic entry
+installed `globalThis.process?.stdin?.on('data', ...)` to consume the
+`ABORT_MARKER` used by the former subprocess bridge. The production embedded
+worker does not have that channel: `worker/manager.rs` redirects stdin to
+`Stdio::null()` and `tsp_worker.rs` receives control messages over its native
+socket. The listener was therefore both dead functionality and an invalid
+Windows HANDLE boundary. The crash address
+`0xFFFFFFFFFFFFFFFF` is consistent with the invalid-handle sentinel being
+reached while Bun/JSC drained the first pending microtask.
+
+The earlier lazy-optional-Bun-API change remains valid hardening, but it is not
+the root cause of this incident: the corresponding Windows CI run still
+crashed at the same `drain-microtasks` boundary after that change.
 
 TSP also passed an IPC-request-owned path to `VirtualMachine::set_main`, which
 stores a borrowed slice under a process-lifetime invariant. The slice became
@@ -111,7 +121,7 @@ other module-loading VM entry points:
 Failures from `configure_defines()` are returned as worker initialization
 errors instead of continuing with a partially configured VM.
 
-The wrapper fix completes the boundary:
+The wrapper also contains an independent hardening fix:
 
 1. `__tspUtilNs__` is created with accessor properties. Each optional
    `Bun.*` value is read only when the page requests that property.
@@ -121,9 +131,9 @@ The wrapper fix completes the boundary:
    the public shape and mutation guarantees are unchanged.
 
 This preserves the frozen API while preventing unused native facilities from
-participating in embedded worker startup. The fix is therefore a TSP wrapper
-bug fix, with Bun's Windows embedding behavior explaining why the eager access
-became a process-fatal SIGSEGV.
+participating in embedded worker startup. The BUG-0003 fix itself removes the
+obsolete stdin listener; Bun's Windows embedding behavior explains why the
+invalid stdio boundary became a process-fatal SIGSEGV.
 
 ### Investigated but rejected
 
@@ -342,6 +352,10 @@ configuration.
 11. Do not infer worker execution from stdout in Windows smoke diagnostics.
     `worker/manager.rs` discards worker stdout; use inherited stderr or an
     explicit diagnostic channel.
+12. Generated embedded-worker code must not access standard-input handles that
+    the worker manager redirects to null. The old subprocess stdin marker is
+    not an embedded-worker control channel; cancellation must be wired through
+    the native worker protocol.
 
 The durable rules are also recorded in `AGENTS.md`,
 `docs/v2/adr/0003-windows-fd-representation.md`,
