@@ -139,6 +139,12 @@ Before changing the native runtime, run the focused Rust tests and the smoke
 test. Changes to route discovery, generation, workers, or response handling
 must preserve the frozen contract in `docs/v2/FREEZE.md`.
 
+When changing `bun/scripts/build/deps/webkit.ts`, treat the WebKit/JSC pin as
+native runtime code: verify the selected release contains the required upstream
+fixes and target ABI, rebuild the packaged binary, and run the Windows embedded-
+worker smoke test. A JSC microtask-drain crash must be checked against upstream
+WebKit fixes before adding TSP-specific event-loop or handle workarounds.
+
 ## Embedded Bun API boundaries
 
 - Generated `tsp:server` namespaces must not eagerly read optional Bun native

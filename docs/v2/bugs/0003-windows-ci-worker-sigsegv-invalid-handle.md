@@ -1,8 +1,9 @@
 # BUG-0003: Windows embedded worker SIGSEGV during first module evaluation
 
-> Status: **Open; root cause not yet fixed**
+> Status: **Fix prepared; awaiting Windows CI confirmation**
 > Discovered: 2026-08-29 in GitHub Actions `smoke-windows`
-> Latest evidence: [Windows CI run on `d30992b8b6`](https://github.com/risol/tsp/actions/runs/33305596850)
+> Latest failure: [Windows CI run on `4c76cdfadf`](https://github.com/risol/tsp/actions/runs/33315127610)
+> Local fix validation: Windows embedded-worker smoke passed with WebKit `b9a6abf2d598`
 > Affected: TSP v2 embedded-worker request execution on Windows
 > Severity: CI blocker
 
@@ -24,10 +25,9 @@ first generated module execution: failed
 10054: consequence of worker termination
 ```
 
-The failure is at TSP's generated-wrapper/Bun embedding boundary, not in the
-TSP protocol, route discovery, TCP, or generic JSC startup. The worker reaches
-the first event-loop turn and crashes inside the C++ microtask-drain entry
-point. The exact failing native sub-stage is still being isolated.
+The failure is at the Bun/JSC engine boundary, not in the TSP protocol, route
+discovery, TCP, or generic JSC startup. The worker reaches the first event-loop
+turn and crashes inside `JSC::VM::drainMicrotasks()`.
 
 ## Evidence and root cause
 
@@ -69,6 +69,20 @@ linked binaries can shift individual offsets, that mapping is supporting
 evidence rather than the sole root-cause proof. The stage trace and missing
 lifecycle calls provide the reproducible boundary.
 
+The decisive correlation is the WebKit engine pin. TSP used WebKit
+`0f966e81b78c`, while the local release was built before WebKit commit
+[`75a9d414a4a8` / `319570@main`](https://github.com/oven-sh/WebKit/commit/75a9d414a4a8).
+That upstream fix clears `MicrotaskCallCache` when `Heap::deleteAllCodeBlocks`
+detaches `CodeBlock` objects. Without the clear, a later microtask drain can
+retain an executable-to-detached-CodeBlock pair and jump through stale JSC
+state. The TSP path generates and reloads synthetic module entry points before
+its first checkpoint, which is the exact lifecycle needed to expose that bug.
+
+This explains all observed facts together: module loading completes, the first
+event-loop tick enters JSC microtask draining, the fault is Windows-specific in
+the tested matrix, and removing stdin access, changing VM role, adding the API
+lock, and aligning runtime setup do not move the crash boundary.
+
 ## Independent defects found during investigation
 
 ### Packed Windows `Fd` representation
@@ -100,6 +114,18 @@ semantics without fixing the lifecycle defect.
 
 ## Fix status
 
+The candidate fix changes `bun/scripts/build/deps/webkit.ts` to WebKit
+`b9a6abf2d59854e9004155d156b3b751b638d0ec`, whose Windows prebuilt contains the
+upstream `MicrotaskCallCache` fix. The build also makes two source-compatibility
+adjustments required by that newer WebKit API: an explicit `HexNumber.h`
+include and the new module-loader `referrer` parameter. These are build
+compatibility changes; the runtime behavior change is the WebKit upgrade.
+
+With the new WebKit cache extracted at
+`C:\Users\user\.bun\build-cache\webkit-b9a6abf2d59854e9`, the local Windows
+smoke test passed the first request, repeated requests, and hot reload. The
+GitHub Windows embedded-worker job is the remaining confirmation gate.
+
 The embedded worker now completes the same module-readiness phase as Bun's
 other module-loading VM entry points:
 
@@ -124,9 +150,10 @@ The wrapper also contains an independent hardening fix:
    the public shape and mutation guarantees are unchanged.
 
 These preserve the frozen API and reduce unrelated native work during embedded
-worker startup. They do not fix BUG-0003. The current evidence points to a
-Bun/JSC microtask-drain or embedded-VM lifecycle defect, but the precise native
-operation must be identified before selecting a workaround or upstream fix.
+worker startup. They do not fix BUG-0003. The root cause is the stale
+`MicrotaskCallCache` in the pinned WebKit build. The fix is to move the WebKit
+pin to a release containing the upstream cache invalidation, rather than adding
+another TSP-specific event-loop workaround.
 
 ### Investigated but rejected
 
@@ -302,20 +329,20 @@ Sub-stages after both slices:
    getters because worker stdout is discarded. The source-level fix removes
    this eager native work by using lazy accessors.
 
-The crash address `0xFFFFFFFFFFFFFFFF` is not sufficient to identify an
+The crash address `0xFFFFFFFFFFFFFFFF` was not sufficient to identify an
 invalid HANDLE: the stdin candidate was disproven and the Bun report for the
-custom build is not symbolicated. The latest CI run still printed every
+custom build was not symbolicated. The decisive failing run printed every
 `entry-eval:*` marker, reached `load-entry:wait:tick:begin`, and stopped after
-`drain-mt:drain-microtasks:begin`. The new native markers will distinguish the
-two operations inside that C++ entry point on the next run.
+`drain-mt:drain-microtasks:begin`. After upgrading WebKit to the release with
+the cache invalidation, the local Windows smoke test passes the same path.
 
 ## Required validation
 
-Run Windows CI with the complete module-readiness lifecycle, owned entry path,
-lazy wrapper bindings, and native microtask sub-stage markers. The smoke test
-must pass the first request, repeated requests, and hot reload. If it still
-crashes, use the inherited stderr markers together with same-commit PDB
-symbolication before changing runtime configuration.
+Run Windows CI with the pinned WebKit release containing the
+`MicrotaskCallCache` invalidation. The smoke test must pass the first request,
+repeated requests, and hot reload. If it still crashes, use the inherited
+stderr markers together with same-commit PDB symbolication before changing
+runtime configuration.
 
 ## Regression-prevention rules
 
@@ -349,6 +376,11 @@ symbolication before changing runtime configuration.
     the worker manager redirects to null. The old subprocess stdin marker is
     not an embedded-worker control channel; cancellation must be wired through
     the native worker protocol.
+13. Treat the WebKit pin as part of the native runtime contract. Before changing
+    `WEBKIT_VERSION`, verify that the selected prebuilt contains required JSC
+    fixes and matches every target ABI; after changing it, rebuild the native
+    binary and run the Windows embedded-worker smoke test. Do not compensate
+    for an engine regression with TSP-only event-loop or handle workarounds.
 
 The durable rules are also recorded in `AGENTS.md`,
 `docs/v2/adr/0003-windows-fd-representation.md`,

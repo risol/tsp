@@ -45,6 +45,11 @@ request path into that buffer and passes the stable slice to
 6. Copy IPC-owned or request-owned paths into VM-owned storage before loading.
 7. Regression tests must execute generated modules, repeated requests, and hot
    reload; handshake-only tests are insufficient.
+8. Treat the pinned WebKit/JSC release as part of embedded-worker readiness.
+   When a failure is inside `JSC::VM::drainMicrotasks`, check the pinned engine
+   for upstream CodeBlock or microtask-cache fixes before changing TSP event-loop
+   or handle logic. Validate the selected release's target ABI, rebuild the
+   native binary, and run the Windows embedded-worker smoke test.
 
 ## Consequences
 

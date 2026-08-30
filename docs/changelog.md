@@ -99,6 +99,11 @@ All notable changes to TSP will be documented in this file.
   next Windows CI result.
 
 ### Fixed
+- Windows embedded-worker SIGSEGV during the first module checkpoint: the
+  WebKit/JSC pin now uses `b9a6abf2d598`, which contains WebKit's
+  `MicrotaskCallCache` invalidation when detached `CodeBlock` objects are
+  deleted. The candidate passes the local Windows embedded-worker smoke test;
+  Windows CI confirmation is pending.
 - ~~Windows first-call SIGSEGV in the TSP embedded worker at
   `0xFFFFFFFFFFFFFFFF`. The `VirtualMachine::init` call leaves
   `uws::Loop::internal_loop_data.jsc_vm` non-null, so the JSC park hook

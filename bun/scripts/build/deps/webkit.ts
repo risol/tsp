@@ -3,7 +3,11 @@
  * for local mode. Override via `--webkit-version=<hash>` to test a branch.
  * From https://github.com/oven-sh/WebKit releases.
  */
-export const WEBKIT_VERSION = "0f966e81b78c84bb23213e391bc679c4ef83e56b";
+// Includes WebKit's MicrotaskCallCache invalidation fix for detached
+// CodeBlocks (75a9d414a4a8 / 319570@main). Keep this at or above that fix:
+// embedded TSP workers can detach module code before their first microtask
+// checkpoint, which otherwise crashes inside VM::drainMicrotasks on Windows.
+export const WEBKIT_VERSION = "b9a6abf2d59854e9004155d156b3b751b638d0ec";
 
 /**
  * WebKit (JavaScriptCore) — the JS engine.
