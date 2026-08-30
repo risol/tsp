@@ -700,6 +700,15 @@ fn zod_prelude() -> String {
 /// argument. If `None`, the handler is called with no
 /// argument so legacy zero-arg fixtures keep working.
 pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>) -> String {
+    wrap_for_bun_cli_mode(transformed, method, ctx_json, false)
+}
+
+fn wrap_for_bun_cli_mode(
+    transformed: &str,
+    method: &str,
+    ctx_json: Option<&str>,
+    embedded_worker: bool,
+) -> String {
     let mut out = String::with_capacity(
         transformed.len()
             + 1024
@@ -1014,14 +1023,121 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
     // (`TSP_DEVELOPMENT=1` -> dev error page HTML;
     // prod -> generic 500 with the wire body preserved
     // for the application to log).
-    out.push_str(
+    if embedded_worker {
+        out.push_str(
+            r#"let __tspRawResult__;
+let __tspInvokeError__;
+try {
+  __tspRawResult__ = __tspContext === undefined ? __tspHandler__() : __tspHandler__(__tspContext);
+} catch (__tspError__) {
+  __tspInvokeError__ = __tspError__;
+}
+function __tspThenable__(__value__) {
+  return __value__ !== null && __value__ !== undefined && (typeof __value__ === 'object' || typeof __value__ === 'function') && typeof __value__.then === 'function';
+}
+const __tspSyncUnavailable__ = {};
+function __tspRenderNodeSync__(__node__, __child__) {
+  if (__tspThenable__(__node__)) return __tspSyncUnavailable__;
+  if (__node__ == null || typeof __node__ === 'boolean') return '';
+  if (typeof __node__ === 'string') return __child__ ? __tspEscape__(__node__) : __node__;
+  if (typeof __node__ === 'number' || typeof __node__ === 'bigint') return String(__node__);
+  if (Array.isArray(__node__)) {
+    let __html__ = '';
+    for (const __item__ of __node__) {
+      const __part__ = __tspRenderNodeSync__(__item__, true);
+      if (__part__ === __tspSyncUnavailable__) return __tspSyncUnavailable__;
+      __html__ += __part__;
+    }
+    return __html__;
+  }
+  if (__node__.__tspRaw !== undefined) return __node__.__tspRaw;
+  if (typeof __node__ !== 'object' || !__node__.props) return __tspSyncUnavailable__;
+  const __type__ = __node__.type;
+  const __props__ = __node__.props || {};
+  if (__type__ === React.Fragment) return __tspRenderNodeSync__(__props__.children, true);
+  if (typeof __type__ === 'function') return __tspRenderNodeSync__(__type__(__props__), true);
+  if (typeof __type__ !== 'string') return __tspSyncUnavailable__;
+  let __attrs__ = '';
+  for (const [__rawName__, __value__] of Object.entries(__props__)) {
+    if (__rawName__ === 'children' || __rawName__ === 'key' || __rawName__ === 'ref') continue;
+    const __name__ = __rawName__ === 'className' ? 'class' : (__rawName__ === 'htmlFor' ? 'for' : __rawName__);
+    if (typeof __value__ === 'function') return __tspSyncUnavailable__;
+    if (__value__ == null || __value__ === false) continue;
+    if (__value__ === true) { __attrs__ += ' ' + __name__; continue; }
+    if (typeof __value__ === 'object') return __tspSyncUnavailable__;
+    __attrs__ += ' ' + __name__ + '=\"' + __tspEscape__(__value__) + '\"';
+  }
+  const __void__ = /^(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)$/i.test(__type__);
+  if (__void__) return '<' + __type__ + __attrs__ + '>';
+  const __children__ = __tspRenderNodeSync__(__props__.children, true);
+  if (__children__ === __tspSyncUnavailable__) return __tspSyncUnavailable__;
+  return '<' + __type__ + __attrs__ + '>' + __children__ + '</' + __type__ + '>';
+}
+function __tspBuildSyncEnvelope__(__result__) {
+  if (__tspThenable__(__result__) || __result__ instanceof Response) return __tspSyncUnavailable__;
+  let __tspBody__, __tspStatus__, __tspType__;
+  if (typeof __result__ === 'string') {
+    __tspType__ = 'html';
+    __tspStatus__ = 200;
+    __tspBody__ = __result__;
+  } else if (typeof __result__ === 'object' && __result__ !== null) {
+    __tspType__ = 'html';
+    __tspStatus__ = 200;
+    __tspBody__ = __tspRenderNodeSync__(__result__, false);
+    if (__tspBody__ === __tspSyncUnavailable__) return __tspSyncUnavailable__;
+  } else {
+    return __tspSyncUnavailable__;
+  }
+  const __tspHeaders__ = [];
+  if (Array.isArray(__tspCookieWrites)) for (const __cookieLine__ of __tspCookieWrites) __tspHeaders__.push(['Set-Cookie', __cookieLine__]);
+  return JSON.stringify({type: __tspType__, status: __tspStatus__, headers: __tspHeaders__, body: __tspBody__, service_logs: __tspServiceLogs, session_writes: __tspSessionWrites});
+}
+let __tspSyncEnvelope__ = __tspSyncUnavailable__;
+if (__tspInvokeError__ === undefined) {
+  try { __tspSyncEnvelope__ = __tspBuildSyncEnvelope__(__tspRawResult__); } catch (_) { __tspSyncEnvelope__ = __tspSyncUnavailable__; }
+}
+if (__tspSyncEnvelope__ !== __tspSyncUnavailable__) {
+  globalThis.__tspEmbeddedResponse = __tspSyncEnvelope__;
+} else {
+  const __tspResultPromise__ = (__tspInvokeError__ === undefined ? Promise.resolve(__tspRawResult__) : Promise.reject(__tspInvokeError__)).then(async (__result__) => typeof __result__ === 'object' && __result__ !== null && !(__result__ instanceof Response) ? await __tspRenderNode__(__result__, false) : __result__).catch((e) => {
+    if (e && Number.isInteger(e.status)) return new Response(String(e.message || ''), {status: e.status, headers: e.headers || {}});
+    let __tspErrJson__;
+    try { __tspErrJson__ = JSON.stringify({kind: 'tsp_error', error: (e && e.name) || 'Error', message: (e && e.message) || String(e), stack: (e && e.stack) || ''}); } catch { __tspErrJson__ = JSON.stringify({kind: 'tsp_error', error: 'Error', message: String(e), stack: ''}); }
+    return new Response(__tspErrJson__, {status: 500, headers: {'content-type': 'application/json', 'x-tsp-error': 'page'}});
+  });
+  (async () => {
+    let __tspBody__, __tspStatus__, __tspHeaders__, __tspType__;
+    const __tspResult__ = await __tspResultPromise__;
+    __tspHeaders__ = [];
+    if (__tspResult__ instanceof Response) {
+      __tspType__ = 'response';
+      __tspStatus__ = __tspResult__.status;
+      for (const [__k__, __v__] of __tspResult__.headers) __tspHeaders__.push([__k__, __v__]);
+      __tspBody__ = await __tspResult__.text();
+    } else if (typeof __tspResult__ === 'string') {
+      __tspType__ = 'html';
+      __tspStatus__ = 200;
+      __tspBody__ = __tspResult__;
+    } else {
+      const __tspTypeCap__ = (typeof __tspResult__).charAt(0).toUpperCase() + (typeof __tspResult__).slice(1);
+      throw new Error('TSP3001: handler returned unsupported value ' + __tspTypeCap__ + '. Expected HtmlNode or Response.');
+    }
+    if (Array.isArray(__tspCookieWrites)) for (const __cookieLine__ of __tspCookieWrites) __tspHeaders__.push(['Set-Cookie', __cookieLine__]);
+    globalThis.__tspEmbeddedResponse = JSON.stringify({type: __tspType__, status: __tspStatus__, headers: __tspHeaders__, body: __tspBody__, service_logs: __tspServiceLogs, session_writes: __tspSessionWrites});
+  })().catch((e) => { globalThis.__tspEmbeddedError = String(e && e.stack || e); });
+}
+"#,
+        );
+    } else {
+        out.push_str(
         "const __tspResultPromise__ = Promise.resolve().then(() => __tspContext === undefined ? __tspHandler__() : __tspHandler__(__tspContext)).then(async (__result__) => typeof __result__ === 'object' && __result__ !== null && !(__result__ instanceof Response) ? await __tspRenderNode__(__result__, false) : __result__).catch((e) => {\n\
          \x20 if (e && Number.isInteger(e.status)) return new Response(String(e.message || ''), {status: e.status, headers: e.headers || {}});\n\
          \x20 let __tspErrJson__;\n\
          \x20 try { __tspErrJson__ = JSON.stringify({kind: 'tsp_error', error: (e && e.name) || 'Error', message: (e && e.message) || String(e), stack: (e && e.stack) || ''}); } catch { __tspErrJson__ = JSON.stringify({kind: 'tsp_error', error: 'Error', message: String(e), stack: ''}); }\n\
          \x20 return new Response(__tspErrJson__, {status: 500, headers: {'content-type': 'application/json', 'x-tsp-error': 'page'}});\n\
          });\n",
-    );
+        );
+    }
     // Slice 16f: the wrap preamble now (a) builds
     // `ctx.cookies` with read methods and a write-buffer
     // (`__tspCookieWrites`), and (b) emits the response
@@ -1034,9 +1150,11 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
     // that calls `ctx.cookies.set('a', 'v1')` followed by
     // `ctx.cookies.set('b', 'v2')` surfaces as two
     // `Set-Cookie:` wire lines, not one comma-joined line.
-    out.push_str(
-        "(async () => {\n         \x20let __tspBody__, __tspStatus__, __tspHeaders__, __tspType__;\n         \x20const __tspResult__ = await __tspResultPromise__;\n         \x20__tspHeaders__ = [];\n         \x20if (__tspResult__ instanceof Response) {\n         \x20\x20__tspType__ = 'response';\n         \x20\x20__tspStatus__ = __tspResult__.status;\n         \x20\x20for (const [__k__, __v__] of __tspResult__.headers) __tspHeaders__.push([__k__, __v__]);\n         \x20\x20__tspBody__ = await __tspResult__.text();\n         \x20} else if (typeof __tspResult__ === 'string') {\n         \x20\x20__tspType__ = 'html';\n         \x20\x20__tspStatus__ = 200;\n         \x20\x20__tspBody__ = __tspResult__;\n         \x20} else {\n         \x20\x20// Spec §6.3 / plan §10.4: an\n         \x20\x20// invalid handler return value\n         \x20\x20// (object, number, boolean,\n         \x20\x20// etc.) is a contract violation.\n         \x20\x20// The typed `TSP3001` prefix is\n         \x20\x20// the application-facing error\n         \x20\x20// code (FREEZE item 5 / plan\n         \x20\x20// §10.4); the inner catch wraps\n         \x20\x20// it in a 500 with a JSON body\n         \x20\x20// that the user can grep for.\n         \x20\x20// The type name is capitalized\n         \x20\x20// to match the plan's message\n         \x20\x20// (Object / Number / etc.).\n         \x20\x20const __tspType__ = (typeof __tspResult__);\n         \x20\x20const __tspTypeCap__ = __tspType__.charAt(0).toUpperCase() + __tspType__.slice(1);\n         \x20\x20throw new Error('TSP3001: handler returned unsupported value ' + __tspTypeCap__ + '. Expected HtmlNode or Response.');\n         \x20}\n         \x20// Merge runtime cookie writes into the outgoing headers\n         \x20// (spec sect.15: cookie writes MUST be reflected even when\n         \x20// the handler returns an HtmlNode). Each write becomes a\n         \x20// separate Set-Cookie line so multiple cookies on one\n         \x20// request don't collapse via the response's flatten loop.\n         \x20if (Array.isArray(__tspCookieWrites)) {\n         \x20\x20for (const __cookieLine__ of __tspCookieWrites) {\n         \x20\x20\x20__tspHeaders__.push(['Set-Cookie', __cookieLine__]);\n         \x20\x20}\n         \x20}\n         \x20const __tspEnvelope__ = JSON.stringify({type: __tspType__, status: __tspStatus__, headers: __tspHeaders__, body: __tspBody__, service_logs: __tspServiceLogs, session_writes: __tspSessionWrites});\n         \x20__tspConsoleLog('__TSP_OUT_V1__' + '\\n' + __tspEnvelope__);\n         process.exit(0);\n         })().catch((e) => { console.error(String(e && e.stack || e)); process.exit(1); });\n"
-    );
+    if !embedded_worker {
+        out.push_str(
+            "(async () => {\n         \x20let __tspBody__, __tspStatus__, __tspHeaders__, __tspType__;\n         \x20const __tspResult__ = await __tspResultPromise__;\n         \x20__tspHeaders__ = [];\n         \x20if (__tspResult__ instanceof Response) {\n         \x20\x20__tspType__ = 'response';\n         \x20\x20__tspStatus__ = __tspResult__.status;\n         \x20\x20for (const [__k__, __v__] of __tspResult__.headers) __tspHeaders__.push([__k__, __v__]);\n         \x20\x20__tspBody__ = await __tspResult__.text();\n         \x20} else if (typeof __tspResult__ === 'string') {\n         \x20\x20__tspType__ = 'html';\n         \x20\x20__tspStatus__ = 200;\n         \x20\x20__tspBody__ = __tspResult__;\n         \x20} else {\n         \x20\x20// Spec §6.3 / plan §10.4: an\n         \x20\x20// invalid handler return value\n         \x20\x20// (object, number, boolean,\n         \x20\x20// etc.) is a contract violation.\n         \x20\x20// The typed `TSP3001` prefix is\n         \x20\x20// the application-facing error\n         \x20\x20// code (FREEZE item 5 / plan\n         \x20\x20// §10.4); the inner catch wraps\n         \x20\x20// it in a 500 with a JSON body\n         \x20\x20// that the user can grep for.\n         \x20\x20// The type name is capitalized\n         \x20\x20// to match the plan's message\n         \x20\x20// (Object / Number / etc.).\n         \x20\x20const __tspType__ = (typeof __tspResult__);\n         \x20\x20const __tspTypeCap__ = __tspType__.charAt(0).toUpperCase() + __tspType__.slice(1);\n         \x20\x20throw new Error('TSP3001: handler returned unsupported value ' + __tspTypeCap__ + '. Expected HtmlNode or Response.');\n         \x20}\n         \x20// Merge runtime cookie writes into the outgoing headers\n         \x20// (spec sect.15: cookie writes MUST be reflected even when\n         \x20// the handler returns an HtmlNode). Each write becomes a\n         \x20// separate Set-Cookie line so multiple cookies on one\n         \x20// request don't collapse via the response's flatten loop.\n         \x20if (Array.isArray(__tspCookieWrites)) {\n         \x20\x20for (const __cookieLine__ of __tspCookieWrites) {\n         \x20\x20\x20__tspHeaders__.push(['Set-Cookie', __cookieLine__]);\n         \x20\x20}\n         \x20}\n         \x20const __tspEnvelope__ = JSON.stringify({type: __tspType__, status: __tspStatus__, headers: __tspHeaders__, body: __tspBody__, service_logs: __tspServiceLogs, session_writes: __tspSessionWrites});\n         \x20__tspConsoleLog('__TSP_OUT_V1__' + '\\n' + __tspEnvelope__);\n         process.exit(0);\n         })().catch((e) => { console.error(String(e && e.stack || e)); process.exit(1); });\n"
+        );
+    }
     out
 }
 
@@ -1047,23 +1165,14 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
 /// well-known global for the native worker to read, and the wrapper does not
 /// call `process.exit`, which would tear down the embedded runtime.
 pub fn wrap_for_embedded_worker(transformed: &str, method: &str, ctx_json: Option<&str>) -> String {
-    let mut wrapped = wrap_for_bun_cli(transformed, method, ctx_json);
+    let mut wrapped = wrap_for_bun_cli_mode(transformed, method, ctx_json, true);
     // A worker VM serves more than one request. Clear the previous request's
     // result before loading the next entry point so a failed execution cannot
     // accidentally reuse a stale envelope.
     wrapped = format!(
         "globalThis.__tspEmbeddedResponse = undefined;\nglobalThis.__tspEmbeddedError = undefined;\n{wrapped}"
     );
-    let stdout_success =
-        "__tspConsoleLog('__TSP_OUT_V1__' + '\\n' + __tspEnvelope__);\n         process.exit(0);";
-    let embedded_success = "globalThis.__tspEmbeddedResponse = __tspEnvelope__;";
-    if !wrapped.contains(stdout_success) {
-        return wrapped;
-    }
-    wrapped = wrapped.replace(stdout_success, embedded_success);
-    let stdout_error = "console.error(String(e && e.stack || e)); process.exit(1);";
-    let embedded_error = "globalThis.__tspEmbeddedError = String(e && e.stack || e);";
-    wrapped.replace(stdout_error, embedded_error)
+    wrapped
 }
 
 #[cfg(test)]
@@ -1226,6 +1335,8 @@ mod tests {
         let body = "function GET() { return 'ok'; }\n";
         let wrapped = wrap_for_embedded_worker(body, "GET", None);
         assert!(wrapped.contains("__tspEmbeddedResponse"));
+        assert!(wrapped.contains("__tspBuildSyncEnvelope__"));
+        assert!(wrapped.contains("__tspSyncEnvelope__ !== __tspSyncUnavailable__"));
         assert!(!wrapped.contains("process.exit(0)"));
         assert!(!wrapped.contains("__tspConsoleLog('__TSP_OUT_V1__"));
     }

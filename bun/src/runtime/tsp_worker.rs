@@ -202,11 +202,10 @@ impl EmbeddedVm {
         let options = crate::jsc::VirtualMachineInitOptions {
             log: Some(std::ptr::NonNull::from(&mut *log)),
             transform_options,
-            // The TSP child owns a single isolated VM, but it is not Bun's
-            // process-main runtime. Keep the VM on the auxiliary-global path:
-            // there is no CLI main loop, signal owner, or WebWorker messaging
-            // proxy in this process.
-            role: crate::jsc::virtual_machine::VmRole::Auxiliary,
+            // The TSP child owns the only JSC VM in its operating-system
+            // process. It is not Bun's in-process WebWorker, so its VM role
+            // is process-relative main rather than WebWorker or Auxiliary.
+            role: crate::jsc::virtual_machine::VmRole::ProcessMain,
             startup_trace: Some(startup_trace),
             ..Default::default()
         };
@@ -311,10 +310,30 @@ impl EmbeddedVm {
         self.entry_path.clear();
         self.entry_path.extend_from_slice(path.as_bytes());
         startup_trace("request:load-entry:begin");
-        let (vm, entry_path) = (&mut *self.vm, self.entry_path.as_slice());
-        let _ = vm
-            .load_entry_point(entry_path)
-            .map_err(|error| format!("{error:?}"))?;
+        let promise = {
+            let (vm, entry_path) = (&mut *self.vm, self.entry_path.as_slice());
+            vm.reload_entry_point(entry_path)
+                .map_err(|error| format!("{error:?}"))?
+        };
+        startup_trace("request:load-entry:reload-end");
+
+        // A synchronous embedded wrapper can publish its response while the
+        // synthetic bun:main module is evaluated. Check that result before
+        // entering the JSC microtask queue. Async handlers still fall through
+        // to the normal promise wait below.
+        if let Some(value) = self.read_global_string("__tspEmbeddedResponse")? {
+            startup_trace("request:response-ready");
+            return Ok(value);
+        }
+        if let Some(error) = self.read_global_string("__tspEmbeddedError")? {
+            startup_trace("request:error-ready");
+            return Err(error);
+        }
+        startup_trace("load-entry:wait:begin");
+        let _ = self
+            .vm
+            .wait_for_promise(crate::jsc::AnyPromise::Internal(promise));
+        startup_trace("load-entry:wait:end");
         startup_trace("request:load-entry:end");
 
         for _ in 0..10_000 {

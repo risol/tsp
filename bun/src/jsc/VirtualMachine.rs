@@ -2834,7 +2834,7 @@ impl VirtualMachine {
 
     /// `reloadEntryPoint(entry_path)` — set `main`, generate the synthetic
     /// `bun:main` entry, run preloads, and kick off module evaluation.
-    pub(crate) fn reload_entry_point(
+    pub fn reload_entry_point(
         &mut self,
         entry_path: &[u8],
     ) -> crate::CrateResult<*mut JSInternalPromise> {
