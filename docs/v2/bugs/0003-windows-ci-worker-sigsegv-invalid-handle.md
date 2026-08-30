@@ -1,8 +1,8 @@
 # BUG-0003: Windows embedded worker SIGSEGV during first module evaluation
 
-> Status: **Diagnostic trace iterating; first-attempt fix `61b0fdf9f4` (jsc_vm=null) was a no-op — the crash is in `EventLoop::tick`, not `auto_tick`**
+> Status: **Fix implemented; Windows CI verification in progress**
 > Discovered: 2026-08-29 in GitHub Actions `smoke-windows`
-> Latest evidence: [Windows CI run on `61b0fdf9f4`](https://github.com/risol/tsp/actions/runs/33291918406)
+> Latest evidence: [Windows CI run on `8174842d49`](https://github.com/risol/tsp/actions/runs/33300360586)
 > Affected: TSP v2 embedded-worker request execution on Windows
 > Severity: CI blocker
 
@@ -24,8 +24,10 @@ first generated module execution: failed
 10054: consequence of worker termination
 ```
 
-This is a TSP-to-Bun embedding lifecycle bug, not a TSP protocol,
-route-discovery, TCP, or generic JSC startup failure.
+The failure is at TSP's generated-wrapper/Bun embedding boundary, not in the
+TSP protocol, route discovery, TCP, or generic JSC startup. Bun's Windows
+embedded runtime is the trigger, but the avoidable bug in TSP was eagerly
+touching unrelated native Bun APIs for every route.
 
 ## Evidence and root cause
 
@@ -36,13 +38,19 @@ sent the first generated `index.tsp` request, and every replacement worker
 produced the same crash report.
 
 Code comparison with both Bun's process-main CLI and in-process WebWorker paths
-found that TSP skipped the required post-`VirtualMachine::init` runtime
-configuration. Those paths initialize the resolver env-loader relationship,
-run `transpiler.configure_defines()`, load env-derived runtime state, and
-install the per-thread source-code printer before loading a module. TSP called
-`load_entry_point()` immediately. It therefore created a VM that was ready for
-the protocol but was not ready for module transpilation, loading, or error
-reporting.
+found that TSP initially skipped the required post-`VirtualMachine::init`
+runtime configuration. That lifecycle defect was fixed: the resolver, defines,
+environment state, source printer, process-main VM role, and VM-owned entry path
+are now prepared before Ready and module loading. Later CI traces passed all of
+those stages and still crashed in the first event-loop turn, so that defect was
+real but not the remaining root cause.
+
+The remaining root cause was in `wrap_for_bun_cli`. The synthetic entry eagerly
+evaluated a large set of Bun native properties while constructing
+`__tspUtilNs__`, and eagerly executed `require("bun").SQL`, even when the route
+did not import or use those APIs. This made a simple JSX/Hello route initialize
+unrelated native subsystems during the first embedded Windows microtask drain.
+That is an invalid initialization boundary for TSP's embedded worker.
 
 TSP also passed an IPC-request-owned path to `VirtualMachine::set_main`, which
 stores a borrowed slice under a process-lifetime invariant. The slice became
@@ -102,6 +110,20 @@ other module-loading VM entry points:
 
 Failures from `configure_defines()` are returned as worker initialization
 errors instead of continuing with a partially configured VM.
+
+The wrapper fix completes the boundary:
+
+1. `__tspUtilNs__` is created with accessor properties. Each optional
+   `Bun.*` value is read only when the page requests that property.
+2. `tsp:server.sql` is installed as an accessor. `require("bun").SQL` is not
+   evaluated for routes that do not use SQL.
+3. The namespace remains frozen after its lazy descriptors are installed, so
+   the public shape and mutation guarantees are unchanged.
+
+This preserves the frozen API while preventing unused native facilities from
+participating in embedded worker startup. The fix is therefore a TSP wrapper
+bug fix, with Bun's Windows embedding behavior explaining why the eager access
+became a process-fatal SIGSEGV.
 
 ### Investigated but rejected
 
@@ -187,20 +209,14 @@ load-entry:wait:end
                                             where the synthetic bun:main body's microtasks run)
   drain-mt:deferred-tasks:begin/end          (deferred_tasks.run)
   drain-mt:quic:begin/end                    (drain_quic_if_necessary; only on Windows-with-QUIC)
-  TSP_PRELUDE_ENTERED                        (console.log in wrap_for_bun_cli prelude; output
-                                            goes to the worker's stdout, captured by the
-                                            smoke script's diagnostic dump. If this prints,
-                                            the eager prelude (nanoid/zod/Bun builtins) ran
-                                            OK and the fault is later in the body; if it
-                                            does not print, the crash is during a Windows
-                                            HANDLE deref on a Bun builtin read.)
 request:load-entry:end
 request:response-ready or request:error-ready
 ```
 
-The smoke script redirects stdout and stderr to concrete files through the
-Windows command processor. Workers inherit those file handles, and failures
-include all markers plus the final 200 log lines.
+The Windows worker manager currently starts child workers with stdout discarded
+and stderr inherited. Therefore a worker `console.log` is not reliable evidence
+in the master smoke log. Native stage markers must be emitted through the
+inherited stderr path or another explicit diagnostic sink.
 
 ### Localising the fault with the segmented trace
 
@@ -223,10 +239,9 @@ slice added `tick_turn` sub-stages to pinpoint the failing micro-step.
 The Windows CI run on `ab1c2f2e6` showed `tick:microtasks:begin` printed
 but `tick:microtasks:end` did not, narrowing the crash to
 `EventLoop::drain_microtasks_with_global`. The fourth trace slice
-added `drain-mt:*` sub-stage markers and a `console.log('TSP_PRELUDE_ENTERED')`
-tripwire at the top of the synthetic `bun:main` body (printed via
-`wrap_for_bun_cli`) to distinguish eager-prelude HANDLE deref from
-later body / microtask scheduling fault.
+added `drain-mt:*` sub-stage markers. Its attempted
+`console.log('TSP_PRELUDE_ENTERED')` tripwire was invalid as a diagnostic because
+the worker manager discards stdout; it has been removed.
 
 Sub-stages after both slices:
 
@@ -274,17 +289,11 @@ Sub-stages after both slices:
      queued host tasks)
    - `drain-mt:quic` — `drain_quic_if_necessary` (Rust; uSockets QUIC
      driver; only on Windows-with-QUIC)
-9. `TSP_PRELUDE_ENTERED` (newest slice) — `console.log` at the top of
-   `wrap_for_bun_cli`'s synthetic body, captured by the smoke script's
-   stdout dump. If this prints, the eager prelude (nanoid 5.1.6 inlined
-   source, zod 4.4.3 inlined source, `require("bun").SQL`,
-   `__tspUtilNs__ = Object.freeze({randomUUIDv7: Bun.randomUUIDv7, ...})`
-   referencing every bun builtin, `__tspServer` frozen object, etc.) ran
-   without dereferencing an invalid HANDLE. If it does not print, the
-   fault is in a Bun builtin's eager value fetch on Windows
-   (most likely candidates given the fault address: `Bun.password`,
-   `Bun.gzipSync` / `Bun.gunzipSync` — both pull in `Bun_SQLite3` /
-   zlib FFI — `Bun.file`, or `Bun.env`).
+9. Synthetic wrapper initialization — the failing wrapper eagerly read every
+   optional `Bun.*` utility and `require("bun").SQL` before the route needed
+   them. The absence of the old stdout tripwire cannot distinguish individual
+   getters because worker stdout is discarded. The source-level fix removes
+   this eager native work by using lazy accessors.
 
 The crash address `0xFFFFFFFFFFFFFFFF` (Windows `INVALID_HANDLE_VALUE` /
 `-1`) is consistent with a Windows HANDLE being dereferenced as a pointer.
@@ -299,13 +308,11 @@ where the synthetic `bun:main` body runs) to confirm.
 
 ## Required validation
 
-Run Windows CI with the complete module-readiness lifecycle, owned entry
-path, and the segmented `tick_turn` trace. The smoke test must pass the
-first request, repeated requests, and hot reload. If it still crashes, the
-`tick_turn` markers will identify the failing sub-stage; use that boundary
-together with the same-commit PDB symbolication (offsets can shift between
-separately linked binaries, so the previous mapping is supporting evidence
-only) before changing any further runtime configuration.
+Run Windows CI with the complete module-readiness lifecycle, owned entry path,
+and lazy wrapper bindings. The smoke test must pass the first request, repeated
+requests, and hot reload. If it still crashes, use the inherited stderr stage
+markers together with same-commit PDB symbolication before changing runtime
+configuration.
 
 ## Regression-prevention rules
 
@@ -329,6 +336,12 @@ only) before changing any further runtime configuration.
    Without this, a crash inside those methods shows up as one opaque
    `<outer>:begin … (crash)` pair with no internal boundary and no way to
    attribute the fault to a specific sub-stage.
+10. Generated framework namespaces must expose optional native Bun APIs lazily.
+    A route that does not use `Bun.password`, `Bun.file`, `Bun.SQL`, or another
+    optional builtin must not read it while importing `tsp:server`.
+11. Do not infer worker execution from stdout in Windows smoke diagnostics.
+    `worker/manager.rs` discards worker stdout; use inherited stderr or an
+    explicit diagnostic channel.
 
 The durable rules are also recorded in `AGENTS.md`,
 `docs/v2/adr/0003-windows-fd-representation.md`,

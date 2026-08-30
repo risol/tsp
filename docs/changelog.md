@@ -89,10 +89,11 @@ All notable changes to TSP will be documented in this file.
 
 ### Diagnostics
 - BUG-0003 (`docs/v2/bugs/0003-windows-ci-worker-sigsegv-invalid-handle.md`)
-  updated with the new trace layout, a per-stage attribution guide, the
-  `wait_for_promise` sub-stage markers, and the latest CI evidence
-  narrowing the fault to phase 5 or 6 of the wait. AGENTS.md mirrors
-  the stash-on-VM rule.
+  records the final boundary: the embedded worker's synthetic wrapper was
+  eagerly reading optional Bun native APIs during every route startup. The
+  wrapper now exposes those APIs, including SQL, through lazy getters. The
+  Windows diagnostic notes that worker stdout is discarded and therefore must
+  not be used as an execution tripwire.
 
 ### Fixed
 - ~~Windows first-call SIGSEGV in the TSP embedded worker at
@@ -136,15 +137,9 @@ All notable changes to TSP will be documented in this file.
   printed but `tick:microtasks:end` did not, narrowing the fault to
   this function. The four markers split the 4-step drain to identify
   the failing FFI or Rust call.
-- Added `console.log('TSP_PRELUDE_ENTERED')` tripwire at the top of
-  `wrap_for_bun_cli` (`bun/src/runtime/tsp/jsx.rs`) inside the
-  synthetic `bun:main` body. The synthetic body eagerly reads
-  `Bun.randomUUIDv7`, `Bun.hash`, `Bun.gzipSync`, `Bun.password`,
-  `Bun.env`, `Bun.file`, `Bun.which`, etc. when constructing
-  `__tspUtilNs__`. If the fault is a Windows HANDLE deref on one of
-  those builtin reads, this log won't print. If it prints, the fault
-  is later in the body. Output goes to the worker's stdout, which
-  `scripts/smoke-tspserver-v2.ps1` captures into the diagnostic dump.
+- The temporary `TSP_PRELUDE_ENTERED` stdout tripwire was removed. The Windows
+  worker manager discards worker stdout, so native diagnostics use inherited
+  stderr or an explicit sink.
 
 ### Test count
 332 tests, all green on 5 consecutive full-suite runs.

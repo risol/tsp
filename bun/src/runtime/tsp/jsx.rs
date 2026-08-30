@@ -706,10 +706,6 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
             + nanoid_prelude().len()
             + zod_prelude().len(),
     );
-    // Keep this as the first generated statement. BUG-0003 uses this
-    // tripwire to distinguish a crash before any synthetic module body
-    // executes from a crash in the eager prelude or page body.
-    out.push_str("console.log('TSP_PRELUDE_ENTERED');\n");
     // Compile nanoid 5.1.6 into the wrap preamble so pages can call
     // `nanoid()` / `customAlphabet()` / `random()` / `customRandom()`
     // directly, without an `import` step (the synthetic entry has no
@@ -731,12 +727,11 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
     // connection that the page must `close()` (returning it to the
     // per-worker pool). See plan §17.1 for the per-worker pool
     // boundary.
-    // The tripwire above intentionally precedes nanoid and zod. Output goes
-    // to the worker's stdout, which `scripts/smoke-tspserver-v2.ps1` captures
-    // into the diagnostic dump.
-    out.push_str(
-        "const __tspSqlNs__ = require(\"bun\").SQL;\n"
-    );
+    // Keep native Bun lookups lazy. The embedded worker intentionally has a
+    // smaller initialization path than the full CLI, and an unrelated route
+    // must not touch native getters or `require(\"bun\")` merely because the
+    // framework namespace exposes them. `tsp:server.sql` below follows the
+    // same rule and only calls `require("bun")` when SQL is requested.
     // Slice 18: surface bun 1.4's built-in utilities to the page
     // via a single `util` namespace on `__tspServer`. The page
     // reaches them through
@@ -757,46 +752,29 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
     // the host (v2 worker / native service layer), not in a
     // request-scoped page module.
     out.push_str(
-        "const __tspUtilNs__ = Object.freeze({\n\
-         \x20 // crypto / ids\n\
-         \x20 randomUUIDv7: Bun.randomUUIDv7,\n\
-         \x20 hash: Bun.hash,\n\
-         \x20 CryptoHasher: Bun.CryptoHasher,\n\
-         \x20 // config parsing\n\
-         \x20 Glob: Bun.Glob,\n\
-         \x20 TOML: Bun.TOML,\n\
-         \x20 YAML: Bun.YAML,\n\
-         \x20 // content rendering / escaping\n\
-         \x20 markdown: Bun.markdown,\n\
-         \x20 escapeHTML: Bun.escapeHTML,\n\
-         \x20 // compression\n\
-         \x20 gzipSync: Bun.gzipSync,\n\
-         \x20 gunzipSync: Bun.gunzipSync,\n\
-         \x20 // file i/o (page reads / writes under its own cwd;\n\
-         \x20 // the host should keep the routes dir read-only when\n\
-         \x20 // the page is not supposed to mutate it)\n\
-         \x20 file: Bun.file,\n\
-         \x20 write: Bun.write,\n\
-         \x20 which: Bun.which,\n\
-         \x20 // misc\n\
-         \x20 peek: Bun.peek,\n\
-         \x20 deepEquals: Bun.deepEquals,\n\
-         \x20 deepMatch: Bun.deepMatch,\n\
-         \x20 nanoseconds: Bun.nanoseconds,\n\
-         \x20 // env wrapper: get(key) / has(key) only -- `toJSON()`\n\
-         \x20 // deliberately omitted so the page cannot dump the\n\
-         \x20 // whole process environment in one call\n\
-         \x20 env: Object.freeze({ get: (k) => Bun.env[k], has: (k) => k in Bun.env }),\n\
-         \x20 // password hashing (bcrypt / argon2id / scrypt). bun's\n\
-         \x20 // native Rust implementation -- the page reuses\n\
-         \x20 // Bun.password directly through this namespace. No\n\
-         \x20 // vendored bcryptjs; no per-request JS-side parse.\n\
-         \x20 // Production deployments should prefer argon2id\n\
-         \x20 // (bun's default) over bcrypt per OWASP 2024+\n\
-         \x20 // guidance; bcrypt is here for legacy hash interop\n\
-         \x20 // (verifying existing user passwords stored as $2b$...).\n\
-         \x20 password: Bun.password,\n\
+        "const __tspUtilNs__ = {};\n\
+         Object.defineProperties(__tspUtilNs__, {\n\
+         \x20 randomUUIDv7: { enumerable: true, get: () => Bun.randomUUIDv7 },\n\
+         \x20 hash: { enumerable: true, get: () => Bun.hash },\n\
+         \x20 CryptoHasher: { enumerable: true, get: () => Bun.CryptoHasher },\n\
+         \x20 Glob: { enumerable: true, get: () => Bun.Glob },\n\
+         \x20 TOML: { enumerable: true, get: () => Bun.TOML },\n\
+         \x20 YAML: { enumerable: true, get: () => Bun.YAML },\n\
+         \x20 markdown: { enumerable: true, get: () => Bun.markdown },\n\
+         \x20 escapeHTML: { enumerable: true, get: () => Bun.escapeHTML },\n\
+         \x20 gzipSync: { enumerable: true, get: () => Bun.gzipSync },\n\
+         \x20 gunzipSync: { enumerable: true, get: () => Bun.gunzipSync },\n\
+         \x20 file: { enumerable: true, get: () => Bun.file },\n\
+         \x20 write: { enumerable: true, get: () => Bun.write },\n\
+         \x20 which: { enumerable: true, get: () => Bun.which },\n\
+         \x20 peek: { enumerable: true, get: () => Bun.peek },\n\
+         \x20 deepEquals: { enumerable: true, get: () => Bun.deepEquals },\n\
+         \x20 deepMatch: { enumerable: true, get: () => Bun.deepMatch },\n\
+         \x20 nanoseconds: { enumerable: true, get: () => Bun.nanoseconds },\n\
+         \x20 env: { enumerable: true, get: () => Object.freeze({ get: (k) => Bun.env[k], has: (k) => k in Bun.env }) },\n\
+         \x20 password: { enumerable: true, get: () => Bun.password },\n\
          });\n\
+         Object.freeze(__tspUtilNs__);\n\
          "
     );
     out.push_str("// Generated by TSP v2 PoC 1 slice 16b (jsx.rs)\n");
@@ -844,7 +822,10 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
          class __tspHttpError__ extends Error {\n\
          \x20 constructor(__status__, __message__, __init__) { super(__message__); this.name = 'HttpError'; this.status = __status__; this.headers = new Headers((__init__ || {}).headers || {}); }\n\
          }\n\
-         const __tspServer = Object.freeze({json: __tspJson__, redirect: __tspRedirect__, text: __tspText__, html: __tspHtml__, notFound: __tspNotFound__, HttpError: __tspHttpError__, fragment: __tspFragment__, raw: __tspRaw__, nanoid: __tspNanoid, customAlphabet: __tspNanoidCustomAlphabet, customRandom: __tspNanoidCustomRandom, random: __tspNanoidRandom, zod: __tspZodNs__, sql: __tspSqlNs__, util: __tspUtilNs__});\n"
+          const __tspServer = {};\n\
+          Object.assign(__tspServer, {json: __tspJson__, redirect: __tspRedirect__, text: __tspText__, html: __tspHtml__, notFound: __tspNotFound__, HttpError: __tspHttpError__, fragment: __tspFragment__, raw: __tspRaw__, nanoid: __tspNanoid, customAlphabet: __tspNanoidCustomAlphabet, customRandom: __tspNanoidCustomRandom, random: __tspNanoidRandom, zod: __tspZodNs__, util: __tspUtilNs__});\n\
+          Object.defineProperty(__tspServer, 'sql', { enumerable: true, get: () => require(\"bun\").SQL });\n\
+          Object.freeze(__tspServer);\n"
     );
     out.push_str(
         "function __tspEscape__(__value__) {\n\
@@ -1267,7 +1248,7 @@ mod tests {
         let wrapped =
             wrap_for_bun_cli("function GET() { return json({ok: true}); }\n", "GET", None);
         assert!(
-            wrapped.contains("const __tspServer = Object.freeze"),
+            wrapped.contains("const __tspServer = {};"),
             "got: {wrapped}"
         );
         assert!(
@@ -1776,19 +1757,25 @@ export async function POST(ctx) { return new Response('post-handler', { status: 
     }
 
     #[test]
-    fn wrap_for_bun_cli_places_windows_crash_tripwire_first() {
+    fn wrap_for_bun_cli_defers_embedded_builtin_lookups() {
         let wrapped = wrap_for_bun_cli("function GET() { return 'ok'; }", "GET", Some("{}"));
-        let tripwire = wrapped
-            .find("console.log('TSP_PRELUDE_ENTERED');")
-            .expect("BUG-0003 tripwire must be present");
-        assert_eq!(tripwire, 0, "BUG-0003 tripwire must be the first generated statement");
         assert!(
-            tripwire < wrapped.find("const crypto = globalThis.crypto;").unwrap(),
-            "tripwire must precede the nanoid prelude"
+            wrapped.contains("const __tspUtilNs__ = {};\n"),
+            "util namespace must be created without reading Bun builtins"
         );
         assert!(
-            tripwire < wrapped.find("// === Inlined zod runtime").unwrap(),
-            "tripwire must precede the zod prelude"
+            wrapped.contains("Object.defineProperties(__tspUtilNs__,"),
+            "util namespace must expose lazy properties"
+        );
+        assert!(
+            wrapped.contains("get: () => Bun.password"),
+            "password must be read only when requested"
+        );
+        assert!(
+            wrapped.contains(
+                r#"Object.defineProperty(__tspServer, 'sql', { enumerable: true, get: () => require("bun").SQL })"#
+            ),
+            "SQL must be required only when requested"
         );
     }
 
@@ -2254,8 +2241,8 @@ export function GET() {
         // 2. The util namespace freezes its keys (so the page
         //    can't accidentally mutate the host-side globals).
         assert!(
-            wrapped.contains("const __tspUtilNs__ = Object.freeze({"),
-            "wrap must freeze the util namespace; got prefix: {}",
+            wrapped.contains("Object.defineProperties(__tspUtilNs__,"),
+            "wrap must define and freeze the util namespace; got prefix: {}",
             &wrapped[..wrapped.len().min(2000)]
         );
         // 3. Spot-check the high-risk APIs are NOT exposed.
@@ -2276,29 +2263,29 @@ export function GET() {
         // 4. `Bun.env` is wrapped, not forwarded. The
         //    `toJSON()` shape on the original is hidden.
         assert!(
-            wrapped.contains("env: Object.freeze({ get: (k) => Bun.env[k], has: (k) => k in Bun.env })"),
+            wrapped.contains("env: { enumerable: true, get: () => Object.freeze({ get: (k) => Bun.env[k], has: (k) => k in Bun.env }) }"),
             "env wrapper must hide Bun.env.toJSON(); got prefix: {}",
             &wrapped[..wrapped.len().min(3000)]
         );
-        // 5. Each expected namespace key is on the util object.
+        // 5. Each expected namespace key is lazy on the util object.
         for key in [
-            "randomUUIDv7: Bun.randomUUIDv7",
-            "hash: Bun.hash",
-            "CryptoHasher: Bun.CryptoHasher",
-            "Glob: Bun.Glob",
-            "TOML: Bun.TOML",
-            "YAML: Bun.YAML",
-            "markdown: Bun.markdown",
-            "escapeHTML: Bun.escapeHTML",
-            "gzipSync: Bun.gzipSync",
-            "gunzipSync: Bun.gunzipSync",
-            "file: Bun.file",
-            "write: Bun.write",
-            "which: Bun.which",
-            "peek: Bun.peek",
-            "deepEquals: Bun.deepEquals",
-            "deepMatch: Bun.deepMatch",
-            "nanoseconds: Bun.nanoseconds",
+            "get: () => Bun.randomUUIDv7",
+            "get: () => Bun.hash",
+            "get: () => Bun.CryptoHasher",
+            "get: () => Bun.Glob",
+            "get: () => Bun.TOML",
+            "get: () => Bun.YAML",
+            "get: () => Bun.markdown",
+            "get: () => Bun.escapeHTML",
+            "get: () => Bun.gzipSync",
+            "get: () => Bun.gunzipSync",
+            "get: () => Bun.file",
+            "get: () => Bun.write",
+            "get: () => Bun.which",
+            "get: () => Bun.peek",
+            "get: () => Bun.deepEquals",
+            "get: () => Bun.deepMatch",
+            "get: () => Bun.nanoseconds",
         ] {
             assert!(
                 wrapped.contains(key),
@@ -2346,12 +2333,14 @@ export function GET() {
         let body = "function GET() { return 'ok'; }";
         let wrapped = wrap_for_bun_cli(body, "GET", Some("{}"));
         assert!(
-            wrapped.contains(r#"const __tspSqlNs__ = require("bun").SQL;"#),
-            "wrap must bridge bun's native SQL factory to `__tspSqlNs__` via `require(\"bun\")`; got prefix: {}",
+            wrapped.contains(
+                r#"Object.defineProperty(__tspServer, 'sql', { enumerable: true, get: () => require("bun").SQL })"#
+            ),
+            "wrap must expose a lazy native SQL factory via `require(\"bun\")`; got prefix: {}",
             &wrapped[..wrapped.len().min(1200)]
         );
         assert!(
-            wrapped.contains("sql: __tspSqlNs__"),
+            !wrapped.contains("const __tspSqlNs__"),
             "wrap must expose sql on __tspServer; got prefix: {}",
             &wrapped[..wrapped.len().min(1500)]
         );
@@ -2533,11 +2522,11 @@ export async function GET(ctx) {
             "password must no longer be a top-level __tspServer field; got prefix: {}",
             &wrapped[..wrapped.len().min(1500)]
         );
-        // And it must be a `password: Bun.password` field
-        // inside the `__tspUtilNs__` object literal.
+        // And it must be a lazy `Bun.password` getter inside the
+        // `__tspUtilNs__` namespace.
         assert!(
-            wrapped.contains("password: Bun.password,"),
-            "wrap must bridge bun's native password API to `util.password` via `Bun.password`; \
+            wrapped.contains("password: { enumerable: true, get: () => Bun.password }"),
+            "wrap must lazily bridge bun's native password API to `util.password`; \
              got prefix: {}",
             &wrapped[..wrapped.len().min(2500)]
         );

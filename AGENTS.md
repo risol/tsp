@@ -139,5 +139,18 @@ Before changing the native runtime, run the focused Rust tests and the smoke
 test. Changes to route discovery, generation, workers, or response handling
 must preserve the frozen contract in `docs/v2/FREEZE.md`.
 
+## Embedded Bun API boundaries
+
+- Generated `tsp:server` namespaces must not eagerly read optional Bun native
+  properties or call `require("bun")` during synthetic module setup.
+- Expose optional Bun APIs through lazy getters so a route that does not use an
+  API cannot initialize its native subsystem as a side effect of importing
+  `tsp:server`.
+- Keep the lazy boundary when adding new native helpers, and add a wrapper test
+  that proves both the exported shape and the absence of eager lookup.
+- On Windows, TSP worker stdout may be discarded by the worker manager. Native
+  diagnostics must use inherited stderr or an explicit diagnostic sink rather
+  than assuming `console.log` is captured.
+
 Changes to path handling, FFI, allocators, or embedded workers must also run a
 Linux embedded-worker release build and the TSP v2 smoke test.
