@@ -202,10 +202,11 @@ impl EmbeddedVm {
         let options = crate::jsc::VirtualMachineInitOptions {
             log: Some(std::ptr::NonNull::from(&mut *log)),
             transform_options,
-            // "Worker" describes this process's role in the TSP pool. It is
-            // not a Bun WebWorker: this child process owns one JSC VM on its OS
-            // entry thread, so that VM is the process main.
-            role: crate::jsc::virtual_machine::VmRole::ProcessMain,
+            // The TSP child owns a single isolated VM, but it is not Bun's
+            // process-main runtime. Keep the VM on the auxiliary-global path:
+            // there is no CLI main loop, signal owner, or WebWorker messaging
+            // proxy in this process.
+            role: crate::jsc::virtual_machine::VmRole::Auxiliary,
             startup_trace: Some(startup_trace),
             ..Default::default()
         };
