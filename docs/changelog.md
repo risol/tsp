@@ -89,14 +89,14 @@ All notable changes to TSP will be documented in this file.
 
 ### Diagnostics
 - BUG-0003 (`docs/v2/bugs/0003-windows-ci-worker-sigsegv-invalid-handle.md`)
-  now records the reproducible boundary: the embedded worker manager redirects
-  stdin to null and uses a native socket for control, while the generated
-  wrapper still installed the obsolete subprocess-bridge stdin listener. The
-  listener was removed; the earlier lazy optional-Bun-API change remains
-  independent hardening, not the root-cause explanation.
-- Candidate fix removes the obsolete generated-worker stdin listener. The
-  result must be confirmed by the Windows embedded-worker smoke job before
-  BUG-0003 can be marked fixed.
+  now records that the crash remains inside the C++ microtask-drain entry point
+  after module evaluation. Removing the obsolete generated-worker stdin
+  listener in `d30992b8b6` did not move the Windows CI boundary, so that theory
+  is rejected as the root cause. Lazy optional-Bun-API access remains
+  independent hardening.
+- Added native stderr markers around the `JSNextTickQueue` and
+  `JSC::VM::drainMicrotasks()` sub-stages. BUG-0003 remains open pending the
+  next Windows CI result.
 
 ### Fixed
 - ~~Windows first-call SIGSEGV in the TSP embedded worker at

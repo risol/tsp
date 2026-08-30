@@ -3300,16 +3300,27 @@ uint8_t GlobalObject::drainMicrotasks()
 {
     auto& vm = this->vm();
     auto scope = DECLARE_TOP_EXCEPTION_SCOPE(vm);
+    const bool traceStartup = getenv("TSP_WORKER_STARTUP_TRACE") != nullptr;
+    const auto trace = [&](const char* stage) {
+        if (!traceStartup)
+            return;
+        std::fprintf(stderr, "TSP worker microtasks: %s\n", stage);
+        std::fflush(stderr);
+    };
+
+    trace("cpp-enter");
 
     // A stopped VM has no checkpoint to run: whether or not its termination is still pending here (the
     // landing frame may already have taken it), nothing queued may execute any more.
     if (WebCore::clientData(vm)->isStoppingOrStopped(vm)) [[unlikely]] {
+        trace("stopped");
         Bun__VM__takeTerminationOutsideScript(this);
         return 1;
     }
 
     if (auto* exception = scope.exception()) [[unlikely]] {
         if (vm.isTerminationException(exception)) [[unlikely]] {
+            trace("termination-exception");
             Bun__VM__takeTerminationOutsideScript(this);
             return 1;
         }
@@ -3330,9 +3341,13 @@ uint8_t GlobalObject::drainMicrotasks()
     scope.assertNoExceptionExceptTermination();
 
     if (auto nextTickQueue = this->m_nextTickQueue.get()) {
+        trace("next-tick:present");
+        trace("next-tick:drain:begin");
         nextTickQueue->drain(vm, this);
+        trace("next-tick:drain:end");
         if (auto* exception = scope.exception()) {
             if (vm.isTerminationException(exception)) {
+                trace("next-tick:termination-exception");
                 Bun__VM__takeTerminationOutsideScript(this);
                 return 1;
             }
@@ -3340,10 +3355,15 @@ uint8_t GlobalObject::drainMicrotasks()
             this->reportUncaughtExceptionAtEventLoop(this, exception);
             return 0;
         }
+    } else {
+        trace("next-tick:absent");
     }
+    trace("jsc:drain:begin");
     vm.drainMicrotasks();
+    trace("jsc:drain:end");
     if (auto* exception = scope.exception()) {
         if (vm.isTerminationException(exception)) {
+            trace("jsc:termination-exception");
             Bun__VM__takeTerminationOutsideScript(this);
             return 1;
         }

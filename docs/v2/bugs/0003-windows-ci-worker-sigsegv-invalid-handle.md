@@ -1,8 +1,8 @@
 # BUG-0003: Windows embedded worker SIGSEGV during first module evaluation
 
-> Status: **Fix candidate implemented; Windows CI verification in progress**
+> Status: **Open; root cause not yet fixed**
 > Discovered: 2026-08-29 in GitHub Actions `smoke-windows`
-> Latest evidence: [Windows CI run on `8174842d49`](https://github.com/risol/tsp/actions/runs/33300360586)
+> Latest evidence: [Windows CI run on `d30992b8b6`](https://github.com/risol/tsp/actions/runs/33305596850)
 > Affected: TSP v2 embedded-worker request execution on Windows
 > Severity: CI blocker
 
@@ -25,12 +25,9 @@ first generated module execution: failed
 ```
 
 The failure is at TSP's generated-wrapper/Bun embedding boundary, not in the
-TSP protocol, route discovery, TCP, or generic JSC startup. The worker manager
-uses a native socket for its embedded-worker control protocol and starts the
-worker with stdin redirected to null. The generated wrapper still installed
-the old subprocess-bridge stdin listener. On Windows that stale access can
-cross Bun's null-stdio boundary with an invalid HANDLE and crash during the
-first microtask drain.
+TSP protocol, route discovery, TCP, or generic JSC startup. The worker reaches
+the first event-loop turn and crashes inside the C++ microtask-drain entry
+point. The exact failing native sub-stage is still being isolated.
 
 ## Evidence and root cause
 
@@ -48,15 +45,11 @@ are now prepared before Ready and module loading. Later CI traces passed all of
 those stages and still crashed in the first event-loop turn, so that defect was
 real but not the remaining root cause.
 
-The remaining root cause was in `wrap_for_bun_cli`. The synthetic entry
-installed `globalThis.process?.stdin?.on('data', ...)` to consume the
-`ABORT_MARKER` used by the former subprocess bridge. The production embedded
-worker does not have that channel: `worker/manager.rs` redirects stdin to
-`Stdio::null()` and `tsp_worker.rs` receives control messages over its native
-socket. The listener was therefore both dead functionality and an invalid
-Windows HANDLE boundary. The crash address
-`0xFFFFFFFFFFFFFFFF` is consistent with the invalid-handle sentinel being
-reached while Bun/JSC drained the first pending microtask.
+The stdin-listener theory was tested in `d30992b8b6`: the generated
+`process.stdin?.on('data', ...)` listener was removed, but the Windows CI run
+still crashed at the identical `drain-microtasks:begin` boundary. Therefore it
+is not the root cause. Removing that obsolete listener remains valid embedded
+worker hygiene, but it did not fix BUG-0003.
 
 The earlier lazy-optional-Bun-API change remains valid hardening, but it is not
 the root cause of this incident: the corresponding Windows CI run still
@@ -105,7 +98,7 @@ Disabling concurrent JIT compilation and parallel GC marking did not move the
 failure boundary and was reverted. Retaining that change would alter runtime
 semantics without fixing the lifecycle defect.
 
-## Fix
+## Fix status
 
 The embedded worker now completes the same module-readiness phase as Bun's
 other module-loading VM entry points:
@@ -130,10 +123,10 @@ The wrapper also contains an independent hardening fix:
 3. The namespace remains frozen after its lazy descriptors are installed, so
    the public shape and mutation guarantees are unchanged.
 
-This preserves the frozen API while preventing unused native facilities from
-participating in embedded worker startup. The BUG-0003 fix itself removes the
-obsolete stdin listener; Bun's Windows embedding behavior explains why the
-invalid stdio boundary became a process-fatal SIGSEGV.
+These preserve the frozen API and reduce unrelated native work during embedded
+worker startup. They do not fix BUG-0003. The current evidence points to a
+Bun/JSC microtask-drain or embedded-VM lifecycle defect, but the precise native
+operation must be identified before selecting a workaround or upstream fix.
 
 ### Investigated but rejected
 
@@ -290,7 +283,7 @@ Sub-stages after both slices:
      `__tspEmbeddedResponse` here)
    - `tick:tail:tick-with-count` / `:concurrent` — tail refill loop
    - `tick:rejected:final` — final `handle_rejected_promises` sweep
-8. `drain_microtasks_with_global` sub-stages (newest slice):
+8. `drain_microtasks_with_global` sub-stages:
    - `drain-mt:release-weak-refs` — `jsc_vm.release_weak_refs()` C++ FFI
    - `drain-mt:drain-microtasks` — `JSC__JSGlobalObject__drainMicrotasks`
      C++ FFI; this is where the synthetic `bun:main` body microtasks
@@ -299,30 +292,30 @@ Sub-stages after both slices:
      queued host tasks)
    - `drain-mt:quic` — `drain_quic_if_necessary` (Rust; uSockets QUIC
      driver; only on Windows-with-QUIC)
-9. Synthetic wrapper initialization — the failing wrapper eagerly read every
+9. Native C++ sub-stage markers added after `d30992b8b6`:
+   `TSP worker microtasks: next-tick:drain:begin/end` and
+   `TSP worker microtasks: jsc:drain:begin/end`. These distinguish a crash in
+   Bun's `JSNextTickQueue` path from a crash in `JSC::VM::drainMicrotasks()`.
+10. Synthetic wrapper initialization — the failing wrapper eagerly read every
    optional `Bun.*` utility and `require("bun").SQL` before the route needed
    them. The absence of the old stdout tripwire cannot distinguish individual
    getters because worker stdout is discarded. The source-level fix removes
    this eager native work by using lazy accessors.
 
-The crash address `0xFFFFFFFFFFFFFFFF` (Windows `INVALID_HANDLE_VALUE` /
-`-1`) is consistent with a Windows HANDLE being dereferenced as a pointer.
-The latest CI run printed every `entry-eval:*` `:end` marker, reached
-`load-entry:wait:tick:begin`, but never printed `load-entry:wait:tick:end`
-— the fault is therefore inside `EventLoop::tick`, most likely in
-`tick_turn`'s microtask drain. A new bun.report frame on the latest
-commit, symbolicated against the same-commit PDB (offsets can shift
-between separately linked binaries, so the previous mapping is supporting
-evidence only), should land in `EventLoop::tick_turn` (microtask drain
-where the synthetic `bun:main` body runs) to confirm.
+The crash address `0xFFFFFFFFFFFFFFFF` is not sufficient to identify an
+invalid HANDLE: the stdin candidate was disproven and the Bun report for the
+custom build is not symbolicated. The latest CI run still printed every
+`entry-eval:*` marker, reached `load-entry:wait:tick:begin`, and stopped after
+`drain-mt:drain-microtasks:begin`. The new native markers will distinguish the
+two operations inside that C++ entry point on the next run.
 
 ## Required validation
 
 Run Windows CI with the complete module-readiness lifecycle, owned entry path,
-and lazy wrapper bindings. The smoke test must pass the first request, repeated
-requests, and hot reload. If it still crashes, use the inherited stderr stage
-markers together with same-commit PDB symbolication before changing runtime
-configuration.
+lazy wrapper bindings, and native microtask sub-stage markers. The smoke test
+must pass the first request, repeated requests, and hot reload. If it still
+crashes, use the inherited stderr markers together with same-commit PDB
+symbolication before changing runtime configuration.
 
 ## Regression-prevention rules
 
