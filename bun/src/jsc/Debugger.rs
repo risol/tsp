@@ -435,7 +435,7 @@ impl Debugger {
         jsc::mark_binding();
 
         let vm_ptr = VirtualMachine::init(crate::virtual_machine::InitOptions {
-            is_main_thread: false,
+            role: crate::virtual_machine::VmRole::Auxiliary,
             ..Default::default()
         })
         .unwrap_or_else(|_| panic!("Failed to create Debugger VM"));

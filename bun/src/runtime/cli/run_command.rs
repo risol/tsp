@@ -958,7 +958,7 @@ Full documentation is available at <magenta>https://bun.com/docs/cli/run<r>
             smol: ctx.runtime_options.smol,
             mini_mode: ctx.runtime_options.smol,
             eval_mode: ctx.runtime_options.eval.eval_and_print,
-            is_main_thread: true,
+            role: bun_jsc::virtual_machine::VmRole::ProcessMain,
             ..Default::default()
         })?;
         // SAFETY: `init` returns the unique freshly-boxed VM on this thread.

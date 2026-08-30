@@ -77,11 +77,19 @@ compatibility.
 - Native-runtime comments and wrappers must document allocation ownership when
   the boundary is not obvious.
 
+VM roles are defined relative to the current operating-system process:
+
+- A TSP worker child owns the only JSC VM in its process, so it is that
+  process's main VM even though the TSP master treats the process as a worker.
+- Reserve `VmRole::WebWorker` for Bun's in-process WebWorker implementation. A
+  WebWorker role requires both a non-null `WorkerMessagingProxy` and a concrete
+  script-execution-context id greater than 1.
+- Do not infer a VM role from process-pool terminology, a null worker pointer,
+  or `vm.worker.is_none()` independently. Main-thread publication, context id,
+  and worker ownership must come from one `VmRole` value.
+
 Windows handle boundaries have a separate representation rule:
 
-- A standalone embedded worker is an isolated VM, not Bun's process-wide main
-  VM and not a `WebWorker`; do not pass `is_main_thread: true` unless a parent
-  Bun VM or a `WorkerMessagingProxy` owns the VM.
 - `bun_core::Fd` is a packed value on Windows; its high bit distinguishes a
   system `HANDLE` from a libuv file descriptor.
 - Opaque Rust/C interfaces that carry an `Fd` must store and restore the packed

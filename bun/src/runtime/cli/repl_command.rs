@@ -80,7 +80,7 @@ impl ReplCommand {
             log: core::ptr::NonNull::new(ctx.log),
             smol: ctx.runtime_options.smol,
             eval_mode: true,
-            is_main_thread: true,
+            role: jsc::virtual_machine::VmRole::ProcessMain,
             ..Default::default()
         })?;
 

@@ -198,13 +198,11 @@ impl EmbeddedVm {
         let options = crate::jsc::VirtualMachineInitOptions {
             log: Some(std::ptr::NonNull::from(&mut *log)),
             transform_options,
-            // This is the process's OS entry thread, but it is not Bun's
-            // main-thread VM. The TSP worker is an isolated child process
-            // with no WebWorker/WorkerMessagingProxy owner. Marking it as a
-            // main VM publishes it in MAIN_THREAD_VM and selects the
-            // main-global path in Zig__GlobalObject__create, which is an
-            // invalid model for this standalone worker.
-            is_main_thread: false,
+            // "Worker" describes this process's role in the TSP pool. It is
+            // not a Bun WebWorker: this child process owns one JSC VM on its OS
+            // entry thread, so that VM is the process main.
+            role: crate::jsc::virtual_machine::VmRole::ProcessMain,
+            startup_trace: Some(startup_trace),
             ..Default::default()
         };
         startup_trace("virtual-machine-init:begin");

@@ -432,7 +432,7 @@ impl Macro {
             let _vm = VirtualMachine::init(VirtualMachineInitOptions {
                 log: Some(NonNull::from(&mut *log)),
                 env_loader: NonNull::new(env),
-                is_main_thread: false,
+                role: jsc::virtual_machine::VmRole::Auxiliary,
                 ..Default::default()
             })?;
             (_vm, true)

@@ -74,6 +74,70 @@ pub struct EntryPointResult {
     pub evaluated_as_cjs: bool,
 }
 
+/// The role this VM has inside the current operating-system process.
+///
+/// A child process may be a "worker" in an application's process model while
+/// still owning that process's main VM. `WebWorker` is reserved for Bun's
+/// in-process worker implementation, which always has a messaging proxy and a
+/// concrete script-execution-context identifier.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VmRole {
+    ProcessMain,
+    #[default]
+    Auxiliary,
+    WebWorker {
+        worker_ptr: *mut c_void,
+        context_id: i32,
+    },
+}
+
+impl VmRole {
+    #[inline]
+    pub const fn is_main_thread(self) -> bool {
+        matches!(self, Self::ProcessMain)
+    }
+
+    #[inline]
+    pub const fn is_web_worker(self) -> bool {
+        matches!(self, Self::WebWorker { .. })
+    }
+
+    #[inline]
+    const fn context_id(self) -> i32 {
+        match self {
+            Self::ProcessMain => 1,
+            Self::Auxiliary => i32::MAX,
+            Self::WebWorker { context_id, .. } => context_id,
+        }
+    }
+
+    #[inline]
+    const fn worker_ptr(self) -> *mut c_void {
+        match self {
+            Self::WebWorker { worker_ptr, .. } => worker_ptr,
+            Self::ProcessMain | Self::Auxiliary => core::ptr::null_mut(),
+        }
+    }
+
+    #[inline]
+    fn validate(self) {
+        if let Self::WebWorker {
+            worker_ptr,
+            context_id,
+        } = self
+        {
+            assert!(
+                !worker_ptr.is_null(),
+                "WebWorker VM requires a WorkerMessagingProxy"
+            );
+            assert!(
+                context_id > 1 && context_id != i32::MAX,
+                "WebWorker VM requires a concrete context id greater than 1"
+            );
+        }
+    }
+}
+
 /// Downstream-compat alias: lib.rs previously exposed `virtual_machine::InitOptions`.
 /// Carries the cross-tier subset of `Options` that [`init`] and
 /// `RuntimeHooks::init_runtime_state` need. `transform_options`/`debugger`
@@ -100,15 +164,12 @@ pub struct InitOptions {
     pub store_fd: bool,
     pub smol: bool,
     pub eval_mode: bool,
-    pub is_main_thread: bool,
-    /// Forwarded to `Zig__GlobalObject__create` so the C++ ZigGlobalObject is
-    /// created with its `WebCore::Worker*` already wired. `null` for the
-    /// main-thread / bake paths.
-    pub worker_ptr: *mut c_void,
-    /// Debugger script-execution-context id. Main thread = 1, workers receive
-    /// `WebWorker::execution_context_id`; `None` lets [`init`] derive it from
-    /// `is_main_thread` (matches the previous behaviour for non-worker init).
-    pub context_id: Option<i32>,
+    /// Determines main-thread publication, the script-execution-context id,
+    /// and whether a `WorkerMessagingProxy` must be supplied.
+    pub role: VmRole,
+    /// Optional environment-gated startup trace supplied by an embedding
+    /// runtime. It must not perform VM or JSC work.
+    pub startup_trace: Option<fn(&str)>,
     /// Forwarded as `mini_mode` to `Zig__GlobalObject__create`. For the
     /// main-thread path this is `smol`; for workers it is `WebWorker::mini`.
     pub mini_mode: bool,
@@ -125,11 +186,56 @@ impl Default for InitOptions {
             store_fd: false,
             smol: false,
             eval_mode: false,
-            is_main_thread: false,
-            worker_ptr: core::ptr::null_mut(),
-            context_id: None,
+            role: VmRole::default(),
+            startup_trace: None,
             mini_mode: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod vm_role_tests {
+    use super::VmRole;
+
+    #[test]
+    fn process_main_has_main_context_without_worker_owner() {
+        let role = VmRole::ProcessMain;
+        role.validate();
+        assert!(role.is_main_thread());
+        assert_eq!(role.context_id(), 1);
+        assert!(role.worker_ptr().is_null());
+    }
+
+    #[test]
+    fn auxiliary_uses_generated_context_sentinel() {
+        let role = VmRole::Auxiliary;
+        role.validate();
+        assert!(!role.is_main_thread());
+        assert_eq!(role.context_id(), i32::MAX);
+        assert!(role.worker_ptr().is_null());
+    }
+
+    #[test]
+    fn web_worker_keeps_owner_and_context_together() {
+        let worker_ptr = core::ptr::dangling_mut::<core::ffi::c_void>();
+        let role = VmRole::WebWorker {
+            worker_ptr,
+            context_id: 2,
+        };
+        role.validate();
+        assert!(!role.is_main_thread());
+        assert_eq!(role.context_id(), 2);
+        assert_eq!(role.worker_ptr(), worker_ptr);
+    }
+
+    #[test]
+    #[should_panic(expected = "WebWorker VM requires a WorkerMessagingProxy")]
+    fn web_worker_rejects_missing_owner() {
+        VmRole::WebWorker {
+            worker_ptr: core::ptr::null_mut(),
+            context_id: 2,
+        }
+        .validate();
     }
 }
 
@@ -2037,8 +2143,8 @@ pub type RuntimeState = *mut c_void;
 pub struct RuntimeHooks {
     /// `bun.api.Timer.All.init()` + `Body.Value.HiveAllocator.init()` +
     /// `configureDebugger()` — everything `init()` does that names a
-    /// `bun_runtime` type. Called once with the freshly-boxed VM AFTER
-    /// `vm.global` / `vm.jsc_vm` are populated;
+    /// `bun_runtime` type. Called once with the freshly-boxed VM after its
+    /// Rust-side core fields are populated and before the JSC global is created;
     /// returns the opaque per-VM runtime state pointer (or null). `Err` when
     /// `Transpiler::init` fails (e.g. a deleted cwd → `getcwd` ENOENT); the
     /// hook unwinds its own allocations, so [`VirtualMachine::init`] only has to
@@ -2393,7 +2499,16 @@ impl VirtualMachine {
     /// not name those types directly. The hook receives the boxed VM after the
     /// JSC-tier fields are populated and finishes the rest.
     pub fn init(mut opts: InitOptions) -> crate::CrateResult<*mut VirtualMachine> {
+        opts.role.validate();
+        let role = opts.role;
+        let startup_trace = opts.startup_trace;
+        let trace = |stage| {
+            if let Some(callback) = startup_trace {
+                callback(stage);
+            }
+        };
         jsc::mark_binding();
+        trace("vm-core:mark-binding:end");
 
         let log: *mut bun_ast::Log = match opts.log {
             Some(l) => l.as_ptr(),
@@ -2426,9 +2541,10 @@ impl VirtualMachine {
             p.cast()
         };
         VM.set(Some(vm));
-        if opts.is_main_thread {
+        if role.is_main_thread() {
             MAIN_THREAD_VM.store(vm, core::sync::atomic::Ordering::Release);
         }
+        trace("vm-core:allocation:end");
 
         // ConsoleObject is self-referential (buffers + adapters) — allocate
         // stable storage and init in place.
@@ -2444,10 +2560,9 @@ impl VirtualMachine {
         );
         let console =
             bun_core::heap::into_raw(console_box).cast::<crate::console_object::ConsoleObject>();
+        trace("vm-core:console:end");
 
-        let context_id = opts
-            .context_id
-            .unwrap_or(if opts.is_main_thread { 1 } else { i32::MAX });
+        let context_id = role.context_id();
 
         // SAFETY: `vm` is a fresh unique zeroed allocation on this thread. All
         // writes go through `addr_of_mut!` so no `&mut VirtualMachine` is
@@ -2464,7 +2579,7 @@ impl VirtualMachine {
             addr_of_mut!((*vm).main_hash).write(0);
             addr_of_mut!((*vm).main_resolved_path).write(bun_core::String::empty());
             addr_of_mut!((*vm).hide_bun_stackframes).write(true);
-            addr_of_mut!((*vm).is_main_thread).write(opts.is_main_thread);
+            addr_of_mut!((*vm).is_main_thread).write(role.is_main_thread());
             // Left at the
             // zeroed default this aliases `hot_reload_counter`'s initial 0, so a
             // watcher event that races the very first entry-point load makes
@@ -2534,6 +2649,7 @@ impl VirtualMachine {
 
             addr_of_mut!((*vm).source_mappings).write(SavedSourceMap::default());
         }
+        trace("vm-core:fields:end");
 
         // High-tier per-VM state — Transpiler / Timer::All / entry_point.
         // Note (init order): the transpiler and per-VM timer state must be
@@ -2555,24 +2671,29 @@ impl VirtualMachine {
             // clean error + non-zero exit.
             unsafe { (*vm).runtime_state = (hooks.init_runtime_state)(vm, &mut opts)? };
         }
+        trace("vm-core:runtime-state:end");
 
         // JSGlobalObject creation. `ensure_waker()` must run before the FFI.
         // SAFETY: `vm` is the unique live VM on this thread; raw-ptr deref so
         // no `&mut` is held across the FFI re-entry (`Bun__getVM()` —
         // ZigGlobalObject.cpp:473/961).
         unsafe { (*vm).regular_event_loop.ensure_waker() };
+        trace("vm-core:event-loop-waker:end");
         // `console`/`worker_ptr` are opaque round-trip pointers C++ stores into
-        // the new global. `worker_ptr` is the C++ `WebCore::Worker*` (or null on
-        // the main thread).
+        // the new global. `worker_ptr` is the C++ `WorkerMessagingProxy*` for a
+        // WebWorker and null for process-main / auxiliary VMs.
+        trace("vm-core:global-object:begin");
         let global = Zig__GlobalObject__create(
             console.cast(),
             context_id,
             opts.mini_mode,
             opts.eval_mode,
-            opts.worker_ptr,
+            role.worker_ptr(),
         );
+        trace("vm-core:global-object:end");
         // JSC may mess with the stack size.
         bun_core::StackCheck::configure_thread();
+        trace("vm-core:stack-check:end");
         // SAFETY: write through the raw `vm` ptr (not `vm_ref`) so no
         // `&mut VirtualMachine` is held live across the FFI call above; same
         // pattern as the `init_runtime_state` hook above. `global` is freshly
@@ -2602,7 +2723,7 @@ impl VirtualMachine {
         // is not enabled. `init_with_module_graph` / `init_bake` route through
         // here with their caller's `is_main_thread`; `init_worker` passes
         // `false` so workers never arm the watchdog.
-        if opts.is_main_thread {
+        if role.is_main_thread() {
             // SAFETY: `vm` is the freshly-initialised per-thread VM singleton.
             bun_io::ParentDeathWatchdog::install_on_event_loop(unsafe { Self::event_loop_ctx(vm) });
         }
@@ -2612,6 +2733,7 @@ impl VirtualMachine {
             IS_SMOL_MODE.store(true, core::sync::atomic::Ordering::Relaxed);
         }
 
+        trace("vm-core:init:end");
         Ok(vm)
     }
 
@@ -3971,7 +4093,11 @@ impl VirtualMachine {
             smol: opts.smol,
             mini_mode: opts.smol,
             eval_mode: false,
-            is_main_thread: opts.is_main_thread,
+            role: if opts.is_main_thread {
+                VmRole::ProcessMain
+            } else {
+                VmRole::Auxiliary
+            },
             ..Default::default()
         };
         let vm = Self::init(init_opts)?;
@@ -4001,11 +4127,12 @@ impl VirtualMachine {
             store_fd: opts.store_fd,
             smol: opts.smol,
             eval_mode: opts.eval,
-            is_main_thread: false,
             // The global is created with the worker's messaging proxy, context id
             // and `mini` so the C++ ZigGlobalObject is born with its options wired.
-            worker_ptr: worker.messaging_proxy(),
-            context_id: Some(worker.execution_context_id() as i32),
+            role: VmRole::WebWorker {
+                worker_ptr: worker.messaging_proxy(),
+                context_id: worker.execution_context_id() as i32,
+            },
             mini_mode: worker.mini(),
             ..Default::default()
         };
@@ -4044,7 +4171,11 @@ impl VirtualMachine {
             smol: opts.smol,
             mini_mode: opts.smol,
             eval_mode: false,
-            is_main_thread: opts.is_main_thread,
+            role: if opts.is_main_thread {
+                VmRole::ProcessMain
+            } else {
+                VmRole::Auxiliary
+            },
             ..Default::default()
         };
         // Note: shares the console / log / event-loop wiring with `init`;

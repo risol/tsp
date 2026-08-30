@@ -45,7 +45,9 @@ function Get-LogTail {
 function Get-StartupDiagnostics {
   $stderr = Get-LogTail $stderrLog
   $stdout = Get-LogTail $stdoutLog
-  $markers = @($stderr | Where-Object { $_ -like "TSP worker startup:*" })
+  $markers = @($stderr | Where-Object {
+      $_ -like "TSP worker startup:*" -or $_ -like "TSP worker VM init:*"
+    })
   return @(
     "Worker startup markers:"
     $(if ($markers.Count -gt 0) { $markers } else { "<none captured>" })
@@ -103,5 +105,15 @@ try {
 } finally {
   if (!$process.HasExited) { $process.Kill($true); $process.WaitForExit() }
   $process.Dispose()
-  if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }
+  # Windows may report the inherited worker log handle as busy for a brief
+  # interval after Kill(entireProcessTree: true) returns. Retry the exact temp
+  # directory instead of leaving CI artifacts or emitting a false cleanup error.
+  for ($attempt = 0; $attempt -lt 50 -and (Test-Path -LiteralPath $tempRoot); $attempt++) {
+    try {
+      Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction Stop
+    } catch {
+      if ($attempt -eq 49) { throw }
+      Start-Sleep -Milliseconds 100
+    }
+  }
 }

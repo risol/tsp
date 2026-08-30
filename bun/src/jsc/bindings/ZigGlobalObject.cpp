@@ -1,4 +1,5 @@
 #include "root.h"
+#include <cstdio>
 
 #include "ZigGlobalObject.h"
 #include "MessagePort.h"
@@ -467,13 +468,23 @@ void Zig::GlobalObject::resetOnEachMicrotaskTick()
 
 extern "C" size_t Bun__reported_memory_size;
 
-// executionContextId: -1 for main thread
-// executionContextId: maxInt32 for macros
-// executionContextId: >-1 for workers
+// executionContextId: 1 for this process's main VM
+// executionContextId: maxInt32 for generated auxiliary contexts (macros/debugger)
+// executionContextId: >1 for a concrete in-process WebWorker context
 extern "C" JSC::JSGlobalObject* Zig__GlobalObject__create(void* console_client, int32_t executionContextId, bool miniMode, bool evalMode, void* worker_ptr)
 {
+    const bool traceStartup = getenv("TSP_WORKER_STARTUP_TRACE") != nullptr;
+    const auto trace = [&](const char* stage) {
+        if (!traceStartup)
+            return;
+        std::fprintf(stderr, "TSP worker VM init: %s\n", stage);
+        std::fflush(stderr);
+    };
+
     auto heapSize = miniMode ? JSC::HeapType::Small : JSC::HeapType::Large;
+    trace("jsc-vm-create:begin");
     RefPtr<JSC::VM> vmPtr = JSC::VM::tryCreate(heapSize);
+    trace("jsc-vm-create:end");
     if (!vmPtr) [[unlikely]] {
         BUN_PANIC("Failed to allocate JavaScriptCore Virtual Machine. Did your computer run out of memory? Or maybe you compiled Bun with a mismatching libc++ version or compiler?");
     }
@@ -482,6 +493,7 @@ extern "C" JSC::JSGlobalObject* Zig__GlobalObject__create(void* console_client, 
     // This must happen before JSVMClientData::create
     vm.heap.acquireAccess();
     JSC::JSLockHolder locker(vm);
+    trace("jsc-lock:end");
 
     {
         const char* disable_stop_if_necessary_timer = getenv("BUN_DISABLE_STOP_IF_NECESSARY_TIMER");
@@ -514,6 +526,7 @@ extern "C" JSC::JSGlobalObject* Zig__GlobalObject__create(void* console_client, 
     ASSERT(vmPtr->runLoop().kind() == WTF::RunLoop::Kind::Bun);
 
     WebCore::JSVMClientData::create(&vm, Bun__getVM(), static_cast<WebCore::WorkerMessagingProxy*>(worker_ptr));
+    trace("client-data:end");
 
     const auto createGlobalObject = [&]() -> Zig::GlobalObject* {
         if (executionContextId == std::numeric_limits<int32_t>::max() || executionContextId > 1) [[unlikely]] {
@@ -546,7 +559,9 @@ extern "C" JSC::JSGlobalObject* Zig__GlobalObject__create(void* console_client, 
         }
     };
 
+    trace("global-create:begin");
     auto* globalObject = createGlobalObject();
+    trace("global-create:end");
     if (!globalObject) [[unlikely]] {
         BUN_PANIC("Failed to allocate JavaScript global object. Did your computer run out of memory?");
     }
@@ -555,6 +570,7 @@ extern "C" JSC::JSGlobalObject* Zig__GlobalObject__create(void* console_client, 
     globalObject->isThreadLocalDefaultGlobalObject = true;
     Bun__setDefaultGlobalObject(globalObject);
     JSC::gcProtect(globalObject);
+    trace("global-publish:end");
 
 #ifdef FUZZILLI_ENABLED
     Bun__REPRL__registerFuzzilliFunctions(static_cast<Zig::GlobalObject*>(globalObject));
@@ -634,6 +650,7 @@ extern "C" JSC::JSGlobalObject* Zig__GlobalObject__create(void* console_client, 
         }
     }
 
+    trace("zig-global-object-create:end");
     return globalObject;
 }
 

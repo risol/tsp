@@ -548,9 +548,9 @@ unsafe fn init_runtime_state(
     // break.
 
     // Worker init routes through this same hook but must not configure a
-    // debugger, so gate on `worker_ptr` to keep `vm.debugger == None` for
-    // workers.
-    if opts.worker_ptr.is_null() {
+    // debugger. The role is the canonical identity; a null pointer alone must
+    // not be used to infer whether a VM is a process main or an auxiliary VM.
+    if !opts.role.is_web_worker() {
         // SAFETY: `vm` is the freshly-boxed unique VM on this thread.
         unsafe { configure_debugger(vm, &opts.debugger) };
     }
