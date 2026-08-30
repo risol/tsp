@@ -89,24 +89,24 @@ All notable changes to TSP will be documented in this file.
 
 ### Diagnostics
 - BUG-0003 (`docs/v2/bugs/0003-windows-ci-worker-sigsegv-invalid-handle.md`)
-  now records that the crash remains inside the C++ microtask-drain entry point
-  after module evaluation. Removing the obsolete generated-worker stdin
-  listener in `d30992b8b6` did not move the Windows CI boundary, so that theory
-  is rejected as the root cause. Lazy optional-Bun-API access remains
+  now records the confirmed root cause: the embedded worker's synthetic ESM
+  `bun:main` evaluation left a module-resume job that crashed in the first
+  Windows JSC microtask checkpoint. The final worker path directly transpiles
+  and evaluates the wrapper body as a plain script, avoiding both that resume
+  job and the failed CommonJS module-builder workaround. Removing the obsolete
+  generated-worker stdin listener and lazy optional-Bun-API access remain
   independent hardening.
 - Added native stderr markers around the `JSNextTickQueue` and
-  `JSC::VM::drainMicrotasks()` sub-stages. BUG-0003 remains open pending the
-  next Windows CI result.
+  `JSC::VM::drainMicrotasks()` sub-stages; these localized the fault before
+  the final direct-transpile fix.
 
 ### In progress
-- BUG-0003 candidate: the embedded worker no longer performs an explicit GC
-  while the module-evaluation promise is pending; CI run `33323201126`
-  proved that this ordering crashes inside `run_gc(false)`. The embedded
-  wrapper now executes synchronous handlers and synchronous JSX trees without
-  creating the old unconditional Promise/async chain; the worker also reads
-  a synchronously published envelope before entering its first JSC microtask
-  checkpoint. Asynchronous handlers retain the promise-based fallback. Local
-  Windows smoke passes; Windows CI confirmation is pending.
+- BUG-0003 fix implemented: the embedded worker now directly transpiles the
+  generated wrapper with the Rust TSX pipeline, unwraps the printer's
+  CommonJS shell, and evaluates the body as a plain script. Synchronous
+  handlers publish before the first microtask checkpoint, while asynchronous
+  handlers retain the normal event-loop fallback. Local Windows smoke passes;
+  Windows CI confirmation is pending.
 - The WebKit/JSC pin now uses `b9a6abf2d598`, which contains WebKit's
   `MicrotaskCallCache` invalidation when detached `CodeBlock` objects are
   deleted. Windows CI run `33319229316` still failed at the same JSC

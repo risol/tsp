@@ -4937,7 +4937,30 @@ unsafe fn transpile_virtual_module(
     specifier_ptr: *const bun_core::String,
     referrer_ptr: *const bun_core::String,
     source_code: *mut bun_core::ZigString,
+    loader: bun_options_types::schema::api::Loader,
+    ret: *mut ErrorableResolvedSource,
+) -> bool {
+    // Plugin virtual modules retain the historical unknown module type.
+    unsafe {
+        transpile_virtual_module_with_type(
+            global,
+            specifier_ptr,
+            referrer_ptr,
+            source_code,
+            loader,
+            ModuleType::Unknown,
+            ret,
+        )
+    }
+}
+
+unsafe fn transpile_virtual_module_with_type(
+    global: *mut JSGlobalObject,
+    specifier_ptr: *const bun_core::String,
+    referrer_ptr: *const bun_core::String,
+    source_code: *mut bun_core::ZigString,
     loader_: bun_options_types::schema::api::Loader,
+    module_type: ModuleType,
     ret: *mut ErrorableResolvedSource,
 ) -> bool {
     use bun_options_types::schema::api;
@@ -5011,7 +5034,7 @@ unsafe fn transpile_virtual_module(
     let mut extra = TranspileExtra {
         path,
         loader,
-        module_type: ModuleType::Unknown,
+        module_type,
         source_code_printer: printer_ptr,
         promise_ptr: ptr::null_mut(), // null forbids async resolution
     };
@@ -5074,6 +5097,66 @@ unsafe fn transpile_virtual_module(
             true
         }
     }
+}
+
+/// Transpile source for the embedded TSP worker without entering the
+/// JavaScript-facing `Bun.Transpiler` host function. The worker already holds
+/// the VM API lock and is about to synchronously evaluate the result, so
+/// calling the JS API here would re-enter JSC while JSC is executing another
+/// native evaluation callback. That re-entry is unsafe on Windows.
+pub(crate) fn transpile_embedded_source(
+    global: *mut JSGlobalObject,
+    specifier: &[u8],
+    source: &[u8],
+) -> Result<Vec<u8>, String> {
+    let specifier_string = bun_core::String::borrow_utf8(specifier);
+    let referrer_string = bun_core::String::borrow_utf8(specifier);
+    let mut source_string = bun_core::ZigString::init_utf8(source);
+    let mut result =
+        ErrorableResolvedSource::err(ErrorCode(ErrorCode::JS_ERROR_OBJECT), JSValue::UNDEFINED);
+
+    // SAFETY: all slices and the output remain live for the synchronous call;
+    // `global` is the embedded worker's live JS global. The virtual-module
+    // path consumes the result into an RAII owner below before returning.
+    unsafe {
+        transpile_virtual_module_with_type(
+            global,
+            &raw const specifier_string,
+            &raw const referrer_string,
+            &raw mut source_string,
+            bun_options_types::schema::api::Loader::tsx,
+            // Print the request wrapper as CommonJS, then unwrap the
+            // printer's outer function below. The embedded evaluator runs a
+            // plain script, so ESM-only syntax such as `import.meta` cannot
+            // be left in the result. We do not invoke the CJS wrapper itself:
+            // doing that would recreate the module-builder path that failed
+            // on Windows.
+            ModuleType::Cjs,
+            &raw mut result,
+        );
+    }
+
+    if !result.success {
+        return Err("embedded TSP wrapper transpilation failed".into());
+    }
+
+    // `transpile_virtual_module` transfers the successful `ResolvedSource`
+    // into the out-param exactly as the C++ module loader does. Adopt it here
+    // so every owned BunString field is released after copying the JS bytes.
+    let resolved = unsafe { result.result.value };
+    let owned = OwnedResolvedSource::from(resolved);
+    let source = owned.get().source_code.to_utf8_bytes();
+    const CJS_PREFIX: &[u8] = b"(function(exports, require, module, __filename, __dirname) {\n";
+    const CJS_SUFFIX: &[u8] = b"\n});";
+    let source_without_trailing_newline = source.strip_suffix(b"\n").unwrap_or(&source);
+    if source_without_trailing_newline.starts_with(CJS_PREFIX)
+        && source_without_trailing_newline.ends_with(CJS_SUFFIX)
+    {
+        return Ok(source_without_trailing_newline
+            [CJS_PREFIX.len()..source_without_trailing_newline.len() - CJS_SUFFIX.len()]
+            .to_vec());
+    }
+    Err("embedded TSP wrapper transpilation produced an unexpected CommonJS shape".into())
 }
 
 /// Materialise an embedded file (`.node`/`.so`/`.dylib`/`.dll` from

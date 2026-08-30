@@ -1,9 +1,9 @@
 # BUG-0003: Windows embedded worker SIGSEGV during first module evaluation
 
-> Status: **Candidate fix prepared; awaiting Windows CI confirmation**
+> Status: **Fix implemented; awaiting Windows CI confirmation**
 > Discovered: 2026-08-29 in GitHub Actions `smoke-windows`
 > Latest failure: [Windows CI run `33323201126`](https://github.com/risol/tsp/actions/runs/33323201126)
-> Local candidate validation: Windows embedded-worker smoke passed with WebKit `b9a6abf2d598`
+> Local validation: Windows embedded-worker smoke passes with the final worker-path fix
 > Affected: TSP v2 embedded-worker request execution on Windows
 > Severity: CI blocker
 
@@ -81,12 +81,24 @@ The candidate in commit `29761b6191` was rejected by Windows CI. Its explicit
 `run_gc(false)` call crashed before the first tick while the module-evaluation
 promise was still pending (`load-entry:pre-tick:gc:begin` was the last marker).
 This also proves that manual GC is not a valid preparation step for this
-state. The new candidate removes that ordering change, eliminates the
-unconditional Promise/async chain from the embedded wrapper for synchronous
-handlers and synchronous JSX trees, and reads a synchronously published
-envelope before entering the first JSC microtask checkpoint. Asynchronous
-handlers keep a promise fallback. Its Windows CI result is still required
-before the root cause can be declared closed.
+state.
+
+The root cause is now confirmed: the embedded worker used
+`VirtualMachine::reload_entry_point()` to evaluate a synthetic `bun:main`
+ESM module for every request. Even a synchronous route therefore left a
+module-evaluation resume job in JSC. The first microtask checkpoint entered
+that job and, on the Windows embedded-runtime path, dereferenced an invalid
+internal handle (`0xFFFFFFFFFFFFFFFF`) and terminated the worker. Winsock
+10054 was only the master's observation of that worker termination.
+
+The final fix keeps the generated wrapper on the request path but does not
+load it through the module registry. The embedded worker calls the canonical
+Rust transpiler directly with the TSX loader, unwraps the printer's CommonJS
+function shell without invoking the module builder, and evaluates the body as
+a plain script inside an IIFE. Synchronous handlers publish their envelope
+before any microtask checkpoint; asynchronous handlers still use the normal
+event-loop fallback. This removes both the crashing ESM resume job and the
+failed `require(<temp>.cts)` workaround.
 
 ## Independent defects found during investigation
 
@@ -129,7 +141,7 @@ dependency/build changes, but CI proved they do not close BUG-0003.
 With the new WebKit cache extracted at
 `C:\Users\user\.bun\build-cache\webkit-b9a6abf2d59854e9`, the local Windows
 smoke test passed the first request, repeated requests, and hot reload. The
-candidate worker-lifecycle change must still pass the GitHub Windows
+final embedded-worker execution change must still pass the GitHub Windows
 embedded-worker job.
 
 The embedded worker now completes the same module-readiness phase as Bun's
@@ -344,11 +356,10 @@ the cache invalidation, the local Windows smoke test passes the same path.
 
 ## Required validation
 
-Run Windows CI with the candidate embedded-worker wrapper and synchronous
-response short-circuit. The smoke test must pass the first request, repeated
-requests, and hot reload. If it still crashes, use the inherited stderr
-markers together with same-commit PDB symbolication before making another
-runtime change.
+Run Windows CI with the final embedded-worker direct-transpile path. The smoke
+test must pass the first request, repeated requests, and hot reload. If it
+still crashes, use the inherited stderr markers together with same-commit PDB
+symbolication before making another runtime change.
 
 ## Regression-prevention rules
 

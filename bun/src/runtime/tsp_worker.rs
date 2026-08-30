@@ -282,25 +282,30 @@ impl EmbeddedVm {
             return self.execute_path(&request.path);
         }
         let path = std::env::temp_dir().join(format!(
-            "tsp-embedded-worker-{}-{}.cts",
+            "tsp-embedded-worker-{}-{}.tsx",
             std::process::id(),
             NEXT_SCRIPT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::write(&path, &request.script)
             .map_err(|error| format!("failed to materialize request script: {error}"))?;
-        let result = self.execute_embedded_path(&path);
+        let result = self.execute_embedded_script(&request.script, &path);
         let _ = std::fs::remove_file(path);
         result
     }
 
-    /// Load one request wrapper through CommonJS and evaluate the module
-    /// synchronously. The old path imported every wrapper from synthetic
+    /// Evaluate one request wrapper as a synchronous JavaScript program inside
+    /// the long-lived VM. The old path imported every wrapper from synthetic
     /// `bun:main`, which created an ESM async-module resume microtask even for
-    /// a synchronous route. On Windows that first JSC checkpoint is where the
-    /// source-built worker faults. CommonJS evaluation keeps the route and
-    /// wrapper in one module scope and returns before any module-resume job is
-    /// needed.
-    fn execute_embedded_path(&mut self, path: &std::path::Path) -> Result<String, String> {
+    /// a synchronous route. A later attempt to avoid that checkpoint by using
+    /// `require(<temp>.cts)` sent the single-file runtime through Bun's module
+    /// builder and failed with an AggregateError. Keep the wrapper in an IIFE
+    /// so its `const` declarations do not collide across requests, while the
+    /// global `require` remains available to route-local dependencies.
+    fn execute_embedded_script(
+        &mut self,
+        script: &[u8],
+        path: &std::path::Path,
+    ) -> Result<String, String> {
         startup_trace("request:api-lock:begin");
         let _api_lock = self.vm.global().vm().get_api_lock();
         startup_trace("request:api-lock:acquired");
@@ -323,8 +328,24 @@ impl EmbeddedVm {
         let path = path
             .to_str()
             .ok_or_else(|| "embedded worker request path is not UTF-8".to_string())?;
-        let source = format!("require({});", js_string_literal(path));
-        let filename = b"[tsp-embedded-worker]";
+        // `tsx_to_js` intentionally leaves TypeScript and JSX for Bun's
+        // transpiler. Use the Rust-side runtime transpiler directly instead
+        // of calling `Bun.Transpiler` from inside this native evaluation:
+        // the latter re-enters JSC and crashes on Windows. The Rust helper
+        // prints JavaScript without creating an ESM module-resume job.
+        startup_trace("request:transpile:begin");
+        let transpiled = crate::jsc_hooks::transpile_embedded_source(
+            std::ptr::from_ref(self.vm.global()).cast_mut(),
+            path.as_bytes(),
+            script,
+        )
+        .map_err(|error| format!("embedded TSP wrapper transpilation failed: {error}"))?;
+        startup_trace("request:transpile:end");
+        let source = format!(
+            "(() => {{\n{}\n}})();",
+            String::from_utf8_lossy(&transpiled)
+        );
+        let filename = path.as_bytes();
         let mut exception = JSValue::UNDEFINED;
         // SAFETY: all pointers refer to live byte slices for the duration of
         // the synchronous call; `global` is the VM's live opaque handle and
@@ -474,25 +495,6 @@ impl EmbeddedVm {
             .map_err(|error| format!("{error:?}"))?;
         Ok(Some(String::from_utf8_lossy(value.slice()).into_owned()))
     }
-}
-
-fn js_string_literal(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('"');
-    for ch in value.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\0' => out.push_str("\\0"),
-            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
 }
 
 static NEXT_SCRIPT_ID: std::sync::atomic::AtomicU64 =
