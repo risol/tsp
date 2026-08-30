@@ -282,6 +282,15 @@ pub struct VirtualMachine {
     /// both types are owned by `bun_runtime` (forward dep). Access goes through
     /// [`RuntimeHooks::timer_insert`] / [`RuntimeHooks::body_value_hive_ref`].
     pub runtime_state: *mut c_void,
+    /// Optional environment-gated startup trace supplied by an embedding
+    /// runtime. Mirrors [`InitOptions::startup_trace`] so per-request
+    /// entry-point methods (`reload_entry_point`, `load_entry_point`) can
+    /// emit stage markers too — otherwise the trace is only available during
+    /// `init` and the first `load_entry_point` would still be a single
+    /// unactionable `load-entry:begin … load-entry:end` pair on failure.
+    /// The callback is a `fn` pointer (no captures, no VM/JSC work) so it
+    /// stays safe to call from any VM method on this thread.
+    pub startup_trace: Option<fn(&str)>,
     pub event_loop_handle: Option<*mut PlatformEventLoop>,
     /// Pending `unref` count drained by the event-loop thread. Atomic because
     /// `KeepAlive::unref_on_next_tick` increments it from OTHER threads
@@ -2671,6 +2680,17 @@ impl VirtualMachine {
             // clean error + non-zero exit.
             unsafe { (*vm).runtime_state = (hooks.init_runtime_state)(vm, &mut opts)? };
         }
+        // `startup_trace` is a `fn` pointer with NPO (fn can never be null), so
+        // all-zero is the canonical `None`; the VM is allocated zeroed, so
+        // re-writing is only required when the caller supplied one. Stash it
+        // here so per-request methods (`reload_entry_point`,
+        // `load_entry_point`) can emit stage markers too — otherwise the
+        // first `load_entry_point` would still be a single
+        // `load-entry:begin … load-entry:end` pair with no internal boundary.
+        // SAFETY: `vm` is the live per-thread VM allocated above; raw-ptr
+        // write through `vm` (not `vm_ref`) so no `&mut VirtualMachine` is
+        // held across any subsequent hook.
+        unsafe { (*vm).startup_trace = opts.startup_trace };
         trace("vm-core:runtime-state:end");
 
         // JSGlobalObject creation. `ensure_waker()` must run before the FFI.
@@ -2757,6 +2777,22 @@ impl VirtualMachine {
         self.main = bun_ptr::RawSlice::new(path);
     }
 
+    /// Emit a startup-trace stage marker via the embedding-supplied callback.
+    /// No-op when no callback is installed (e.g. CLI / unit tests) so the
+    /// hot path is a single load + branch.
+    ///
+    /// Used by `reload_entry_point` / `load_entry_point` to localise the
+    /// first-call Windows module-eval crash: the trace previously covered
+    /// only `init` and the outer request handlers, so a crash inside
+    /// `load_entry_point` showed up as one opaque
+    /// `load-entry:begin … (crash)` pair with no internal boundary.
+    #[inline]
+    pub fn vm_trace(&self, stage: &str) {
+        if let Some(callback) = self.startup_trace {
+            callback(stage);
+        }
+    }
+
     /// `eventLoop().waitForPromise(promise)` — spin tick/auto_tick until
     /// `promise` settles. Thin forwarder; body lives in
     /// [`crate::event_loop::EventLoop::wait_for_promise`].
@@ -2802,15 +2838,32 @@ impl VirtualMachine {
         &mut self,
         entry_path: &[u8],
     ) -> crate::CrateResult<*mut JSInternalPromise> {
+        // Stage boundaries for `TSP_WORKER_STARTUP_TRACE=1`. Pair with the
+        // outer `load-entry:begin/end` markers in `tsp_worker.rs` so a
+        // crash inside `load_entry_point` is localisable to one of:
+        //   1. `generate-entry`  — `ServerEntryPoint::generate` produces
+        //      the synthetic `bun:main` module body;
+        //   2. `pre-exec`        — `internal/process/pre_execution` FFI;
+        //   3. `preloads`        — Bun preload module evaluation;
+        //   4. `module-loader`   — `JSModuleLoader::load_and_evaluate_module_ptr`
+        //      kicks off async module evaluation;
+        //   5. `wait` (in `load_entry_point`) — promise resolution + ticks.
+        // The Windows first-call crash was previously invisible between
+        // `load-entry:begin` and `(crash)`; the markers split that window
+        // so we can attribute the fault to one of the above before touching
+        // any of those code paths.
+        self.vm_trace("entry-eval:begin");
         self.has_loaded = false;
         self.set_main(entry_path);
         self.main_resolved_path.deref();
         self.main_resolved_path = bun_core::String::empty();
         self.main_hash = bun_watcher::Watcher::get_hash(entry_path);
         self.overridden_main.deinit();
+        self.vm_trace("entry-eval:set-main:end");
 
         let hooks = runtime_hooks();
         let _ = self.ensure_debugger(true);
+        self.vm_trace("entry-eval:debugger:end");
 
         // Node.js `--trace-*` and `--stack-trace-limit` flags need
         // `internal/process/pre_execution` to run before any user code.
@@ -2845,20 +2898,29 @@ impl VirtualMachine {
         if needs_pre_execution {
             // The C++ side catches and reports any JS exception thrown while
             // evaluating `internal/process/pre_execution`.
+            self.vm_trace("entry-eval:pre-exec:begin");
             crate::cpp::Bun__preExecutionBootstrap(self.global());
+            self.vm_trace("entry-eval:pre-exec:end");
         }
 
         if !self.main_is_html_entrypoint {
             if let Some(hooks) = hooks {
+                // Phase 1: `ServerEntryPoint::generate` synthesises the
+                // `bun:main` module body for `entry_path`. A fault inside the
+                // hook body, or in the transpiler / resolver it calls into,
+                // shows up between `:begin` and `:end` here.
+                self.vm_trace("entry-eval:generate-entry:begin");
                 let watch = self.is_watcher_enabled();
                 if !(hooks.generate_entry_point)(self, watch, entry_path) {
                     return Err(crate::CrateError::ServerEntryPointGenerate);
                 }
+                self.vm_trace("entry-eval:generate-entry:end");
             }
         }
 
         if !self.transpiler.options.disable_transpilation {
             if !self.preload.is_empty() {
+                self.vm_trace("entry-eval:preloads:begin");
                 if let Some(hooks) = hooks {
                     // SAFETY: hook contract.
                     let p = unsafe { (hooks.load_preloads)(self) }?;
@@ -2867,9 +2929,11 @@ impl VirtualMachine {
                         JSValue::from_cell(p).protect();
                         self.pending_internal_promise = Some(p);
                         self.pending_internal_promise_is_protected = true;
+                        self.vm_trace("entry-eval:preloads:early-return");
                         return Ok(p);
                     }
                 }
+                self.vm_trace("entry-eval:preloads:end");
 
                 // Check if Module.runMain was patched.
                 if self.has_patched_run_main {
@@ -2901,6 +2965,11 @@ impl VirtualMachine {
             // Note: reshaped for borrowck — capture raw ptr before &self call.
             let global = self.global;
             let global_ref = self.global();
+            // Phase 2: kick off module evaluation. The `bun:main` synthetic
+            // module generated above is the import target here. A fault in
+            // the resolver / fetcher / transpiler / JSC module loader
+            // callback chain shows up between `:begin` and `:end`.
+            self.vm_trace("entry-eval:module-loader:begin");
             let promise = if !self.main_is_html_entrypoint {
                 let name = bun_core::String::borrow_utf8(MAIN_FILE_NAME);
                 jsc::JSModuleLoader::load_and_evaluate_module_ptr(global, Some(&name))
@@ -2916,22 +2985,27 @@ impl VirtualMachine {
                 }
                 p
             };
+            self.vm_trace("entry-eval:module-loader:end");
 
             self.pending_internal_promise = Some(promise);
             self.pending_internal_promise_is_protected = false;
             JSValue::from_cell(promise).ensure_still_alive();
+            self.vm_trace("entry-eval:end");
             Ok(promise)
         } else {
             self.entry_evaluation_started = false;
             let global = self.global;
             let main_str = bun_core::String::from_bytes(self.main());
+            self.vm_trace("entry-eval:module-loader:begin");
             let promise =
                 jsc::JSModuleLoader::load_and_evaluate_module_ptr(global, Some(&main_str))
                     .map(NonNull::as_ptr)
                     .ok_or(crate::CrateError::JSError)?;
+            self.vm_trace("entry-eval:module-loader:end");
             self.pending_internal_promise = Some(promise);
             self.pending_internal_promise_is_protected = false;
             JSValue::from_cell(promise).ensure_still_alive();
+            self.vm_trace("entry-eval:end");
             Ok(promise)
         }
     }
@@ -2943,7 +3017,14 @@ impl VirtualMachine {
         entry_path: &[u8],
     ) -> crate::CrateResult<*mut JSInternalPromise> {
         let promise = self.reload_entry_point(entry_path)?;
+        self.vm_trace("load-entry:reload-end");
 
+        // Phase 3: drive the event loop until the entry-graph promise
+        // settles. Module resolution, fetcher I/O, transpiler callbacks,
+        // and user code all run inside this wait. A fault here is the
+        // candidate for the Windows first-call crash once the
+        // `entry-eval:*` markers above all print `:end`.
+        self.vm_trace("load-entry:wait:begin");
         // pending_internal_promise can change if hot module reloading is enabled
         if self.is_watcher_enabled() {
             loop {
@@ -2966,10 +3047,12 @@ impl VirtualMachine {
         } else {
             // SAFETY: `promise` is a live JSC heap cell.
             if crate::JSPromise::status_ptr(promise) == crate::js_promise::Status::Rejected {
+                self.vm_trace("load-entry:wait:rejected");
                 return Ok(promise);
             }
             let _ = self.wait_for_promise(jsc::AnyPromise::Internal(promise));
         }
+        self.vm_trace("load-entry:wait:end");
 
         Ok(self.pending_internal_promise.unwrap_or(promise))
     }

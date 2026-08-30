@@ -1,6 +1,6 @@
 # BUG-0003: Windows embedded worker SIGSEGV during first module evaluation
 
-> Status: **Fix candidate implemented — Windows CI validation pending**
+> Status: **Fix candidate implemented — Windows CI validation pending; `load_entry_point` segmented trace added for next-run attribution**
 > Discovered: 2026-08-29 in GitHub Actions `smoke-windows`
 > Latest evidence: [Windows CI run on `56bd752049`](https://github.com/risol/tsp/actions/runs/33283009469)
 > Affected: TSP v2 embedded-worker request execution on Windows
@@ -106,7 +106,10 @@ errors instead of continuing with a partially configured VM.
 ## Diagnostics
 
 The Windows smoke job sets `TSP_WORKER_STARTUP_TRACE=1`. The trace is disabled
-in normal execution and now covers both construction and request execution:
+in normal execution and now covers construction, request entry, the
+`reload_entry_point` / `load_entry_point` call chain, and per-tick wait
+state. Embedding startup trace storage on the VM lets per-request VM methods
+emit the same stage markers as the worker request handler.
 
 ```text
 tcp-connect:begin/end
@@ -136,7 +139,22 @@ handshake:hello-received
 handshake:ready-sent
 request:api-lock:begin/acquired/end
 request:clear-entry:begin/end
-request:load-entry:begin/end
+request:load-entry:begin
+  entry-eval:begin
+  entry-eval:set-main:end
+  entry-eval:debugger:end
+  (entry-eval:pre-exec:begin / entry-eval:pre-exec:end, only if --trace-* / --stack-trace-limit is set)
+  entry-eval:generate-entry:begin
+  entry-eval:generate-entry:end
+  (entry-eval:preloads:begin / entry-eval:preloads:early-return | entry-eval:preloads:end, only if preload modules exist)
+  entry-eval:module-loader:begin
+  entry-eval:module-loader:end
+  entry-eval:end
+load-entry:reload-end
+load-entry:wait:begin
+  (load-entry:wait:rejected, only if the entry promise rejected synchronously)
+load-entry:wait:end
+request:load-entry:end
 request:response-ready or request:error-ready
 ```
 
@@ -144,13 +162,46 @@ The smoke script redirects stdout and stderr to concrete files through the
 Windows command processor. Workers inherit those file handles, and failures
 include all markers plus the final 200 log lines.
 
+### Localising the fault with the segmented trace
+
+After the lifecycle fix in `fix(tsp): complete embedded VM module setup`
+(every `entry-eval:*` marker prints `:end`, every `vm-core:*` prints `:end`),
+the Windows first-call crash remained inside `VirtualMachine::load_entry_point`
+between `request:load-entry:begin` and `(crash)` with no internal boundary.
+The markers above split that window so the next failing run can be attributed
+to one of:
+
+1. `entry-eval:generate-entry` — `ServerEntryPoint::generate` (synthetic
+   `bun:main` body) or anything the high-tier hook transitively touches
+   (transpiler, resolver, file system).
+2. `entry-eval:pre-exec` — the FFI call to `Bun__preExecutionBootstrap` for
+   `internal/process/pre_execution` (only when `--trace-*` /
+   `--stack-trace-limit` argv is set; not on the normal TSP path).
+3. `entry-eval:preloads` — Bun preload modules (only when `preload` is
+   non-empty; not on the normal TSP path).
+4. `entry-eval:module-loader` — `JSModuleLoader::load_and_evaluate_module_ptr`
+   resolver / fetcher / transpiler / JSC module loader callback chain
+   synchronously firing before the returned promise settles.
+5. `load-entry:wait` — promise resolution + event-loop tick, the most likely
+   candidate for a fault observed in async module evaluation, fetcher I/O,
+   or user code.
+
+The crash address `0xFFFFFFFFFFFFFFFF` (Windows `INVALID_HANDLE_VALUE` /
+`-1`) is consistent with a Windows HANDLE being dereferenced as a pointer.
+A new bun.report frame that lands in `ServerEntryPoint::generate`, a module
+loader callback, the transpiler / resolver path, or a Windows HANDLE / Fd
+helper will pin the root cause more precisely than the previous
+fault-address-only mapping.
+
 ## Required validation
 
-Run Windows CI with the complete module-readiness lifecycle and owned entry
-path. The smoke test must pass the first request, repeated requests, and hot
-reload. If it still crashes, use the new request marker to split API-lock
-acquisition, registry clearing, module loading, and async response execution
-before making another runtime change.
+Run Windows CI with the complete module-readiness lifecycle, owned entry
+path, and the segmented `load_entry_point` trace. The smoke test must pass
+the first request, repeated requests, and hot reload. If it still crashes,
+the segmented trace above will identify the failing sub-stage; use that
+boundary together with the same-commit PDB symbolication (offsets can shift
+between separately linked binaries, so the previous mapping is supporting
+evidence only) before changing any further runtime configuration.
 
 ## Regression-prevention rules
 
@@ -168,6 +219,12 @@ before making another runtime change.
    remain valid for the VM lifetime.
 8. Test embedded workers with redirected/non-interactive stdio, multiple
    workers, generated module execution, repeated requests, and hot reload.
+9. The embedding startup trace must be stashed on the VM (or another
+   per-thread slot) so per-request VM methods (`reload_entry_point`,
+   `load_entry_point`, future entry-point work) can emit stage markers too.
+   Without this, a crash inside those methods shows up as one opaque
+   `<outer>:begin … (crash)` pair with no internal boundary and no way to
+   attribute the fault to a specific sub-stage.
 
 The durable rules are also recorded in `AGENTS.md`,
 `docs/v2/adr/0003-windows-fd-representation.md`,
@@ -177,7 +234,7 @@ The durable rules are also recorded in `AGENTS.md`,
 ## Related files
 
 - `bun/src/runtime/tsp_worker.rs` — embedded VM lifecycle, path ownership, and trace;
-- `bun/src/jsc/VirtualMachine.rs` — VM initialization and entry loading;
+- `bun/src/jsc/VirtualMachine.rs` — VM initialization, entry loading, and per-stage trace;
 - `bun/src/jsc/bindings/ZigGlobalObject.cpp` — JSC/global-object initialization;
 - `bun/src/sys/lib.rs` — independent packed-`Fd` hardening;
 - `bun/src/runtime/tsp/worker/manager.rs` — Windows child spawn and handshake;

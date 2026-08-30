@@ -118,7 +118,12 @@ Windows handle boundaries have a separate representation rule:
   allocator, JSC, or VM lifecycle behavior.
 - Keep worker startup diagnostics environment-gated; use
   `TSP_WORKER_STARTUP_TRACE=1` when a Windows CI crash must be split between
-  JSC initialization, VM creation, and protocol handshake.
+  JSC initialization, VM creation, and protocol handshake. The trace callback
+  must be stashed on the VM (or another per-thread slot) so per-request VM
+  methods (`reload_entry_point`, `load_entry_point`, future entry-point
+  work) can also emit stage markers — otherwise a crash inside those
+  methods shows up as one opaque outer marker pair with no internal
+  boundary.
 
 See `docs/v2/adr/0002-cross-allocator-ownership.md`,
 `docs/v2/adr/0003-windows-fd-representation.md`,
