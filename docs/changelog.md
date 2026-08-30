@@ -59,6 +59,30 @@ All notable changes to TSP will be documented in this file.
   received; the RST just terminates the stream). The tolerance is
   restricted to AFTER the first successful read.
 
+## Unreleased — 2026-08-30
+
+### Added
+- `VirtualMachine::vm_trace` helper plus a per-VM `startup_trace` slot
+  (`bun/src/jsc/VirtualMachine.rs`) so embedding startup-trace callbacks
+  remain available to per-request VM methods, not just `init`. The slot
+  is a `fn(&str)` pointer (no captures, no VM/JSC work) populated once
+  by `init` from `InitOptions::startup_trace` and read by `vm_trace`.
+- Segmented stage markers inside `VirtualMachine::reload_entry_point` /
+  `load_entry_point` (`entry-eval:begin`, `:set-main:end`,
+  `:debugger:end`, `:pre-exec:begin/end`, `:generate-entry:begin/end`,
+  `:preloads:begin/end`, `:module-loader:begin/end`, `:end`,
+  `load-entry:reload-end`, `:wait:begin`, `:wait:rejected`, `:wait:end`)
+  so a Windows first-call crash inside `load_entry_point` is
+  attributable to one of: synthetic `bun:main` generation, pre-execution
+  bootstrap, preload evaluation, `JSModuleLoader` evaluation, or
+  promise resolution + event-loop tick.
+
+### Diagnostics
+- BUG-0003 (`docs/v2/bugs/0003-windows-ci-worker-sigsegv-invalid-handle.md`)
+  updated with the new trace layout, a per-stage attribution guide, and
+  a regression-prevention rule that requires the embedding startup
+  trace to be stashed on the VM. AGENTS.md mirrors that rule.
+
 ### Test count
 332 tests, all green on 5 consecutive full-suite runs.
 Breakdown: 267 lib + 4 worker_integration + 15 process_model + 38
