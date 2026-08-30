@@ -2,7 +2,7 @@
 
 > Status: **Candidate fix prepared; awaiting Windows CI confirmation**
 > Discovered: 2026-08-29 in GitHub Actions `smoke-windows`
-> Latest failure: [Windows CI run `33319229316`](https://github.com/risol/tsp/actions/runs/33319229316)
+> Latest failure: [Windows CI run `33323201126`](https://github.com/risol/tsp/actions/runs/33323201126)
 > Local candidate validation: Windows embedded-worker smoke passed with WebKit `b9a6abf2d598`
 > Affected: TSP v2 embedded-worker request execution on Windows
 > Severity: CI blocker
@@ -77,14 +77,15 @@ still crashed at the same `JSC__JSGlobalObject__drainMicrotasks` boundary.
 The newer engine pin is still the correct dependency update, but it is not the
 BUG-0003 fix.
 
-The remaining root cause is an embedded-worker lifecycle interaction with
-Bun/JSC's first microtask checkpoint. The current candidate performs the first
-event-loop turn only after releasing weak references and giving JSC a
-synchronous GC opportunity, then waits on the original module-evaluation
-promise before reading the response envelope. This is the smallest remaining
-candidate that changes the failing boundary without changing the general
-event-loop implementation. Its Windows CI result is still required before the
-root cause can be declared closed.
+The candidate in commit `29761b6191` was rejected by Windows CI. Its explicit
+`run_gc(false)` call crashed before the first tick while the module-evaluation
+promise was still pending (`load-entry:pre-tick:gc:begin` was the last marker).
+This also proves that manual GC is not a valid preparation step for this
+state. The new candidate removes that ordering change and instead eliminates
+the unconditional Promise/async chain from the embedded wrapper for
+synchronous handlers and synchronous JSX trees; asynchronous handlers keep a
+promise fallback. Its Windows CI result is still required before the root
+cause can be declared closed.
 
 ## Independent defects found during investigation
 
@@ -342,7 +343,7 @@ the cache invalidation, the local Windows smoke test passes the same path.
 
 ## Required validation
 
-Run Windows CI with the candidate embedded-worker lifecycle change. The smoke
+Run Windows CI with the candidate embedded-worker wrapper change. The smoke
 test must pass the first request, repeated requests, and hot reload. If it
 still crashes, use the inherited stderr markers together with same-commit PDB
 symbolication before making another runtime change.

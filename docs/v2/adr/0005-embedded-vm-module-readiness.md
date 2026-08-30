@@ -52,6 +52,15 @@ request path into that buffer and passes the stable slice to
    native binary, and run the Windows embedded-worker smoke test. A local
    pass or an engine change alone is not sufficient; the target Windows CI
    path must pass before recording the engine update as the root-cause fix.
+9. Do not call `run_gc(false)` before a pending module-evaluation promise has
+   settled. GC is a post-entry maintenance operation in Bun's CLI lifecycle,
+   not a readiness barrier; moving it before the first event-loop turn can
+   crash the embedded Windows worker.
+10. Generated embedded-worker wrappers must not create asynchronous work for
+    a synchronous handler unless the response type requires it. Keep a
+    synchronous fast path, with an explicit promise fallback for async
+    handlers, so the first JSC microtask checkpoint contains only required
+    work.
 
 ## Consequences
 

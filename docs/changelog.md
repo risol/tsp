@@ -99,10 +99,13 @@ All notable changes to TSP will be documented in this file.
   next Windows CI result.
 
 ### In progress
-- BUG-0003 candidate: the embedded worker now prepares weak references and
-  performs a synchronous GC opportunity before its first event-loop turn,
-  then waits for the original module-evaluation promise. The local Windows
-  smoke test passes; Windows CI confirmation is pending.
+- BUG-0003 candidate: the embedded worker no longer performs an explicit GC
+  while the module-evaluation promise is pending; CI run `33323201126`
+  proved that this ordering crashes inside `run_gc(false)`. The embedded
+  wrapper now executes synchronous handlers and synchronous JSX trees without
+  creating the old unconditional Promise/async chain; asynchronous handlers
+  retain the promise-based fallback. Local Windows smoke passes; Windows CI
+  confirmation is pending.
 - The WebKit/JSC pin now uses `b9a6abf2d598`, which contains WebKit's
   `MicrotaskCallCache` invalidation when detached `CodeBlock` objects are
   deleted. Windows CI run `33319229316` still failed at the same JSC

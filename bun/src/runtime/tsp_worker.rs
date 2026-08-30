@@ -322,27 +322,6 @@ impl EmbeddedVm {
         };
         startup_trace("request:load-entry:reload-end");
 
-        // Perform the same weak-reference/GC preparation used by the CLI's
-        // post-entry path before the embedded worker's first event-loop turn.
-        // The embedded path previously went straight from module-loader setup
-        // to the first checkpoint. Keep this before `wait_for_promise`, whose
-        // first operation is `tick()` and therefore the microtask drain that
-        // is fragile on Windows.
-        startup_trace("load-entry:pre-tick:release-weak-refs:begin");
-        self.vm.global().vm().release_weak_refs();
-        startup_trace("load-entry:pre-tick:release-weak-refs:end");
-        startup_trace("load-entry:pre-tick:gc:begin");
-        let _ = self.vm.global().vm().run_gc(false);
-        startup_trace("load-entry:pre-tick:gc:end");
-        startup_trace("load-entry:pre-tick:tick:begin");
-        self.vm.event_loop_mut().tick();
-        startup_trace("load-entry:pre-tick:tick:end");
-
-        // Preserve `load_entry_point`'s contract after the guarded first turn:
-        // the module graph must be settled before the request result is read.
-        // The first tick above is deliberately outside `wait_for_promise` so
-        // Windows gets the same weak-reference/GC preparation before entering
-        // JSC's microtask checkpoint.
         startup_trace("load-entry:wait:begin");
         let _ = self
             .vm
