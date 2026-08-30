@@ -94,6 +94,20 @@ All notable changes to TSP will be documented in this file.
   narrowing the fault to phase 5 or 6 of the wait. AGENTS.md mirrors
   the stash-on-VM rule.
 
+### Fixed
+- Windows first-call SIGSEGV in the TSP embedded worker at
+  `0xFFFFFFFFFFFFFFFF`. The `VirtualMachine::init` call leaves
+  `uws::Loop::internal_loop_data.jsc_vm` non-null, so the JSC park hook
+  (`Bun__JSC_onBeforeWait`) fires from `us_loop_run` /
+  `us_loop_run_bun_tick` and — Windows + mimalloc — drives
+  `mi_on_thread_idle()` against an unvalidated retired-page list. The
+  worker now clears `jsc_vm` after init (`bun/src/runtime/tsp_worker.rs`),
+  which short-circuits the `if (loop->data.jsc_vm)` guard in uSockets and
+  skips the park hook. The TSP worker is the JS thread for its process
+  and never re-enters from another thread, so the per-poll heap-access
+  release is unnecessary. Windows CI is expected to pass the first
+  request, repeated requests, and hot reload.
+
 ### Test count
 332 tests, all green on 5 consecutive full-suite runs.
 Breakdown: 267 lib + 4 worker_integration + 15 process_model + 38

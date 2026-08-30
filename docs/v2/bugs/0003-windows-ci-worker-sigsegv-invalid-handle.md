@@ -1,6 +1,6 @@
 # BUG-0003: Windows embedded worker SIGSEGV during first module evaluation
 
-> Status: **Fix candidate implemented — Windows CI validation pending; `load_entry_point` segmented trace added for next-run attribution**
+> Status: **Fix applied — Windows CI validation pending**
 > Discovered: 2026-08-29 in GitHub Actions `smoke-windows`
 > Latest evidence: [Windows CI run on `56bd752049`](https://github.com/risol/tsp/actions/runs/33283009469)
 > Affected: TSP v2 embedded-worker request execution on Windows
@@ -99,6 +99,14 @@ other module-loading VM entry points:
 5. Install the per-thread source-code printer.
 6. Send Ready only after all preparation succeeds.
 7. Copy each request's entry path into VM-owned storage before loading it.
+8. On Windows, clear `uws::Loop::internal_loop_data.jsc_vm` after init so the
+   JSC park hook (`Bun__JSC_onBeforeWait`) does not fire. The hook releases
+   heap access and — Windows + mimalloc — drives `mi_on_thread_idle()`,
+   which dereferences a stale retired-page pointer on the first call
+   (`0xFFFFFFFFFFFFFFFF`, the Windows `INVALID_HANDLE_VALUE` sentinel).
+   The TSP worker is the JS thread for its process and does not need the
+   per-poll heap-access release, so disabling the park hook is a
+   process-local optimisation that costs nothing and avoids the crash.
 
 Failures from `configure_defines()` are returned as worker initialization
 errors instead of continuing with a partially configured VM.
