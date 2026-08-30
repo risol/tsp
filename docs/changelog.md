@@ -105,8 +105,9 @@ All notable changes to TSP will be documented in this file.
   generated wrapper with the Rust TSX pipeline, unwraps the printer's
   CommonJS shell, and evaluates the body as a plain script. Synchronous
   handlers publish before the first microtask checkpoint, while asynchronous
-  handlers retain the normal event-loop fallback. Local Windows smoke passes;
-  Windows CI confirmation is pending.
+  handlers retain the normal event-loop fallback. Local Windows smoke and
+  [CI run `33340458504`](https://github.com/risol/tsp/actions/runs/33340458504)
+  pass on Linux, macOS, and Windows.
 - The WebKit/JSC pin now uses `b9a6abf2d598`, which contains WebKit's
   `MicrotaskCallCache` invalidation when detached `CodeBlock` objects are
   deleted. Windows CI run `33319229316` still failed at the same JSC

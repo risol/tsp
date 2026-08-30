@@ -1,9 +1,9 @@
 # BUG-0003: Windows embedded worker SIGSEGV during first module evaluation
 
-> Status: **Fix implemented; awaiting Windows CI confirmation**
+> Status: **Fixed and verified**
 > Discovered: 2026-08-29 in GitHub Actions `smoke-windows`
 > Latest failure: [Windows CI run `33323201126`](https://github.com/risol/tsp/actions/runs/33323201126)
-> Local validation: Windows embedded-worker smoke passes with the final worker-path fix
+> Verification: [Windows embedded-worker job in CI run `33340458504`](https://github.com/risol/tsp/actions/runs/33340458504/job/99335137362) passed
 > Affected: TSP v2 embedded-worker request execution on Windows
 > Severity: CI blocker
 
@@ -141,8 +141,8 @@ dependency/build changes, but CI proved they do not close BUG-0003.
 With the new WebKit cache extracted at
 `C:\Users\user\.bun\build-cache\webkit-b9a6abf2d59854e9`, the local Windows
 smoke test passed the first request, repeated requests, and hot reload. The
-final embedded-worker execution change must still pass the GitHub Windows
-embedded-worker job.
+final embedded-worker execution change passed the GitHub Windows
+embedded-worker job in CI run `33340458504`.
 
 The embedded worker now completes the same module-readiness phase as Bun's
 other module-loading VM entry points:
@@ -354,12 +354,11 @@ custom build was not symbolicated. The decisive failing run printed every
 `drain-mt:drain-microtasks:begin`. After upgrading WebKit to the release with
 the cache invalidation, the local Windows smoke test passes the same path.
 
-## Required validation
+## Validation
 
-Run Windows CI with the final embedded-worker direct-transpile path. The smoke
-test must pass the first request, repeated requests, and hot reload. If it
-still crashes, use the inherited stderr markers together with same-commit PDB
-symbolication before making another runtime change.
+The final embedded-worker direct-transpile path passed CI run `33340458504` on
+Linux, macOS, and Windows. The Windows smoke test passed the first request,
+repeated requests, metrics, and hot reload without a worker crash.
 
 ## Regression-prevention rules
 
