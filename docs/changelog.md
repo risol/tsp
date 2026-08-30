@@ -95,7 +95,7 @@ All notable changes to TSP will be documented in this file.
   the stash-on-VM rule.
 
 ### Fixed
-- Windows first-call SIGSEGV in the TSP embedded worker at
+- ~~Windows first-call SIGSEGV in the TSP embedded worker at
   `0xFFFFFFFFFFFFFFFF`. The `VirtualMachine::init` call leaves
   `uws::Loop::internal_loop_data.jsc_vm` non-null, so the JSC park hook
   (`Bun__JSC_onBeforeWait`) fires from `us_loop_run` /
@@ -106,7 +106,28 @@ All notable changes to TSP will be documented in this file.
   skips the park hook. The TSP worker is the JS thread for its process
   and never re-enters from another thread, so the per-poll heap-access
   release is unnecessary. Windows CI is expected to pass the first
-  request, repeated requests, and hot reload.
+  request, repeated requests, and hot reload.~~ Reverted: the
+  Windows CI run on `61b0fdf9f4` showed the crash is in
+  `EventLoop::tick`, not `auto_tick`; on a fresh worker
+  `is_active()=false`, so `auto_tick` takes the `else` branch
+  (`tick_without_idle()` → `us_loop_pump()`) which does not invoke the
+  park hook. The `jsc_vm=null` change is therefore a no-op for the
+  crash and was reverted.
+
+### Diagnostics
+- Added `tick_turn` sub-stage markers (`bun/src/jsc/event_loop.rs`):
+  `tick:concurrent:initial:begin/end`, `tick:gc-timer:initial:begin/end`,
+  `tick:inner:tick-with-count:begin/end`, `tick:inner:concurrent:begin/end`,
+  `tick:inner:rejected:begin/end`, `tick:microtasks:begin/end`,
+  `tick:tail:tick-with-count:begin/end`, `tick:tail:concurrent:begin/end`,
+  `tick:rejected:final:begin`. Per-iteration markers inside the inner
+  and tail loops are rate-limited to the first iteration (the Windows
+  first-call crash is deterministic on iteration 1). The next failing
+  CI run will show which sub-stage's `:end` marker is the first one
+  not to print, localising the fault to a specific `tick_turn` step
+  (most likely `tick:microtasks:begin/end` for the
+  `drain_microtasks_with_global` JSC microtask drain where the
+  synthetic `bun:main` body runs).
 
 ### Test count
 332 tests, all green on 5 consecutive full-suite runs.

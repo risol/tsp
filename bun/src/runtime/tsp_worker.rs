@@ -242,37 +242,6 @@ impl EmbeddedVm {
         vm.load_extra_env_and_source_code_printer();
         startup_trace("runtime-config:end");
 
-        // The Windows first-call crash in `EventLoop::wait_for_promise` →
-        // `RuntimeHooks::auto_tick` → `us_loop_run_bun_tick` /
-        // `us_loop_run` is triggered by the JSC park hook
-        // (`Bun__JSC_onBeforeWait`). On Windows that hook releases heap
-        // access and — gated on the shared `nowNs >= lastIdleSweepNs +
-        // 100ms` rate limit — calls `mi_on_thread_idle()` (mimalloc). The
-        // worker's first request fires the park hook before any mimalloc
-        // allocator state has been validated for the worker thread, and the
-        // resulting walk of mimalloc's retired-page list dereferences
-        // 0xFFFFFFFFFFFFFFFF (Windows `INVALID_HANDLE_VALUE`).
-        //
-        // The TSP worker does not need the park hook — the worker is the JS
-        // thread, the loop is dedicated to it, and the per-poll heap-access
-        // release path is a CLI optimisation that buys nothing for an
-        // embedded worker that never re-enters from another thread. Clear
-        // the JSC VM pointer in the uws loop's internal data so the
-        // `if (loop->data.jsc_vm)` guard in `us_loop_run` /
-        // `us_loop_run_bun_tick` short-circuits the park hook entirely.
-        //
-        // SAFETY: `uws::Loop::get()` returns the live per-thread uws loop;
-        // its `internal_loop_data.jsc_vm` is a `*const c_void` set by
-        // `VirtualMachine::init` (line 2736) and read only by the two C
-        // callers above. Writing null here is observable only as "park hook
-        // not called" — no other consumer touches the field.
-        #[cfg(windows)]
-        unsafe {
-            (*bun_uws::Loop::get())
-                .internal_loop_data
-                .jsc_vm = core::ptr::null();
-        }
-
         Ok(Self {
             vm,
             _log: log,

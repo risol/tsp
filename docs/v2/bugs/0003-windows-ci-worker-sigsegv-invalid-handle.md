@@ -1,8 +1,8 @@
 # BUG-0003: Windows embedded worker SIGSEGV during first module evaluation
 
-> Status: **Fix applied — Windows CI validation pending**
+> Status: **Diagnostic trace iterating; first-attempt fix `61b0fdf9f4` (jsc_vm=null) was a no-op — the crash is in `EventLoop::tick`, not `auto_tick`**
 > Discovered: 2026-08-29 in GitHub Actions `smoke-windows`
-> Latest evidence: [Windows CI run on `56bd752049`](https://github.com/risol/tsp/actions/runs/33283009469)
+> Latest evidence: [Windows CI run on `61b0fdf9f4`](https://github.com/risol/tsp/actions/runs/33291918406)
 > Affected: TSP v2 embedded-worker request execution on Windows
 > Severity: CI blocker
 
@@ -99,17 +99,22 @@ other module-loading VM entry points:
 5. Install the per-thread source-code printer.
 6. Send Ready only after all preparation succeeds.
 7. Copy each request's entry path into VM-owned storage before loading it.
-8. On Windows, clear `uws::Loop::internal_loop_data.jsc_vm` after init so the
-   JSC park hook (`Bun__JSC_onBeforeWait`) does not fire. The hook releases
-   heap access and — Windows + mimalloc — drives `mi_on_thread_idle()`,
-   which dereferences a stale retired-page pointer on the first call
-   (`0xFFFFFFFFFFFFFFFF`, the Windows `INVALID_HANDLE_VALUE` sentinel).
-   The TSP worker is the JS thread for its process and does not need the
-   per-poll heap-access release, so disabling the park hook is a
-   process-local optimisation that costs nothing and avoids the crash.
 
 Failures from `configure_defines()` are returned as worker initialization
 errors instead of continuing with a partially configured VM.
+
+### Investigated but rejected
+
+Step 8 (Windows JSC park hook disable) was attempted in `61b0fdf9f4` and
+reverted in the next slice. The fix cleared `uws::Loop::internal_loop_data.jsc_vm`
+to short-circuit the `if (loop->data.jsc_vm)` guard in `us_loop_run` /
+`us_loop_run_bun_tick` (which calls `Bun__JSC_onBeforeWait` → on Windows
+`mi_on_thread_idle()`). It was a no-op because the Windows first-call crash
+is in `EventLoop::tick`, not `EventLoop::auto_tick`: on a fresh worker
+`is_active()=false`, so `auto_tick` takes the `else` branch and calls
+`tick_without_idle()` → `us_loop_pump()`, which does not invoke the park
+hook. The next trace slice (`tick_turn` sub-stages) was added to localise
+the real fault site.
 
 ## Diagnostics
 
@@ -168,6 +173,15 @@ load-entry:wait:begin
   (load-entry:wait:auto-tick:begin / :end,  (first 4 iterations only, only if still pending after tick))
   load-entry:wait:resolved                  (printed once when the wait loop exits cleanly)
 load-entry:wait:end
+  tick:concurrent:initial:begin/end         (inside EventLoop::tick_turn, only on first tick call)
+  tick:gc-timer:initial:begin/end
+  tick:inner:tick-with-count:begin/end      (only on first inner iteration)
+  tick:inner:concurrent:begin/end           (only on first inner iteration)
+  tick:inner:rejected:begin/end             (only on first inner iteration)
+  tick:microtasks:begin/end
+  tick:tail:tick-with-count:begin/end        (only on first tail iteration)
+  tick:tail:concurrent:begin/end             (only on first tail iteration)
+  tick:rejected:final:begin                 (no :end — the function returns via ?)
 request:load-entry:end
 request:response-ready or request:error-ready
 ```
@@ -188,6 +202,12 @@ cleanly, which moved the failure boundary one level deeper into
 `EventLoop::wait_for_promise` (Phase 5) and required the second trace
 slice to split it.
 
+The Windows CI run on `7f0527f0f3` showed that `load-entry:wait:iter:0`
+and `load-entry:wait:tick:begin` printed but `tick:end` and
+`auto-tick:begin` did not, narrowing the crash to `EventLoop::tick`
+(Phase 5.1) and excluding `auto_tick` (Phase 5.2). The third trace
+slice added `tick_turn` sub-stages to pinpoint the failing micro-step.
+
 Sub-stages after both slices:
 
 1. `entry-eval:generate-entry` — `ServerEntryPoint::generate` (synthetic
@@ -206,36 +226,46 @@ Sub-stages after both slices:
    `wait_for_promise` and was still pending.
 5. `load-entry:wait:tick` — `EventLoop::tick` (microtask drain; this is
    where the synthetic `bun:main` body runs and writes
-   `__tspEmbeddedResponse`).
+   `__tspEmbeddedResponse`). Excluded by the latest run: the
+   `tick:begin` marker printed, the `tick:end` did not.
 6. `load-entry:wait:auto-tick` — `EventLoop::auto_tick` → runtime hook
    `tick` → `bun_runtime::jsc_hooks::auto_tick` → uSockets poll on
-   Windows (IOCP, `WSARecv` / `GetQueuedCompletionStatus`).
-7. `load-entry:wait:resolved` (with no preceding `:end`) — a fault
-   observed in promise-resolution bookkeeping (status polling, microtask
-   folding).
+   Windows (IOCP, `WSARecv` / `GetQueuedCompletionStatus`). Excluded
+   by the latest run: the crash is inside `tick`, so `auto-tick:begin`
+   never prints.
+7. `tick_turn` sub-stages (latest slice):
+   - `tick:concurrent:initial` — first `tick_concurrent` call
+   - `tick:gc-timer:initial` — `process_gc_timer` call
+   - `tick:inner:tick-with-count` — first-iter `tick_with_count` (drains
+     the task queue)
+   - `tick:inner:concurrent` — first-iter follow-up `tick_concurrent`
+   - `tick:inner:rejected` — first-iter `handle_rejected_promises`
+   - `tick:microtasks` — `drain_microtasks_with_global` (the most likely
+     site — synthetic `bun:main` body runs and writes
+     `__tspEmbeddedResponse` here)
+   - `tick:tail:tick-with-count` / `:concurrent` — tail refill loop
+   - `tick:rejected:final` — final `handle_rejected_promises` sweep
 
 The crash address `0xFFFFFFFFFFFFFFFF` (Windows `INVALID_HANDLE_VALUE` /
 `-1`) is consistent with a Windows HANDLE being dereferenced as a pointer.
-The latest CI run printed every `entry-eval:*` `:end` marker and reached
-`load-entry:wait:begin` but never printed `load-entry:wait:resolved` or
-any subsequent `wait:end` — the fault is therefore inside phase 5 or 6,
-most likely the `auto_tick` → uSockets Windows poll path. A new
-bun.report frame on the `31488de3e1` commit, symbolicated against the
-same-commit PDB (offsets can shift between separately linked binaries, so
-the previous mapping is supporting evidence only), should land in either
-`EventLoop::tick_turn` (microtask drain) or
-`bun_runtime::jsc_hooks::auto_tick` / `uws::Loop::wakeup` /
-`bun_io::waker::wake` to confirm.
+The latest CI run printed every `entry-eval:*` `:end` marker, reached
+`load-entry:wait:tick:begin`, but never printed `load-entry:wait:tick:end`
+— the fault is therefore inside `EventLoop::tick`, most likely in
+`tick_turn`'s microtask drain. A new bun.report frame on the latest
+commit, symbolicated against the same-commit PDB (offsets can shift
+between separately linked binaries, so the previous mapping is supporting
+evidence only), should land in `EventLoop::tick_turn` (microtask drain
+where the synthetic `bun:main` body runs) to confirm.
 
 ## Required validation
 
 Run Windows CI with the complete module-readiness lifecycle, owned entry
-path, and the segmented `load_entry_point` trace. The smoke test must pass
-the first request, repeated requests, and hot reload. If it still crashes,
-the segmented trace above will identify the failing sub-stage; use that
-boundary together with the same-commit PDB symbolication (offsets can shift
-between separately linked binaries, so the previous mapping is supporting
-evidence only) before changing any further runtime configuration.
+path, and the segmented `tick_turn` trace. The smoke test must pass the
+first request, repeated requests, and hot reload. If it still crashes, the
+`tick_turn` markers will identify the failing sub-stage; use that boundary
+together with the same-commit PDB symbolication (offsets can shift between
+separately linked binaries, so the previous mapping is supporting evidence
+only) before changing any further runtime configuration.
 
 ## Regression-prevention rules
 

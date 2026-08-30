@@ -668,9 +668,35 @@ impl EventLoop {
     }
 
     fn tick_turn(&mut self, scope: &mut crate::TopExceptionScope) -> Result<(), Stopped> {
+        // Forward the embedding startup trace through the VM reference so
+        // `tick_turn` can be split into its sub-stages. The previous trace
+        // slice (entry-eval:*, load-entry:wait:tick:auto-tick:*) narrowed
+        // the Windows first-call crash to `EventLoop::tick` — not
+        // `auto_tick` — and this slice pinpoints the failing sub-stage
+        // inside `tick_turn`. Six sub-stages are marked: the initial
+        // concurrent + gc-timer setup, the main `'tick:` inner loop, the
+        // microtask drain (the most likely site — synthetic `bun:main`
+        // body runs here), the tail refill loop, and the final
+        // rejected-promise sweep. Per-iteration markers inside the inner
+        // loop and the tail loop are rate-limited to the first iteration;
+        // the Windows crash is deterministic on iteration 1, so the
+        // cap is enough to capture it.
+        let trace: Option<fn(&str)> = self.vm_ref().startup_trace;
+        let trace_at = move |stage: &'static str| {
+            if let Some(callback) = trace {
+                callback(stage);
+            }
+        };
+
         let ctx = self.vm();
+
+        trace_at("tick:concurrent:initial:begin");
         self.tick_concurrent();
+        trace_at("tick:concurrent:initial:end");
+
+        trace_at("tick:gc-timer:initial:begin");
         self.process_gc_timer();
+        trace_at("tick:gc-timer:initial:end");
 
         // Note: reshaped for borrowck — `vm_ref()` is `&'static`, so the
         // global borrow detaches from `&self` and survives the `&mut self` call.
@@ -678,21 +704,47 @@ impl EventLoop {
         let global_vm = self.vm_ref().jsc_vm();
 
         let mut refills = 0u32;
+        let mut inner_iter: u32 = 0;
         'tick: loop {
             loop {
-                if self.tick_with_count(ctx)? == 0 {
+                let tracing = inner_iter < 1;
+                if tracing {
+                    trace_at("tick:inner:tick-with-count:begin");
+                }
+                let count = self.tick_with_count(ctx)?;
+                if tracing {
+                    trace_at("tick:inner:tick-with-count:end");
+                }
+                inner_iter += 1;
+                if count == 0 {
                     break;
                 }
                 if refills == Self::CONCURRENT_REFILLS_PER_TICK {
                     break 'tick;
                 }
                 refills += 1;
+                if tracing {
+                    trace_at("tick:inner:concurrent:begin");
+                }
                 self.tick_concurrent();
+                if tracing {
+                    trace_at("tick:inner:concurrent:end");
+                }
+                if tracing {
+                    trace_at("tick:inner:rejected:begin");
+                }
                 self.global_ref()
                     .handle_rejected_promises()
                     .map_err(|_| Stopped)?;
+                if tracing {
+                    trace_at("tick:inner:rejected:end");
+                }
             }
+
+            trace_at("tick:microtasks:begin");
             self.drain_microtasks_with_global(global, global_vm)?;
+            trace_at("tick:microtasks:end");
+
             if scope.has_exception() {
                 // Every task's exception was folded above; one still pending here escaped whoever
                 // produced it.
@@ -710,14 +762,31 @@ impl EventLoop {
             break;
         }
 
+        let mut tail_iter: u32 = 0;
         while refills < Self::CONCURRENT_REFILLS_PER_TICK {
-            if self.tick_with_count(ctx)? == 0 {
+            let tracing = tail_iter < 1;
+            if tracing {
+                trace_at("tick:tail:tick-with-count:begin");
+            }
+            let count = self.tick_with_count(ctx)?;
+            if tracing {
+                trace_at("tick:tail:tick-with-count:end");
+            }
+            tail_iter += 1;
+            if count == 0 {
                 break;
             }
             refills += 1;
+            if tracing {
+                trace_at("tick:tail:concurrent:begin");
+            }
             self.tick_concurrent();
+            if tracing {
+                trace_at("tick:tail:concurrent:end");
+            }
         }
 
+        trace_at("tick:rejected:final:begin");
         self.global_ref()
             .handle_rejected_promises()
             .map_err(|_| Stopped)
