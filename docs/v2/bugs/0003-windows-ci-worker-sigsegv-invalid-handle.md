@@ -182,6 +182,18 @@ load-entry:wait:end
   tick:tail:tick-with-count:begin/end        (only on first tail iteration)
   tick:tail:concurrent:begin/end             (only on first tail iteration)
   tick:rejected:final:begin                 (no :end — the function returns via ?)
+  drain-mt:release-weak-refs:begin/end      (inside EventLoop::drain_microtasks_with_global)
+  drain-mt:drain-microtasks:begin/end        (JSC__JSGlobalObject__drainMicrotasks FFI; this is
+                                            where the synthetic bun:main body's microtasks run)
+  drain-mt:deferred-tasks:begin/end          (deferred_tasks.run)
+  drain-mt:quic:begin/end                    (drain_quic_if_necessary; only on Windows-with-QUIC)
+  TSP_PRELUDE_ENTERED                        (console.log in wrap_for_bun_cli prelude; output
+                                            goes to the worker's stdout, captured by the
+                                            smoke script's diagnostic dump. If this prints,
+                                            the eager prelude (nanoid/zod/Bun builtins) ran
+                                            OK and the fault is later in the body; if it
+                                            does not print, the crash is during a Windows
+                                            HANDLE deref on a Bun builtin read.)
 request:load-entry:end
 request:response-ready or request:error-ready
 ```
@@ -207,6 +219,14 @@ and `load-entry:wait:tick:begin` printed but `tick:end` and
 `auto-tick:begin` did not, narrowing the crash to `EventLoop::tick`
 (Phase 5.1) and excluding `auto_tick` (Phase 5.2). The third trace
 slice added `tick_turn` sub-stages to pinpoint the failing micro-step.
+
+The Windows CI run on `ab1c2f2e6` showed `tick:microtasks:begin` printed
+but `tick:microtasks:end` did not, narrowing the crash to
+`EventLoop::drain_microtasks_with_global`. The fourth trace slice
+added `drain-mt:*` sub-stage markers and a `console.log('TSP_PRELUDE_ENTERED')`
+tripwire at the top of the synthetic `bun:main` body (printed via
+`wrap_for_bun_cli`) to distinguish eager-prelude HANDLE deref from
+later body / microtask scheduling fault.
 
 Sub-stages after both slices:
 
@@ -245,6 +265,26 @@ Sub-stages after both slices:
      `__tspEmbeddedResponse` here)
    - `tick:tail:tick-with-count` / `:concurrent` — tail refill loop
    - `tick:rejected:final` — final `handle_rejected_promises` sweep
+8. `drain_microtasks_with_global` sub-stages (newest slice):
+   - `drain-mt:release-weak-refs` — `jsc_vm.release_weak_refs()` C++ FFI
+   - `drain-mt:drain-microtasks` — `JSC__JSGlobalObject__drainMicrotasks`
+     C++ FFI; this is where the synthetic `bun:main` body microtasks
+     actually run
+   - `drain-mt:deferred-tasks` — `self.deferred_tasks.run()` (Rust; runs
+     queued host tasks)
+   - `drain-mt:quic` — `drain_quic_if_necessary` (Rust; uSockets QUIC
+     driver; only on Windows-with-QUIC)
+9. `TSP_PRELUDE_ENTERED` (newest slice) — `console.log` at the top of
+   `wrap_for_bun_cli`'s synthetic body, captured by the smoke script's
+   stdout dump. If this prints, the eager prelude (nanoid 5.1.6 inlined
+   source, zod 4.4.3 inlined source, `require("bun").SQL`,
+   `__tspUtilNs__ = Object.freeze({randomUUIDv7: Bun.randomUUIDv7, ...})`
+   referencing every bun builtin, `__tspServer` frozen object, etc.) ran
+   without dereferencing an invalid HANDLE. If it does not print, the
+   fault is in a Bun builtin's eager value fetch on Windows
+   (most likely candidates given the fault address: `Bun.password`,
+   `Bun.gzipSync` / `Bun.gunzipSync` — both pull in `Bun_SQLite3` /
+   zlib FFI — `Bun.file`, or `Bun.env`).
 
 The crash address `0xFFFFFFFFFFFFFFFF` (Windows `INVALID_HANDLE_VALUE` /
 `-1`) is consistent with a Windows HANDLE being dereferenced as a pointer.

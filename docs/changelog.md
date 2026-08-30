@@ -128,6 +128,23 @@ All notable changes to TSP will be documented in this file.
   (most likely `tick:microtasks:begin/end` for the
   `drain_microtasks_with_global` JSC microtask drain where the
   synthetic `bun:main` body runs).
+- Added `drain_microtasks_with_global` sub-stage markers
+  (`bun/src/jsc/event_loop.rs`): `drain-mt:release-weak-refs:begin/end`,
+  `drain-mt:drain-microtasks:begin/end`,
+  `drain-mt:deferred-tasks:begin/end`, `drain-mt:quic:begin/end`. The
+  Windows CI run on `ab1c2f2e6` showed `tick:microtasks:begin`
+  printed but `tick:microtasks:end` did not, narrowing the fault to
+  this function. The four markers split the 4-step drain to identify
+  the failing FFI or Rust call.
+- Added `console.log('TSP_PRELUDE_ENTERED')` tripwire at the top of
+  `wrap_for_bun_cli` (`bun/src/runtime/tsp/jsx.rs`) inside the
+  synthetic `bun:main` body. The synthetic body eagerly reads
+  `Bun.randomUUIDv7`, `Bun.hash`, `Bun.gzipSync`, `Bun.password`,
+  `Bun.env`, `Bun.file`, `Bun.which`, etc. when constructing
+  `__tspUtilNs__`. If the fault is a Windows HANDLE deref on one of
+  those builtin reads, this log won't print. If it prints, the fault
+  is later in the body. Output goes to the worker's stdout, which
+  `scripts/smoke-tspserver-v2.ps1` captures into the diagnostic dump.
 
 ### Test count
 332 tests, all green on 5 consecutive full-suite runs.

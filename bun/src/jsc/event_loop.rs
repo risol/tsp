@@ -1,4 +1,4 @@
-//! `jsc.EventLoop` — the JS-thread event loop.
+﻿//! `jsc.EventLoop` — the JS-thread event loop.
 //!
 //! `tick`/`enter`/`exit`/`drain_microtasks`/`run_callback`/concurrent-queue
 //! plumbing are real. The two hot dispatch loops (`tickQueueWithCount`'s
@@ -356,6 +356,31 @@ impl EventLoop {
             return Ok(());
         }
 
+        // Forward the embedding startup trace through the VM reference so
+        // the four sub-steps of the microtask drain can be split. The
+        // previous tick_turn slice narrowed the Windows first-call crash
+        // to drain_microtasks_with_global (tick:microtasks:begin printed,
+        // tick:microtasks:end did not); this slice pinpoints the failing
+        // FFI or Rust call. The four sub-stages:
+        //   1. release_weak_refs            (C++ FFI, JSC)
+        //   2. JSC__JSGlobalObject__drainMicrotasks (C++ FFI; this is
+        //      where the synthetic bun:main body's microtasks run)
+        //   3. deferred_tasks.run           (Rust; runs queued host tasks)
+        //   4. drain_quic_if_necessary      (Rust; uSockets QUIC driver)
+        let trace: Option<fn(&str)> = self.vm_ref().startup_trace;
+        let trace_at = move |stage: &'static str| {
+            if let Some(callback) = trace {
+                callback(stage);
+            }
+        };
+
+        trace_at("drain-mt:release-weak-refs:begin");
+        jsc::mark_binding();
+        jsc_vm.release_weak_refs();
+        trace_at("drain-mt:release-weak-refs:end");
+
+        trace_at("drain-mt:drain-microtasks:begin");
+
         jsc::mark_binding();
         jsc_vm.release_weak_refs();
 
@@ -367,6 +392,7 @@ impl EventLoop {
             drain_result::PENDING_EXCEPTION => return Ok(()),
             _ => unreachable!(),
         }
+        trace_at("drain-mt:drain-microtasks:end");
 
         // `Cell` write through `&VirtualMachine` — no `&mut VM` formed (would
         // overlap `&mut self: EventLoop`, which is a value field of the VM).
@@ -378,10 +404,13 @@ impl EventLoop {
         // on Windows the uSockets loop (`uws::Loop::get()`) is NOT
         // `event_loop_handle` (which is the libuv loop).
         if vm.event_loop_handle.is_some() {
+            trace_at("drain-mt:quic:begin");
             vm.uws_loop_mut().drain_quic_if_necessary();
+            trace_at("drain-mt:quic:end");
         }
 
         Ok(())
+
     }
 
     #[inline(always)]

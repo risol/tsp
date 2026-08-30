@@ -727,6 +727,17 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
     // connection that the page must `close()` (returning it to the
     // per-worker pool). See plan §17.1 for the per-worker pool
     // boundary.
+    // Tripwire for the Windows first-call crash diagnostic (BUG-0003):
+    // the synthetic `bun:main` body is evaluated inside JSC's microtask
+    // drain, and the eager prelude references `Bun.randomUUIDv7`,
+    // `Bun.hash`, `Bun.gzipSync`, `Bun.password`, `Bun.env`, etc. If the
+    // fault is in a Windows HANDLE deref during one of those builtin
+    // reads, this log won't print. If it prints, the fault is later
+    // in the body (handler invocation, microtask scheduling,
+    // `__tspEmbeddedResponse` write). Output goes to the worker's
+    // stdout, which `scripts/smoke-tspserver-v2.ps1` captures into the
+    // diagnostic dump.
+    out.push_str("console.log('TSP_PRELUDE_ENTERED');\n");
     out.push_str(
         "const __tspSqlNs__ = require(\"bun\").SQL;\n"
     );
