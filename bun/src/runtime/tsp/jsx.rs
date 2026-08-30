@@ -1142,7 +1142,13 @@ fn wrap_for_bun_cli_inner(
 /// well-known global for the native worker to read, and the wrapper does not
 /// call `process.exit`, which would tear down the embedded runtime.
 pub fn wrap_for_embedded_worker(transformed: &str, method: &str, ctx_json: Option<&str>) -> String {
-    let mut wrapped = wrap_for_bun_cli_inner(transformed, method, ctx_json, true);
+    // Load embedded request wrappers through CommonJS so a synchronous route
+    // does not create an ESM async-module resume microtask. The latter is the
+    // first failing JSC checkpoint on the Windows source build. Route exports
+    // are local declarations for this wrapper, so remove their markers before
+    // the file is loaded as CommonJS.
+    let transformed = strip_embedded_module_exports(transformed);
+    let mut wrapped = wrap_for_bun_cli_inner(&transformed, method, ctx_json, true);
     // A worker VM serves more than one request. Clear the previous request's
     // result before loading the next entry point so a failed execution cannot
     // accidentally reuse a stale envelope.
@@ -1159,6 +1165,28 @@ pub fn wrap_for_embedded_worker(transformed: &str, method: &str, ctx_json: Optio
     let stdout_error = "console.error(String(e && e.stack || e)); process.exit(1);";
     let embedded_error = "globalThis.__tspEmbeddedError = String(e && e.stack || e);";
     wrapped.replace(stdout_error, embedded_error)
+}
+
+/// Make route declarations valid inside the CommonJS request wrapper.
+///
+/// The wrapper selects `GET`/`POST` by local name and does not consume an ESM
+/// namespace. Removing declaration-level `export` markers therefore preserves
+/// the route contract while keeping the request file on the synchronous CJS
+/// loader path.
+fn strip_embedded_module_exports(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    for line in source.lines() {
+        let indent_len = line.len() - line.trim_start().len();
+        let (indent, trimmed) = line.split_at(indent_len);
+        if let Some(rest) = trimmed.strip_prefix("export ") {
+            out.push_str(indent);
+            out.push_str(rest);
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1334,6 +1362,16 @@ mod tests {
         );
         assert!(wrapped.contains("__tspRenderNodeSync__"));
         assert!(!wrapped.contains("const __tspResultPromise__ = Promise.resolve().then"));
+    }
+
+    #[test]
+    fn embedded_wrapper_removes_route_export_markers_for_commonjs_loading() {
+        let transformed = "export const config = { cache: 'no-store' };\nexport async function GET() { return 'ok'; }\n";
+        let wrapped = wrap_for_embedded_worker(transformed, "GET", None);
+        assert!(wrapped.contains("const config = { cache: 'no-store' }"));
+        assert!(wrapped.contains("async function GET()"));
+        assert!(!wrapped.contains("export const config"));
+        assert!(!wrapped.contains("export async function GET"));
     }
 
     #[test]

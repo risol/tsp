@@ -9,12 +9,29 @@
 mod protocol;
 
 use protocol::{ExecuteResponse, Message, ProtocolError};
+use crate::jsc::JSValue;
 
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
 #[cfg(not(unix))]
 use std::net::TcpStream;
 use std::io::{Read, Write};
+
+unsafe extern "C" {
+    fn Bun__REPL__setupGlobalRequire(
+        global_object: *const crate::jsc::JSGlobalObject,
+        cwd_ptr: *const u8,
+        cwd_len: usize,
+    );
+    fn Bun__REPL__evaluate(
+        global_object: *const crate::jsc::JSGlobalObject,
+        source_ptr: *const u8,
+        source_len: usize,
+        filename_ptr: *const u8,
+        filename_len: usize,
+        exception: *mut JSValue,
+    ) -> JSValue;
+}
 
 pub fn requested() -> bool {
     bun_core::argv()
@@ -175,6 +192,7 @@ where
 struct EmbeddedVm {
     vm: &'static mut crate::jsc::VirtualMachineRef,
     _log: &'static mut bun_ast::Log,
+    global_require_ready: bool,
     // `VirtualMachine::set_main` stores a borrowed slice. Normal Bun entry
     // paths live in process-lifetime argv storage; TSP paths arrive in an IPC
     // request and would otherwise dangle after that request is dropped.
@@ -251,6 +269,7 @@ impl EmbeddedVm {
         Ok(Self {
             vm,
             _log: log,
+            global_require_ready: false,
             entry_path: Vec::new(),
         })
     }
@@ -263,15 +282,97 @@ impl EmbeddedVm {
             return self.execute_path(&request.path);
         }
         let path = std::env::temp_dir().join(format!(
-            "tsp-embedded-worker-{}-{}.tsx",
+            "tsp-embedded-worker-{}-{}.cts",
             std::process::id(),
             NEXT_SCRIPT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::write(&path, &request.script)
             .map_err(|error| format!("failed to materialize request script: {error}"))?;
-        let result = self.execute_path(&path.to_string_lossy());
+        let result = self.execute_embedded_path(&path);
         let _ = std::fs::remove_file(path);
         result
+    }
+
+    /// Load one request wrapper through CommonJS and evaluate the module
+    /// synchronously. The old path imported every wrapper from synthetic
+    /// `bun:main`, which created an ESM async-module resume microtask even for
+    /// a synchronous route. On Windows that first JSC checkpoint is where the
+    /// source-built worker faults. CommonJS evaluation keeps the route and
+    /// wrapper in one module scope and returns before any module-resume job is
+    /// needed.
+    fn execute_embedded_path(&mut self, path: &std::path::Path) -> Result<String, String> {
+        startup_trace("request:api-lock:begin");
+        let _api_lock = self.vm.global().vm().get_api_lock();
+        startup_trace("request:api-lock:acquired");
+
+        if !self.global_require_ready {
+            let cwd = path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."));
+            let cwd = cwd
+                .to_str()
+                .ok_or_else(|| "embedded worker temp directory is not UTF-8".to_string())?;
+            // SAFETY: the global object is live for the VM lifetime and the
+            // UTF-8 cwd slice remains valid for the duration of the FFI call.
+            unsafe {
+                Bun__REPL__setupGlobalRequire(self.vm.global(), cwd.as_ptr(), cwd.len());
+            }
+            self.global_require_ready = true;
+        }
+
+        let path = path
+            .to_str()
+            .ok_or_else(|| "embedded worker request path is not UTF-8".to_string())?;
+        let source = format!("require({});", js_string_literal(path));
+        let filename = b"[tsp-embedded-worker]";
+        let mut exception = JSValue::UNDEFINED;
+        // SAFETY: all pointers refer to live byte slices for the duration of
+        // the synchronous call; `global` is the VM's live opaque handle and
+        // `exception` is a stack out-parameter understood by the C++ shim.
+        unsafe {
+            let _ = Bun__REPL__evaluate(
+                self.vm.global(),
+                source.as_ptr(),
+                source.len(),
+                filename.as_ptr(),
+                filename.len(),
+                &raw mut exception,
+            );
+        }
+        if !exception.is_undefined() && !exception.is_null() {
+            let detail = self
+                .read_global_string("_error")?
+                .unwrap_or_else(|| "unknown JavaScript exception".to_string());
+            return Err(format!("embedded TSP wrapper evaluation failed: {detail}"));
+        }
+
+        if let Some(value) = self.read_global_string("__tspEmbeddedResponse")? {
+            startup_trace("request:response-ready");
+            return Ok(value);
+        }
+        if let Some(error) = self.read_global_string("__tspEmbeddedError")? {
+            startup_trace("request:error-ready");
+            return Err(error);
+        }
+
+        // Async handlers and Response.text() still use ordinary Promise jobs.
+        // They are not ESM module-resume jobs, so drive the normal event loop
+        // only when the synchronous wrapper did not publish a result.
+        startup_trace("load-entry:wait:begin");
+        for _ in 0..10_000 {
+            if let Some(value) = self.read_global_string("__tspEmbeddedResponse")? {
+                startup_trace("request:response-ready");
+                return Ok(value);
+            }
+            if let Some(error) = self.read_global_string("__tspEmbeddedError")? {
+                startup_trace("request:error-ready");
+                return Err(error);
+            }
+            self.vm.event_loop_mut().tick();
+            self.vm.auto_tick();
+            std::thread::yield_now();
+        }
+        Err("embedded TSP wrapper did not produce a response".into())
     }
 
     fn execute_path(&mut self, path: &str) -> Result<String, String> {
@@ -373,6 +474,25 @@ impl EmbeddedVm {
             .map_err(|error| format!("{error:?}"))?;
         Ok(Some(String::from_utf8_lossy(value.slice()).into_owned()))
     }
+}
+
+fn js_string_literal(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\0' => out.push_str("\\0"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 static NEXT_SCRIPT_ID: std::sync::atomic::AtomicU64 =

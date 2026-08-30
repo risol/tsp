@@ -224,7 +224,6 @@ jobs:
         shell: pwsh
         env:
           TSP_WORKER_STARTUP_TRACE: '1'
-          BUN_JSC_useConcurrentJIT: '0'
         run: ./scripts/smoke-tspserver-v2.ps1 -ServerBinary dist/tsp-v2/tspserver_v2.exe
 
   smoke-macos:
