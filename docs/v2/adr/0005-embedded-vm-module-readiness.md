@@ -49,7 +49,9 @@ request path into that buffer and passes the stable slice to
    When a failure is inside `JSC::VM::drainMicrotasks`, check the pinned engine
    for upstream CodeBlock or microtask-cache fixes before changing TSP event-loop
    or handle logic. Validate the selected release's target ABI, rebuild the
-   native binary, and run the Windows embedded-worker smoke test.
+   native binary, and run the Windows embedded-worker smoke test. A local
+   pass or an engine change alone is not sufficient; the target Windows CI
+   path must pass before recording the engine update as the root-cause fix.
 
 ## Consequences
 

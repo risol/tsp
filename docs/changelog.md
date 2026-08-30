@@ -98,12 +98,16 @@ All notable changes to TSP will be documented in this file.
   `JSC::VM::drainMicrotasks()` sub-stages. BUG-0003 remains open pending the
   next Windows CI result.
 
-### Fixed
-- Windows embedded-worker SIGSEGV during the first module checkpoint: the
-  WebKit/JSC pin now uses `b9a6abf2d598`, which contains WebKit's
+### In progress
+- BUG-0003 candidate: the embedded worker now prepares weak references and
+  performs a synchronous GC opportunity before its first event-loop turn,
+  then waits for the original module-evaluation promise. The local Windows
+  smoke test passes; Windows CI confirmation is pending.
+- The WebKit/JSC pin now uses `b9a6abf2d598`, which contains WebKit's
   `MicrotaskCallCache` invalidation when detached `CodeBlock` objects are
-  deleted. The candidate passes the local Windows embedded-worker smoke test;
-  Windows CI confirmation is pending.
+  deleted. Windows CI run `33319229316` still failed at the same JSC
+  microtask-drain boundary, so this dependency update is not recorded as the
+  BUG-0003 fix.
 - ~~Windows first-call SIGSEGV in the TSP embedded worker at
   `0xFFFFFFFFFFFFFFFF`. The `VirtualMachine::init` call leaves
   `uws::Loop::internal_loop_data.jsc_vm` non-null, so the JSC park hook
