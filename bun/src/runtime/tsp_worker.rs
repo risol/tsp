@@ -240,6 +240,12 @@ impl EmbeddedVm {
             vm.env_loader(),
         );
         vm.load_extra_env_and_source_code_printer();
+        // Match the process-main CLI boot path. `VmRole::ProcessMain` sets
+        // the per-VM flag during construction; set the thread-local marker as
+        // well so native/JSC helpers observe the same main-VM state while the
+        // embedded worker is evaluating modules.
+        vm.is_main_thread = true;
+        crate::jsc::virtual_machine::VirtualMachine::set_is_main_thread_vm(true);
         startup_trace("runtime-config:end");
 
         Ok(Self {
@@ -271,17 +277,16 @@ impl EmbeddedVm {
     fn execute_path(&mut self, path: &str) -> Result<String, String> {
         // JSC requires its API lock to be held while loading modules and
         // driving the event loop. This is especially strict on Windows,
-        // where the embedded worker uses TCP for the master connection.
-        let this = self as *mut Self;
+        // where the embedded worker uses TCP for the master connection. Keep
+        // the guard for the whole worker lifetime, matching Bun CLI's
+        // `Run::start` path instead of entering/exiting through the callback
+        // trampoline for every request.
         startup_trace("request:api-lock:begin");
-        unsafe {
-            let result = (*this).vm.run_with_api_lock(|| {
-                startup_trace("request:api-lock:acquired");
-                (*this).execute_path_with_api_lock(path)
-            });
-            startup_trace("request:api-lock:end");
-            result
-        }
+        let _api_lock = self.vm.global().vm().get_api_lock();
+        startup_trace("request:api-lock:acquired");
+        let result = self.execute_path_with_api_lock(path);
+        startup_trace("request:api-lock:end");
+        result
     }
 
     fn execute_path_with_api_lock(&mut self, path: &str) -> Result<String, String> {
@@ -310,30 +315,10 @@ impl EmbeddedVm {
         self.entry_path.clear();
         self.entry_path.extend_from_slice(path.as_bytes());
         startup_trace("request:load-entry:begin");
-        let promise = {
-            let (vm, entry_path) = (&mut *self.vm, self.entry_path.as_slice());
-            vm.reload_entry_point(entry_path)
-                .map_err(|error| format!("{error:?}"))?
-        };
-        startup_trace("request:load-entry:reload-end");
-
-        // A synchronous embedded wrapper can publish its response while the
-        // synthetic bun:main module is evaluated. Check that result before
-        // entering the JSC microtask queue. Async handlers still fall through
-        // to the normal promise wait below.
-        if let Some(value) = self.read_global_string("__tspEmbeddedResponse")? {
-            startup_trace("request:response-ready");
-            return Ok(value);
-        }
-        if let Some(error) = self.read_global_string("__tspEmbeddedError")? {
-            startup_trace("request:error-ready");
-            return Err(error);
-        }
-        startup_trace("load-entry:wait:begin");
-        let _ = self
-            .vm
-            .wait_for_promise(crate::jsc::AnyPromise::Internal(promise));
-        startup_trace("load-entry:wait:end");
+        let (vm, entry_path) = (&mut *self.vm, self.entry_path.as_slice());
+        let _ = vm
+            .load_entry_point(entry_path)
+            .map_err(|error| format!("{error:?}"))?;
         startup_trace("request:load-entry:end");
 
         for _ in 0..10_000 {
