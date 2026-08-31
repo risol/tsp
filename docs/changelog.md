@@ -4,6 +4,20 @@ All notable changes to TSP will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-31
+
+### Fixed
+- stabilized embedded worker recovery after a worker disconnects, while
+  avoiding automatic replay of non-idempotent requests.
+- disabled the JSC/Bun source caches that could terminate an embedded worker
+  during repeated route compilation.
+
+### Changed
+- removed the temporary architecture version from the TSP CLI, documentation,
+  CI, package layout, type declarations, and release asset names.
+- removed obsolete legacy architecture notes and the old development progress
+  log.
+
 ## [0.3.0] - 2026-08-31
 
 ### Added

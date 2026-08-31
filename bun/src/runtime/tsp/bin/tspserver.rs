@@ -51,7 +51,7 @@ use bun_runtime_tsp::worker::application::{Application, ApplicationRegistry, Wor
 /// "the host binary prints its version and exits";
 /// a future slice will lift this from `Cargo.toml`
 /// or wire it to the bun revision at build time.
-const VERSION: &str = "tspserver 0.3.0";
+const VERSION: &str = "tspserver 0.3.1";
 
 pub fn run() -> ExitCode {
     match std::env::args().nth(1).as_deref() {
