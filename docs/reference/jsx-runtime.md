@@ -1,28 +1,12 @@
-# TSP JSX Runtime Contract
+# JSX runtime
 
-> Phase 0 topic doc. Source of truth: `../tsp-specification.md` §11-§12
-> and `../tsp-plan.md` §11-§12, §60 freeze items 9, 10.
+TSP JSX is a server-rendering runtime. It produces HTML during the request;
+it does not ship a client virtual DOM and does not implement React hooks,
+hydration, or event handlers.
 
-The TSP JSX runtime is the framework's server-side element tree. It is
-**not React**. The element tree is the server-render model; the host
-walks it to produce HTML bytes that ship in the response body.
+## TypeScript configuration
 
-## What the runtime is NOT
-
-- It is not React. There is no reconciliation, no `useState`, no
-  `useEffect`, no `useLayoutEffect`, no hooks at all (plan §12.3).
-- It is not a client runtime. There is no client hydration, no
-  virtual DOM diff, no event handler attachment on the server.
-- It is not a JSX-as-React-Element surface. JSX compiles to calls
-  to the TSP JSX runtime, not to `React.createElement`.
-
-The element tree is a server-render tree. The host walks it once,
-synchronously (or with `await` for async components, see below) to
-produce the byte stream.
-
-## JSX compilation
-
-TypeScript / TSX configuration:
+Use the automatic JSX runtime:
 
 ```json
 {
@@ -33,125 +17,89 @@ TypeScript / TSX configuration:
 }
 ```
 
-JSX is compiled to:
+The host supplies the runtime used by the generated page module. Generate
+matching declarations with `tspserver typings --out .tsp-types`.
 
-```ts
-import { jsx, jsxs, Fragment } from "tsp/jsx-runtime";
-
-const tree = jsx("h1", { children: "Hello" });
-const tree2 = jsxs("ul", { children: [a, b, c] });
-const tree3 = jsx(Fragment, { children: [a, b] });
-```
-
-`tsp/jsx-runtime` is a `tsp:*` builtin module (see `context.md` /
-freeze 8). The `jsx` / `jsxs` / `Fragment` functions are
-host-implemented; they return an `HtmlNode` opaque to the
-application.
-
-## The child-rendering rules (freeze 9)
-
-The renderer walks a node's `children` slot. Each child is processed
-by this table:
-
-| child value            | output                                                |
-|------------------------|-------------------------------------------------------|
-| `null` / `undefined`   | empty                                                 |
-| `true` / `false`       | empty                                                 |
-| number                 | its string form (e.g. `42`)                           |
-| string                 | HTML-escaped (`<script>` -> `&lt;script&gt;`)         |
-| array                  | recursively flattened, each item per this table       |
-| `HtmlNode`             | rendered as its element                                |
-| anything else (object) | `TSP3102: object cannot be rendered as an HTML child` |
-
-These rules are the XSS-by-default contract. Any string child is
-escaped; the only way to ship unescaped HTML is the explicit
-`raw(trustedHtml)` from `tsp:html`.
-
-## Attribute rules (freeze 9)
-
-| attribute value      | output                                                |
-|----------------------|-------------------------------------------------------|
-| string               | HTML-escaped                                          |
-| number               | stringified                                           |
-| `true`               | the bare attribute name (e.g. `<input disabled>`)     |
-| `false` / `null` / `undefined` | attribute dropped                           |
-| function             | `TSP3105: function-valued HTML attributes are not serializable` (runtime error) |
-| `HtmlNode`           | not allowed as an attribute value                     |
-
-Function-valued attributes are a hard error on the server. There is
-no `onClick={fn}` model; client interactivity arrives through
-fragment URLs + form posts.
-
-## Raw HTML (freeze 9)
-
-Raw HTML is opt-in via the `raw(...)` helper from `tsp:html`:
-
-```tsx
-import { raw } from "tsp:html";
-
-const trusted: TrustedHtml = raw("<b>pre-escaped content</b>");
-return <div>{trusted}</div>;
-```
-
-`raw(...)` returns a `TrustedHtml` brand type. The renderer audits
-the brand before splicing the bytes into the output; unbranded
-strings cannot reach the `raw(...)` path. The name `raw` is the
-warning.
-
-## Components (function + async, freeze 10)
-
-A function component is a `function` or `const` that takes a `props`
-object and returns an `HtmlNode`:
+## Elements and components
 
 ```tsx
 function Greeting({ name }: { name: string }) {
   return <strong>Hello {name}</strong>;
 }
-```
 
-An async function component is first-class (freeze 10):
+async function User({ id }: { id: string }) {
+  const name = await loadName(id);
+  return <Greeting name={name} />;
+}
 
-```tsx
-async function UserName({ id }: { id: number }) {
-  const user = await db.users.get(id);
-  return <span>{user.name}</span>;
+export function GET() {
+  return <main><User id="42" /></main>;
 }
 ```
 
-The renderer accepts `Promise<HtmlNode>` in any child position and
-awaits it before continuing. Nested promises flatten.
+Function components receive props and return a renderable node. Async
+components are awaited and may be nested in children.
 
-Components MUST be pure with respect to their props. Side effects
-(DB writes, network requests beyond `await`, etc.) are allowed
-inside async components but the component MUST still return an
-`HtmlNode` (not `void`).
+## Children
 
-## Fragment
+| Value | Rendering |
+| --- | --- |
+| string | escaped text when used as a child |
+| number or bigint | decimal text |
+| `null` or `undefined` | empty |
+| boolean | empty |
+| array | recursively flattened |
+| promise | awaited, then rendered |
+| JSX node | recursively rendered |
+| unsupported object | rendering error |
 
-`<>...</>` and `<Fragment>...</Fragment>` are equivalent. The
-runtime flattens fragments at render time; they do not appear in
-the output HTML.
+A top-level string is treated as an HTML response body. Strings nested inside
+JSX are escaped.
 
-## Class names
+## Attributes
 
-For current contract, both `class` and `className` are accepted; the canonical
-output uses the HTML-native `class`. The same applies to `for` /
-`htmlFor`. The runtime does not invent a different naming
-convention. See `../tsp-plan.md` §11.5.
+- strings and numbers are escaped and serialized;
+- `true` emits a boolean attribute;
+- `false`, `null`, and `undefined` omit the attribute;
+- `className` becomes `class`;
+- `htmlFor` becomes `for`;
+- function-valued attributes fail because there is no client event runtime;
+- object-valued attributes fail because they are not serializable.
 
-## What is NOT in current contract
+For example:
 
-These are explicitly deferred:
+```tsx
+return <input disabled={isBusy} value={userInput} />;
+```
 
-- Streaming / partial responses. current contract renders the full body
-  before sending (plan §13).
-- Error boundaries per component. current contract lets the handler-level
-  error path take over; component-level `<Boundary>` arrives in
-  future release (plan §12.4).
-- React compatibility. The optional `@tsp/react` package (plan
-  §66) lets a single handler return a React render result; it is
-  not current contract.
-- Server Components / RSC. Not in scope.
-- Web Components / custom elements. Plain HTML elements only in
-  current contract; custom elements arrive when the JSX type-check widens
-  (slice 9+).
+## Raw HTML
+
+Use `raw` only for content that has already been sanitized or generated by a
+trusted renderer:
+
+```tsx
+import { raw } from "tsp:html";
+
+return <article>{raw(markdownToSafeHtml(source))}</article>;
+```
+
+Ordinary strings never bypass escaping. `raw` is an explicit security boundary
+and does not sanitize its input.
+
+## Fragments
+
+JSX fragments do not emit wrapper elements:
+
+```tsx
+return <><h1>Title</h1><p>Body</p></>;
+```
+
+HTTP fragments are a separate feature. Use the `fragment` helper and
+`ctx.fragment()` as described in the [Context reference](./context.html).
+
+## Rendering limits
+
+The current runtime renders the complete response before sending it. It does
+not provide response streaming, client hydration, server actions, or React
+compatibility. Function-valued DOM attributes are not a substitute for client
+interactivity; use ordinary HTTP requests and fragment URLs.

@@ -1,78 +1,109 @@
-# TSP Embedded Bun Worker
+# Embedded worker operations
 
-TSP embedded-worker ships one `tspserver` executable. It runs a Rust Master and
-persistent Bun Worker child processes connected by
-the versioned `TSPW` IPC protocol. The Master owns HTTP, routing, request
-context, scheduling, deadlines, and worker replacement. Each Worker owns one
-embedded Bun VM and never launches a Bun grandchild.
+The packaged TSP runtime is one `tspserver` executable. The Rust master starts
+and supervises embedded Bun worker processes; deployment does not require a
+separate worker binary.
 
-## Build
+## Process model
 
-The root workflow builds the single runtime executable:
-
-```bash
-./tsp.sh build
+```text
+tspserver master
+  ├── worker 1: JavaScript runtime + page modules
+  ├── worker 2: JavaScript runtime + page modules
+  └── ...
 ```
 
-The packaged runtime, default `tsp.config.json`, pages, and public assets are
-written to `dist/tspserver/`. No separate runtime manifest is required because
-the Master creates worker children automatically from the packaged executable.
+The master owns HTTP, routing, request admission, deadlines, worker
+replacement, sessions, and services. Each worker owns its process-local module
+state and evaluates one request at a time up to the configured admission
+limit.
 
-## Run
+The worker protocol is native and private. Route code must not read standard
+input to implement cancellation or worker control; embedded workers receive
+control messages through the native protocol.
+
+## Run a packaged server
+
+From an application directory containing `pages/` and `public/`:
 
 ```bash
 TSP_PORT=9137 \
-TSP_ROUTES_DIR="$PWD/tests/smoke/pages" \
-./tsp.sh start
+TSP_ROUTES_DIR="$PWD/pages" \
+TSP_PUBLIC_DIR="$PWD/public" \
+./tspserver
 ```
 
-On Linux the Master pre-forks worker children before it starts request and
-watcher threads. On Windows it self-spawns the same executable in an internal
-`--tsp-worker` mode. Neither deployment needs a separate Bun executable.
+On Windows PowerShell:
 
-## Configuration
+```powershell
+$env:TSP_PORT = "9137"
+$env:TSP_ROUTES_DIR = "$PWD\pages"
+$env:TSP_PUBLIC_DIR = "$PWD\public"
+.\tspserver.exe
+```
 
-The package includes the root `tsp.config.json` as its default configuration.
-Use `tspserver --config <PATH>` (or `-c <PATH>`) to select another file. The
-resolution order is the command-line flag, `TSP_CONFIG`, then
-`./tsp.config.json`. `tsp.sh start` and `tsp.sh dev` automatically use the
-repository-root configuration unless `TSP_CONFIG` or `--config` overrides it.
+The binary defaults to port `3000`; the repository wrapper defaults to `9000`.
 
-## Operational settings
+## Worker settings
 
-- `TSP_WORKER_COUNT`: number of isolated Worker processes.
-- `TSP_WORKER_MAX_IN_FLIGHT`: bounded Master-side admission capacity.
-- `TSP_WORKER_MAX_REQUESTS`: recycle a Worker after a request count.
-- `TSP_WORKER_MAX_AGE_MS`: recycle a Worker after an age limit.
-- `TSP_WORKER_MAX_MEMORY_BYTES`: recycle on Linux RSS.
-- `TSP_CGROUP_ROOT`: explicit Linux cgroup v2 parent for optional limits.
-- `TSP_WORKER_MEMORY_MAX`, `TSP_WORKER_CPU_MAX`, `TSP_WORKER_PIDS_MAX`:
-  optional cgroup v2 limits.
+Set `TSP_WORKER_COUNT` to choose the number of worker processes. The default is
+`1`. `TSP_WORKER_MAX_IN_FLIGHT` bounds concurrent requests per pool and
+defaults to twice the worker count.
 
-Resource limits are disabled by default. A cgroup root must be explicitly
-configured; the application never writes to an inferred or system-wide cgroup.
+Optional recycling settings are:
 
-## Verification
+```text
+TSP_WORKER_MAX_REQUESTS
+TSP_WORKER_MAX_AGE_MS
+TSP_WORKER_MAX_MEMORY_BYTES
+```
 
-The smoke test checks repeated requests, Prometheus metrics, and hot reload:
+On Linux, optional cgroup v2 limits are configured with `TSP_CGROUP_ROOT`,
+`TSP_WORKER_MEMORY_MAX`, `TSP_WORKER_CPU_MAX`, and `TSP_WORKER_PIDS_MAX`.
+
+## Development and reload
+
+The server watches the route tree and supported local dependencies. A change
+builds a candidate page generation and publishes it only after validation.
+Requests already in flight remain on their original generation. If the build
+fails, the last known-good generation remains available.
+
+With multiple workers, `TSP_INVALIDATION_FILE` can be used as the shared
+cross-worker invalidation log. Ensure the path is writable and visible to all
+workers.
+
+## Sessions
+
+Sessions use the in-process memory backend by default. Set `TSP_REDIS_URL` to
+select the Redis backend. Session data is host-owned and survives page reloads;
+page code accesses it through `ctx.session`.
+
+## Diagnostics
+
+Use the following commands before starting a deployment:
+
+```bash
+tspserver check --tsc
+tspserver routes --json
+tspserver graph --json
+```
+
+For a local checkout, run the embedded-worker smoke test:
 
 ```bash
 ./tsp.sh test:smoke
 ```
 
-Worker Manager integration tests use a protocol-only test Worker and cover
-reuse, heartbeat, crash replacement, timeout replacement, pool admission, and
-the platform transport adapter:
+Set `TSP_DEVELOPMENT=1` for detailed page error HTML during local debugging.
+Set `TSP_WORKER_STARTUP_TRACE=1` only when diagnosing native startup stages;
+the trace is environment-gated and should not be enabled by default.
 
-```bash
-cargo test -p bun_runtime_tsp --test worker_integration --no-fail-fast
-```
+## Platform notes
 
-For latency baselines, run the packaged executable directly:
+Windows worker smoke tests must use redirected, non-interactive standard I/O,
+matching CI. The packed Windows `Fd` representation, process-relative VM
+roles, and module-readiness lifecycle are documented in the
+[architecture records](./reference/adr/).
 
-```bash
-./scripts/benchmark-tspserver.sh \
-  dist/tspserver/tspserver \
-  tests/smoke/pages \
-  50
-```
+For allocator or worker crashes, consult the verified [bug records](./reference/bugs/)
+before adding a runtime workaround.

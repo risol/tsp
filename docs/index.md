@@ -1,38 +1,62 @@
-# TSP Documentation
+# TSP documentation
 
-TSP is a native Rust web runtime for `.tsp` pages. It combines a Rust HTTP
-host with embedded Bun workers and a page-oriented TypeScript development model.
+TSP is a native Rust web runtime for TypeScript Server Pages. A Rust host
+owns HTTP, routing, configuration, sessions, workers, and reloads. Embedded
+Bun workers evaluate application TypeScript and TSX.
 
-## Start here
+This documentation describes the runtime shipped by this repository. Future
+ideas are labelled explicitly and are not part of the current contract.
 
-- [Project overview and design features](https://github.com/risol/tsp#readme)
-- [Download the latest prebuilt release](https://github.com/risol/tsp/releases/latest)
-- [Embedded worker deployment guide](./worker.html)
-- [Release and CI guide](./github-ci-cd.html)
+## Choose a path
 
-## Architecture
+### New to TSP
 
-- [TSP specification](./tsp-specification.html) — normative runtime and
-  application contract.
-- [Architecture and implementation plan](./tsp-plan.html) — design rationale,
-  milestones, risks, and implementation details.
-- [Phase 0 specification index](./reference/spec.html) — a guided map of the
-  reference documents.
+- [Getting started](./getting-started.html) — install a release, create a
+  route, and run the server.
+- [Application configuration](./configuration.html) — environment variables,
+  `tsp.config.json`, and generated typings.
+- [Examples](./reference/examples/) — small route modules covering common
+  request and rendering patterns.
 
-## Application reference
+### Building an application
 
-- [Frozen application contract](./reference/contract.html)
-- [`.tsp` module format](./reference/tsp-module.html)
-- [Request context and built-in modules](./reference/context.html)
-- [JSX runtime](./reference/jsx-runtime.html)
-- [Route examples](./reference/examples/)
+- [`.tsp` module format](./reference/tsp-module.html) — exports, imports, and
+  filesystem routing.
+- [Context and server APIs](./reference/context.html) — requests, cookies,
+  sessions, services, responses, and built-in modules.
+- [JSX runtime](./reference/jsx-runtime.html) — server rendering, escaping,
+  components, and fragments.
+- [Current contract](./reference/contract.html) — the short compatibility
+  checklist for application code.
 
-## Engineering records
+### Operating TSP
 
+- [Worker and deployment guide](./worker.html) — the embedded worker model,
+  limits, diagnostics, and smoke tests.
+- [Configuration reference](./configuration.html) — complete runtime
+  settings and precedence rules.
+- [Troubleshooting](./troubleshooting.html) — common startup, route, reload,
+  and request failures.
+- [GitHub CI/CD](./github-ci-cd.html) — checks, release builds, and local
+  verification.
+
+### Maintaining TSP
+
+- [Runtime specification](./tsp-specification.html) — normative behavior.
+- [Architecture and roadmap](./tsp-plan.html) — implementation boundaries,
+  lifecycle, and planned work.
+- [Reference map](./reference/spec.html) — where each rule is documented.
 - [Architecture decision records](./reference/adr/)
 - [Verified bugs and regressions](./reference/bugs/)
 - [Changelog](./changelog.html)
 
-This directory is the documentation source for the project's future GitHub
-Pages site. Configure GitHub Pages to publish from the `docs/` directory on the
-default branch.
+## Documentation rules
+
+`reference/contract.md` summarizes the current public surface. The detailed
+normative rules live in `tsp-specification.md`. The architecture plan is
+non-normative: it explains ownership and direction but cannot expand the
+current API by itself.
+
+Examples should be checked with `tspserver check --tsc` before they are
+treated as canonical. If an implementation and a document disagree, record
+the discrepancy first; do not silently document an unimplemented feature.

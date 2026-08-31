@@ -1,64 +1,84 @@
 # GitHub CI/CD
 
-This repository's GitHub automation is intentionally configured to avoid
-metered GitHub services.
+TSP uses GitHub Actions for native checks, embedded-worker smoke tests, and
+tagged release packages.
 
 ## Workflows
 
-- `.github/workflows/ci.yml` runs native tests and the embedded-worker smoke
-  test for Linux, Windows, and macOS on standard GitHub-hosted runners. It
-  runs for pull requests and pushes to both `master` and `main`.
-- `.github/workflows/release.yml` runs only when a `v*` tag is pushed. It builds
-  and uploads the embedded-worker package for the three desktop targets,
-  then publishes the draft GitHub Release.
+### `ci.yml`
 
-## Cost protection
+Pull requests and pushes to `master` and `main` run:
 
-- All runners use standard labels such as `ubuntu-latest`, `windows-latest`,
-  and `macos-latest`.
-- Larger GitHub-hosted runners are not used.
-- No self-hosted runner is required.
-- No Actions artifacts are uploaded.
-- No Docker image is pushed automatically.
-- No external deployment service, cloud account, or paid secret is used.
-- CI cancels obsolete runs for the same branch or pull request.
-- Release builds require an explicit version tag, so normal pushes do not
-  start the release workflow.
-- The embedded-worker release job builds the Bun fork and native host on the same
-  standard runners; it does not use a paid build service or persistent build
-  machine.
+- Linux native Rust tests and host checking;
+- Windows native checks and process-model tests;
+- macOS native checks and process-model tests;
+- Linux, Windows, and macOS embedded-worker smoke tests; and
+- release-build packaging checks.
 
-GitHub currently documents standard GitHub-hosted runner usage as free for
-public repositories. If the repository is later made private, these workflows
-must be reviewed before use because private-repository quotas and billing are
-different.
+The workflow pins the Rust toolchain to `nightly-2026-07-20` and uses Bun
+`1.3.14` for the bootstrap step.
 
-## Release procedure
+### `release.yml`
 
-```bash
-git tag v0.1.6
-git push origin v0.1.6
-```
-
-The release workflow creates a draft, uploads the Linux, Windows, and macOS
-embedded-worker packages, then publishes the release only after all builds
-and smoke tests succeed.
+Pushing a tag matching `v*` creates a draft release, builds the three supported
+targets, runs smoke tests, uploads archives, and publishes the release after
+all target jobs succeed.
 
 ## Local verification
 
-Build and package the single-file runtime:
+From the repository root:
+
+```bash
+./tsp.sh check
+./tsp.sh test:rust
+./tsp.sh test:smoke
+```
+
+For a complete packaged runtime:
 
 ```bash
 ./tsp.sh build
+./tsp.sh test
 ```
 
-Run the embedded-worker and hot-reload smoke test using the packaged executable:
+The build creates the single-file runtime, copies the host executable into
+`dist/tspserver`, and packages the route and public roots with
+`tsp.config.json`.
+
+Application-level inspection is available without a full build when a host
+binary already exists:
 
 ```bash
-sh ./scripts/smoke-tspserver.sh \
-  dist/tspserver/tspserver
+./tsp.sh check:app
+./tsp.sh routes
+./tsp.sh graph
+./tsp.sh typings
 ```
 
-On Windows, use `scripts/smoke-tspserver.ps1` with the `.exe` path. The package
-contains one runtime executable and the default `tsp.config.json`; the Master
-creates worker children automatically.
+## Release checklist
+
+1. Run `tspserver check --tsc` against the application routes.
+2. Run focused Rust and worker integration tests.
+3. Build and package the release binary.
+4. Verify the packaged `tsp.config.json`, `pages/`, and `public/` content.
+5. Run the platform smoke tests using redirected, non-interactive I/O.
+6. Push the version tag and wait for every release matrix job.
+7. Confirm the generated archives and release notes before publishing.
+
+## Cost and permission boundaries
+
+The workflows use read-only repository permissions for CI. The release
+workflow requests contents write permission only to create and upload tagged
+release assets. Keep third-party action versions pinned or reviewed before
+changing them.
+
+## Failure diagnosis
+
+Start with the failing stage: native check, worker startup, module evaluation,
+packaging, or smoke request. On Windows, set `TSP_WORKER_STARTUP_TRACE=1` to
+split JSC initialization, VM construction, and protocol readiness. Do not infer
+a native root cause from a fault address without a symbolicated frame or a
+reproducible startup boundary.
+
+See [worker operations](./worker.html), the [architecture overview](./architecture.html),
+and the [verified bug records](./reference/bugs/) for follow-up guidance.

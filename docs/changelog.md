@@ -4,6 +4,13 @@ All notable changes to TSP will be documented in this file.
 
 ## [Unreleased]
 
+### Documentation
+
+- Reorganized the documentation around one current runtime specification,
+  focused API references, a shorter architecture plan, and operational guides.
+- Added getting-started, configuration, architecture, troubleshooting, and
+  reference index pages; removed the obsolete progress-log link.
+
 ## [0.3.1] - 2026-08-31
 
 ### Fixed
