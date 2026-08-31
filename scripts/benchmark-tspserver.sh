@@ -2,18 +2,18 @@
 set -euo pipefail
 
 if [[ $# -lt 1 || $# -gt 3 ]]; then
-  echo "usage: $0 <tspserver> [routes-dir] [requests]" >&2
+  echo "usage: $0 <tspserver> [pages-dir] [requests]" >&2
   exit 2
 fi
 
 server=$(realpath "$1")
-routes=$(realpath "${2:-routes}")
+pages=$(realpath "${2:-pages}")
 requests=${3:-50}
 port=${TSP_BENCHMARK_PORT:-9140}
 [[ -x "$server" ]] || { echo "server binary is not executable: $server" >&2; exit 1; }
-[[ -d "$routes" ]] || { echo "routes directory not found: $routes" >&2; exit 1; }
+[[ -d "$pages" ]] || { echo "pages directory not found: $pages" >&2; exit 1; }
 
-TSP_PORT="$port" TSP_ROUTES_DIR="$routes" TSP_EMBEDDED_WORKER=1 "$server" >/tmp/tspserver-bench.out 2>/tmp/tspserver-bench.err &
+TSP_PORT="$port" TSP_ROUTES_DIR="$pages" TSP_EMBEDDED_WORKER=1 "$server" >/tmp/tspserver-bench.out 2>/tmp/tspserver-bench.err &
 pid=$!
 samples=$(mktemp)
 cleanup() { rm -f "$samples"; kill "$pid" 2>/dev/null || true; }

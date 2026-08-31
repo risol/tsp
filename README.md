@@ -51,7 +51,7 @@ Run the development server:
 ./tsp.sh dev
 ```
 
-The server listens on port `9000` by default and loads routes from `routes/`.
+The server listens on port `9000` by default and loads routes from `pages/`.
 Route changes are watched and published without restarting the host.
 
 ## Route contract
@@ -76,7 +76,7 @@ cookies, session, services, abort signal, and route metadata. Handlers may
 return JSX, strings, or `Response` values created with `json`, `html`, `text`,
 `redirect`, or `notFound` from `tsp:server`.
 
-Dynamic routes use filesystem segments such as `routes/users/[id].tsp`.
+Dynamic routes use filesystem segments such as `pages/users/[id].tsp`.
 Static assets belong under `public/` and are served independently from route
 modules.
 
@@ -86,7 +86,7 @@ The native host is configured through environment variables:
 
 ```text
 TSP_PORT=9000
-TSP_ROUTES_DIR=./routes
+TSP_ROUTES_DIR=./pages
 TSP_PUBLIC_DIR=./public
 TSP_EMBEDDED_WORKER=1
 TSP_WORKER_COUNT=2
@@ -115,7 +115,7 @@ timeouts, Redis sessions, cgroup limits, and diagnostics.
 ```text
 .
 ├── bun/src/runtime/tsp/       Native host, router, watcher, services, worker
-├── routes/                    Application route fixtures
+├── pages/                    Application route fixtures
 ├── public/                    Optional static assets
 ├── tests/smoke/            End-to-end route fixture
 ├── scripts/                   Build, package, benchmark, and smoke workflows

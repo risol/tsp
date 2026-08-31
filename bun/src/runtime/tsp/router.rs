@@ -4,15 +4,15 @@
 //! method exports), and sect.42 (method dispatch / 405 / HEAD / OPTIONS).
 //!
 //! Slice 3 implements only the static portion of the routing table:
-//! - `routes/index.tsp`             -> `/`
-//! - `routes/foo.tsp`               -> `/foo`
-//! - `routes/foo/bar.tsp`           -> `/foo/bar`
-//! - `routes/foo/index.tsp`         -> `/foo`
+//! - `pages/index.tsp`             -> `/`
+//! - `pages/foo.tsp`               -> `/foo`
+//! - `pages/foo/bar.tsp`           -> `/foo/bar`
+//! - `pages/foo/index.tsp`         -> `/foo`
 //!
 //! Dynamic segments `[id]`, catch-all `[...path]`, the radix tree, and
 //! any priority-based conflict detection land in slice 7+ alongside the
 //! full Context bridge. For now the matcher is linear over a `Vec<Route>`
-//! which is fine because PoC 1 only has `routes/index.tsp`.
+//! which is fine because PoC 1 only has `pages/index.tsp`.
 //!
 //! Method validation against the actual file source (does `index.tsp`
 //! export `GET`, `POST`, ...?) lands in slice 5 once JSC can evaluate
@@ -156,7 +156,7 @@ impl Segment {
 /// CatchAll per spec sect.11.3-11.4) and `params` (the per-request
 /// bind map, populated by `lookup` and read by the host when it
 /// builds the per-request Context). The `path` field stays as the
-/// canonical URL template -- `routes/users/[id].tsp` scans to
+/// canonical URL template -- `pages/users/[id].tsp` scans to
 /// `path = "/users/:id"` -- and is still the lookup key for
 /// `add` / `get_by_path` / the PageRegistry's `(route, method)`
 /// cache key. Dynamic routes therefore share a PageSlot across
@@ -281,12 +281,12 @@ fn decode_path_segment(segment: &str) -> Result<String, PathDecodeError> {
 
 #[derive(Debug)]
 pub enum RouterError {
-    /// The `routes/` directory does not exist or is not a directory.
+    /// The `pages/` directory does not exist or is not a directory.
     RoutesDirMissing { path: PathBuf },
     /// A filesystem entry could not be stat'd. Bubble the underlying
     /// `io::Error` so the operator can fix permissions / mount issues.
     Io { path: PathBuf, source: io::Error },
-    /// A `.tsp` file under `routes/` has a name we cannot yet translate
+    /// A `.tsp` file under `pages/` has a name we cannot yet translate
     /// to a URL path. Slice 3 only knows the static + index shapes, so
     /// a `[id].tsp` or `[...path].tsp` in the tree is reported here.
     /// The runtime refuses to start with an unknown shape -- silently
@@ -306,7 +306,7 @@ impl std::fmt::Display for RouterError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::RoutesDirMissing { path } => {
-                write!(f, "routes directory not found: {}", path.display())
+                write!(f, "pages directory not found: {}", path.display())
             }
             Self::Io { path, source } => {
                 write!(f, "stat {} failed: {source}", path.display())
@@ -399,7 +399,7 @@ impl RouteTable {
 
     /// Walk `routes_dir` recursively, collect every `.tsp` file, and
     /// translate its path under `routes_dir` to a URL path. The
-    /// directory must exist; an absent `routes/` is a configuration
+    /// directory must exist; an absent `pages/` is a configuration
     /// error, not an empty route table.
     pub fn scan(routes_dir: &Path) -> Result<Self, RouterError> {
         let meta = fs::metadata(routes_dir).map_err(|e| match e.kind() {
@@ -416,7 +416,7 @@ impl RouteTable {
                 path: routes_dir.to_path_buf(),
                 source: io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "routes_dir is not a directory",
+                    "pages directory is not a directory",
                 ),
             });
         }
@@ -664,16 +664,16 @@ fn scan_recursive(root: &Path, dir: &Path, out: &mut Vec<Route>) -> Result<(), R
     Ok(())
 }
 
-/// Translate a `.tsp` filename (relative to the `routes/` root) into
+/// Translate a `.tsp` filename (relative to the `pages/` root) into
 /// a (template path, segments) pair. The template path is the
-/// canonical URL form (`/users/:id` for `routes/users/[id].tsp`);
+/// canonical URL form (`/users/:id` for `pages/users/[id].tsp`);
 /// the segments vector is the matching pattern used by `lookup`.
 ///
 /// Slice 16e supports the spec sect.11.3/11.4 dynamic / catch-all
 /// shapes:
-/// - `routes/users/[id].tsp`    -> `/users/:id` with [Static("users"), Param("id")]
-/// - `routes/files/[...path].tsp` -> `/files/*path` with [Static("files"), CatchAll("path")]
-/// - directory segments work the same way: `routes/users/[id]/posts.tsp`
+/// - `pages/users/[id].tsp`    -> `/users/:id` with [Static("users"), Param("id")]
+/// - `pages/files/[...path].tsp` -> `/files/*path` with [Static("files"), CatchAll("path")]
+/// - directory segments work the same way: `pages/users/[id]/posts.tsp`
 ///   -> `/users/:id/posts` with [Static("users"), Param("id"), Static("posts")]
 /// - the optional catch-all shape `[name...]` (matches zero or more
 ///   segments) is not in current contract (contract item 3); `[...name]` requires
@@ -688,14 +688,14 @@ fn url_path_for(
     abs: &Path,
     stem: &str,
 ) -> Result<(String, Vec<Segment>), RouterError> {
-    // `relative` is the path under `routes/`, e.g. `users/index.tsp`
+    // `relative` is the path under `pages/`, e.g. `users/index.tsp`
     // or just `index.tsp`. Strip the `.tsp` (already done by caller) so
     // we work in segments below.
     let rel = abs
         .strip_prefix(root)
         .map_err(|_| RouterError::UnsupportedShape {
             path: abs.to_path_buf(),
-            reason: "file is not under the routes/ root",
+            reason: "file is not under the pages/ root",
         })?;
     let dir_segments: Vec<&str> = rel
         .components()
@@ -707,8 +707,8 @@ fn url_path_for(
         |s: &str, file: &Path| -> Result<Segment, RouterError> { parse_segment(s, file) };
 
     if stem == "index" {
-        // `routes/index.tsp`         -> `/`
-        // `routes/users/index.tsp`    -> `/users`
+        // `pages/index.tsp`         -> `/`
+        // `pages/users/index.tsp`    -> `/users`
         let mut segments: Vec<Segment> = Vec::with_capacity(dir_segs.len());
         for s in dir_segs {
             segments.push(parse_one(s, abs)?);
@@ -795,7 +795,7 @@ fn parse_segment(token: &str, file: &Path) -> Result<Segment, RouterError> {
 
 /// contract item 3 segment-name rule: `[A-Za-z_][A-Za-z0-9_]*`.
 /// Empty `[]` / non-identifier names are rejected at scan time
-/// so a typo'd `routes/users/[1st].tsp` refuses to boot rather
+/// so a typo'd `pages/users/[1st].tsp` refuses to boot rather
 /// than silently 404'ing.
 fn validate_segment_name(name: &str, file: &Path) -> Result<(), RouterError> {
     if name.is_empty() {
@@ -832,7 +832,7 @@ mod tests {
         // Dynamic / catch-all templates use `_` so the test
         // source strings are predictable.
         let source = if path == "/" {
-            "routes/index.tsp".to_string()
+            "pages/index.tsp".to_string()
         } else {
             format!(
                 "routes{}.tsp",
@@ -850,9 +850,9 @@ mod tests {
 
     #[test]
     fn url_path_index_root() {
-        // `routes/index.tsp` -> `/`
-        let root = Path::new("/app/routes");
-        let abs = Path::new("/app/routes/index.tsp");
+        // `pages/index.tsp` -> `/`
+        let root = Path::new("/app/pages");
+        let abs = Path::new("/app/pages/index.tsp");
         let (template, segs) = url_path_for(root, abs, "index").unwrap();
         assert_eq!(template, "/");
         assert!(segs.is_empty());
@@ -860,9 +860,9 @@ mod tests {
 
     #[test]
     fn url_path_index_nested() {
-        // `routes/users/index.tsp` -> `/users`
-        let root = Path::new("/app/routes");
-        let abs = Path::new("/app/routes/users/index.tsp");
+        // `pages/users/index.tsp` -> `/users`
+        let root = Path::new("/app/pages");
+        let abs = Path::new("/app/pages/users/index.tsp");
         let (template, segs) = url_path_for(root, abs, "index").unwrap();
         assert_eq!(template, "/users");
         assert_eq!(segs, vec![Segment::Static("users".to_string())]);
@@ -870,8 +870,8 @@ mod tests {
 
     #[test]
     fn url_path_static() {
-        let root = Path::new("/app/routes");
-        let abs = Path::new("/app/routes/login.tsp");
+        let root = Path::new("/app/pages");
+        let abs = Path::new("/app/pages/login.tsp");
         let (template, segs) = url_path_for(root, abs, "login").unwrap();
         assert_eq!(template, "/login");
         assert_eq!(segs, vec![Segment::Static("login".to_string())]);
@@ -879,8 +879,8 @@ mod tests {
 
     #[test]
     fn url_path_static_nested() {
-        let root = Path::new("/app/routes");
-        let abs = Path::new("/app/routes/users/new.tsp");
+        let root = Path::new("/app/pages");
+        let abs = Path::new("/app/pages/users/new.tsp");
         let (template, segs) = url_path_for(root, abs, "new").unwrap();
         assert_eq!(template, "/users/new");
         assert_eq!(
@@ -894,9 +894,9 @@ mod tests {
 
     #[test]
     fn url_path_dynamic_param() {
-        // `routes/users/[id].tsp` -> `/users/:id` with [Static("users"), Param("id")]
-        let root = Path::new("/app/routes");
-        let abs = Path::new("/app/routes/users/[id].tsp");
+        // `pages/users/[id].tsp` -> `/users/:id` with [Static("users"), Param("id")]
+        let root = Path::new("/app/pages");
+        let abs = Path::new("/app/pages/users/[id].tsp");
         let (template, segs) = url_path_for(root, abs, "[id]").unwrap();
         assert_eq!(template, "/users/:id");
         assert_eq!(
@@ -910,9 +910,9 @@ mod tests {
 
     #[test]
     fn url_path_dynamic_directory_segment() {
-        // `routes/users/[id]/posts.tsp` -> `/users/:id/posts`
-        let root = Path::new("/app/routes");
-        let abs = Path::new("/app/routes/users/[id]/posts.tsp");
+        // `pages/users/[id]/posts.tsp` -> `/users/:id/posts`
+        let root = Path::new("/app/pages");
+        let abs = Path::new("/app/pages/users/[id]/posts.tsp");
         let (template, segs) = url_path_for(root, abs, "posts").unwrap();
         assert_eq!(template, "/users/:id/posts");
         assert_eq!(
@@ -927,9 +927,9 @@ mod tests {
 
     #[test]
     fn url_path_catch_all() {
-        // `routes/files/[...path].tsp` -> `/files/*path` with [Static("files"), CatchAll("path")]
-        let root = Path::new("/app/routes");
-        let abs = Path::new("/app/routes/files/[...path].tsp");
+        // `pages/files/[...path].tsp` -> `/files/*path` with [Static("files"), CatchAll("path")]
+        let root = Path::new("/app/pages");
+        let abs = Path::new("/app/pages/files/[...path].tsp");
         let (template, segs) = url_path_for(root, abs, "[...path]").unwrap();
         assert_eq!(template, "/files/*path");
         assert_eq!(
@@ -944,16 +944,16 @@ mod tests {
     #[test]
     fn url_path_rejects_invalid_segment_names() {
         // contract item 3 pattern: `1st` is not a valid identifier.
-        let root = Path::new("/app/routes");
-        let abs = Path::new("/app/routes/users/[1st].tsp");
+        let root = Path::new("/app/pages");
+        let abs = Path::new("/app/pages/users/[1st].tsp");
         let err = url_path_for(root, abs, "[1st]").unwrap_err();
         assert!(matches!(err, RouterError::UnsupportedShape { .. }));
         // Empty `[]`.
-        let abs2 = Path::new("/app/routes/users/[].tsp");
+        let abs2 = Path::new("/app/pages/users/[].tsp");
         let err2 = url_path_for(root, abs2, "[]").unwrap_err();
         assert!(matches!(err2, RouterError::UnsupportedShape { .. }));
         // Unbalanced `[id`.
-        let abs3 = Path::new("/app/routes/users/[id.tsp");
+        let abs3 = Path::new("/app/pages/users/[id.tsp");
         let err3 = url_path_for(root, abs3, "[id").unwrap_err();
         assert!(matches!(err3, RouterError::UnsupportedShape { .. }));
     }
@@ -962,8 +962,8 @@ mod tests {
     fn url_path_rejects_non_final_catch_all() {
         // A catch-all followed by anything else is not allowed
         // (contract item 3: catch-all is the last segment).
-        let root = Path::new("/app/routes");
-        let abs = Path::new("/app/routes/[...path]/tail.tsp");
+        let root = Path::new("/app/pages");
+        let abs = Path::new("/app/pages/[...path]/tail.tsp");
         let err = url_path_for(root, abs, "tail").unwrap_err();
         assert!(matches!(err, RouterError::UnsupportedShape { .. }));
     }
@@ -1271,7 +1271,7 @@ mod tests {
     // Multi-route dispatch regression test
     //
     // The user observed that requesting /, /time, /svc, /users/42
-    // against a routes/ tree with 8 .tsp files all returned
+    // against a pages/ tree with 8 .tsp files all returned
     // index.tsp's body. The wrap tests already proved the master
     // builds per-route scripts; this test pins the upstream stage so
     // a future regression in lookup cannot also be the cause.

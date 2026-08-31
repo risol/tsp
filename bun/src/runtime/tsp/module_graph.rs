@@ -16,7 +16,7 @@
 //!   form. The slice-7+ AST pass (bun_js_parser) widens to re-exports,
 //!   dynamic imports, and the `.tsp`-import rejection check.
 //! - `ModuleGraph::from_routes(routes_dir) -> Result<Self, _>` --
-//!   walks the routes directory, reads every `.tsp` source, extracts
+//!   walks the page source directory, reads every `.tsp` source, extracts
 //!   its imports, and builds both maps.
 //! - `affected_pages(id) -> &[ModuleId]` -- the reverse-graph
 //!   lookup the watcher (slice 11) uses to mark dirty pages.
@@ -224,7 +224,7 @@ impl ModuleGraph {
         self.reverse.get(id).map(Vec::as_slice).unwrap_or(&[])
     }
 
-    /// Walk a `routes/` directory, read every `.tsp` file, build
+    /// Walk a `pages/` directory, read every `.tsp` file, build
     /// the forward edges (imports) and the reverse edges. Non-page
     /// modules (`.ts` / `.tsx` / `.js` / `.jsx` under `components/`
     /// or `lib/`) are also scanned if they live under the same
@@ -468,7 +468,7 @@ fn take_quoted_specifier(s: &str) -> Option<&str> {
 /// self-contained.
 fn detect_page_roots(text: &str, route: String) -> Vec<PageId> {
     // Page root identity for slice 9 is just the path the file
-    // lives at under the routes/ root, minus the extension. The
+    // lives at under the pages/ root, minus the extension. The
     // route file is a single page root; the multiple methods
     // share the same route path.
     let mut methods = Vec::new();
@@ -623,7 +623,7 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        let routes = root.join("routes");
+        let routes = root.join("pages");
         let outside = root.join("outside.ts");
         std::fs::create_dir_all(&routes).unwrap();
         std::fs::write(&outside, "export const value = 1;\n").unwrap();

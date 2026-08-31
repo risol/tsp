@@ -1,22 +1,22 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)] [string]$ServerBinary,
-  [string]$RoutesDirectory = "tests/smoke/routes",
+  [string]$PagesDirectory = "tests/smoke/pages",
   [int]$Port = 9137,
   [switch]$SkipHotReload
 )
 
 $server = [System.IO.Path]::GetFullPath($ServerBinary)
-$sourceRoutes = [System.IO.Path]::GetFullPath($RoutesDirectory)
+$sourcePages = [System.IO.Path]::GetFullPath($PagesDirectory)
 if (!(Test-Path -LiteralPath $server -PathType Leaf)) { throw "server binary not found: $server" }
-if (!(Test-Path -LiteralPath $sourceRoutes -PathType Container)) { throw "routes directory not found: $sourceRoutes" }
+if (!(Test-Path -LiteralPath $sourcePages -PathType Container)) { throw "pages directory not found: $sourcePages" }
 
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("tspserver-smoke-" + [guid]::NewGuid().ToString("N"))
-$routes = Join-Path $tempRoot "routes"
+$pages = Join-Path $tempRoot "pages"
 $stdoutLog = Join-Path $tempRoot "tspserver.stdout.log"
 $stderrLog = Join-Path $tempRoot "tspserver.stderr.log"
-New-Item -ItemType Directory -Path $routes -Force | Out-Null
-Get-ChildItem -LiteralPath $sourceRoutes -Force | Copy-Item -Destination $routes -Recurse -Force
+New-Item -ItemType Directory -Path $pages -Force | Out-Null
+Get-ChildItem -LiteralPath $sourcePages -Force | Copy-Item -Destination $pages -Recurse -Force
 
 $info = [System.Diagnostics.ProcessStartInfo]::new()
 $info.FileName = $env:ComSpec
@@ -27,7 +27,7 @@ $info.CreateNoWindow = $true
 $info.RedirectStandardOutput = $false
 $info.RedirectStandardError = $false
 $info.Environment["TSP_PORT"] = "$Port"
-$info.Environment["TSP_ROUTES_DIR"] = $routes
+$info.Environment["TSP_ROUTES_DIR"] = $pages
 $info.Environment["TSP_EMBEDDED_WORKER"] = "1"
 $info.Environment["TSP_WORKER_COUNT"] = "2"
 $process = [System.Diagnostics.Process]::new()
@@ -87,7 +87,7 @@ try {
   }
 
   if (!$SkipHotReload) {
-    $routeFile = Join-Path $routes "index.tsp"
+    $routeFile = Join-Path $pages "index.tsp"
     $source = Get-Content -Raw -LiteralPath $routeFile
     Set-Content -LiteralPath $routeFile -Value ($source.Replace("Hello from TSP", "Hello after reload")) -NoNewline
     $reloaded = $false

@@ -43,14 +43,17 @@ jobs:
             target: linux-x64
             runtime: bun/build/release/bun
             server: release/tspserver-linux-x64/tspserver
+            archive: tar.gz
           - os: windows-latest
             target: windows-x64
             runtime: bun/build/release/bun.exe
             server: release/tspserver-windows-x64/tspserver.exe
+            archive: zip
           - os: macos-latest
             target: macos
             runtime: bun/build/release/bun
             server: release/tspserver-macos/tspserver
+            archive: tar.gz
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     steps:
@@ -111,7 +114,7 @@ jobs:
           bash scripts/package-tspserver.sh \
             "${{ matrix.runtime }}" \
             "$package_dir" \
-            routes \
+            pages \
             public
 
       - name: Run native process-model + start-order tests (Linux/Windows)
@@ -148,15 +151,21 @@ jobs:
           TSP_WORKER_STARTUP_TRACE: '1'
         run: ./scripts/smoke-tspserver.ps1 -ServerBinary "${{ matrix.server }}"
 
-      - name: Archive release asset
+      - name: Archive release asset (Linux/macOS)
+        if: matrix.os != 'windows-latest'
         shell: bash
-        run: tar -czf "tspserver-${{ matrix.target }}.tar.gz" -C release "tspserver-${{ matrix.target }}"
+        run: tar -czf "tspserver-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz" -C release "tspserver-${{ matrix.target }}"
+
+      - name: Archive release asset (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: Compress-Archive -Path "release/tspserver-${{ matrix.target }}" -DestinationPath "tspserver-${{ github.ref_name }}-${{ matrix.target }}.zip" -Force
 
       - name: Upload release asset
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
-        run: gh release upload "$GITHUB_REF_NAME" "tspserver-${{ matrix.target }}.tar.gz" --repo "$GITHUB_REPOSITORY" --clobber
+        run: gh release upload "$GITHUB_REF_NAME" "tspserver-${GITHUB_REF_NAME}-${{ matrix.target }}.${{ matrix.archive }}" --repo "$GITHUB_REPOSITORY" --clobber
 
   publish-release:
     name: Publish release

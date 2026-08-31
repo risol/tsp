@@ -13,6 +13,9 @@ All notable changes to TSP will be documented in this file.
   during repeated route compilation.
 
 ### Changed
+
+- `pages/` is now the canonical application source and package directory.
+- Windows release assets are ZIP archives, and all release asset filenames include the release tag.
 - removed the temporary architecture version from the TSP CLI, documentation,
   CI, package layout, type declarations, and release asset names.
 - removed obsolete legacy architecture notes and the old development progress

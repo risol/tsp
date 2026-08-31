@@ -110,18 +110,18 @@ return notFound();
 
 ## Route mapping (file system)
 
-The route table is built from the `routes/` directory (configurable
+The route table is built from the `pages/` directory (configurable
 via `tsp.toml [routes] dir`). The mapping is purely filename-driven
 (freeze 3):
 
 ```text
-routes/index.tsp             ->  GET  /
-routes/login.tsp             ->  GET  /login
-routes/users/index.tsp       ->  GET  /users
-routes/users/new.tsp         ->  GET  /users/new
-routes/users/[id].tsp        ->  GET  /users/:id
-routes/posts/[slug].tsp      ->  GET  /posts/:slug
-routes/files/[...path].tsp   ->  GET  /files/*    (catch-all)
+pages/index.tsp             ->  GET  /
+pages/login.tsp             ->  GET  /login
+pages/users/index.tsp       ->  GET  /users
+pages/users/new.tsp         ->  GET  /users/new
+pages/users/[id].tsp        ->  GET  /users/:id
+pages/posts/[slug].tsp      ->  GET  /posts/:slug
+pages/files/[...path].tsp   ->  GET  /files/*    (catch-all)
 ```
 
 Segment name pattern: `[A-Za-z_][A-Za-z0-9_]*`. Dynamic segment values
@@ -129,7 +129,7 @@ surface in `ctx.params.<name>`. Optional catch-all is not in current contract.
 
 Priority at runtime: **static > dynamic > catch-all**. The host's
 route table is built at startup; an ambiguous pairing (e.g.
-`routes/users/[id].tsp` and `routes/users/[name].tsp` at the same
+`pages/users/[id].tsp` and `pages/users/[name].tsp` at the same
 level) makes the host refuse to start with:
 
 ```text
@@ -159,7 +159,7 @@ The host treats every imported module as one of two kinds:
 Reloadable Application Module
   = canonical_path under application.root
     AND supported source extension
-  -> routes/, components/, lib/, services/, ... go here
+  -> pages/, components/, lib/, services/, ... go here
 
 Persistent External Module
   = everything else
@@ -178,7 +178,7 @@ These are explicitly deferred to future releases and are NOT part of the
 
 - Nested layouts as a directory convention (plan §15). Use component
   composition: `<AppLayout>...</AppLayout>` in the handler body.
-- Custom error pages (`routes/_404.tsp`, `routes/_500.tsp`). The
+- Custom error pages (`pages/_404.tsp`, `pages/_500.tsp`). The
   host's built-in error pages are the current contract default.
 - Middleware modules (`middleware.ts`). The current contract design is
   PageConfig + auth service hooks, not Express-style middleware

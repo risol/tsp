@@ -55,7 +55,7 @@ TSP
 │   └── minimal tsp:* runtime bindings
 │
 └── Application
-    ├── routes/**/*.tsp
+    ├── pages/**/*.tsp
     ├── components/**/*.tsx
     ├── lib/**/*.ts
     └── tsp.config.*
@@ -212,7 +212,7 @@ export function GET(ctx: Context) {
 该文件：
 
 ```text
-routes/index.tsp
+pages/index.tsp
 ```
 
 映射：
@@ -397,7 +397,7 @@ AND supported source extension
 例如：
 
 ```text
-routes/users/[id].tsp
+pages/users/[id].tsp
 components/UserCard.tsx
 lib/format.ts
 ```
@@ -424,25 +424,25 @@ node:crypto
 ## 6.1 默认目录
 
 ```text
-routes/
+pages/
 ```
 
 可通过配置改变：
 
 ```toml
 [routes]
-dir = "routes"
+dir = "pages"
 ```
 
 ## 6.2 基础映射
 
 ```text
-routes/index.tsp             /
-routes/login.tsp             /login
-routes/users/index.tsp       /users
-routes/users/new.tsp         /users/new
-routes/users/[id].tsp        /users/:id
-routes/posts/[slug].tsp      /posts/:slug
+pages/index.tsp             /
+pages/login.tsp             /login
+pages/users/index.tsp       /users
+pages/users/new.tsp         /users/new
+pages/users/[id].tsp        /users/:id
+pages/posts/[slug].tsp      /posts/:slug
 ```
 
 ## 6.3 Dynamic segment
@@ -504,8 +504,8 @@ ctx.params.path === "a/b/c"
 例如：
 
 ```text
-routes/users/[id].tsp
-routes/users/[name].tsp
+pages/users/[id].tsp
+pages/users/[name].tsp
 ```
 
 属于冲突，应启动失败：
@@ -519,7 +519,7 @@ TSP1004: ambiguous routes /users/[id] and /users/[name]
 Rust runtime 启动时：
 
 ```text
-scan routes/
+scan pages/
  -> validate filenames
  -> canonicalize
  -> build radix/tree matcher
@@ -1716,7 +1716,7 @@ added edges   -> insert reverse refs
 
 ## 24.2 Production
 
-生产修改外部 `routes/` 后，如果新版本编译失败：
+生产修改外部 `pages/` 后，如果新版本编译失败：
 
 - 日志记录 error；
 - metrics increment；
@@ -1899,7 +1899,7 @@ workers = 1
 
 [app]
 root = "."
-routes = "routes"
+routes = "pages"
 public = "public"
 
 [dev]
@@ -2014,7 +2014,7 @@ application routes
 3. 拒绝 NUL；
 4. Windows UNC / drive prefix 特别处理；
 5. symlink policy 必须配置/固定；
-6. 禁止从 routes/public 之外读取 server source，除非显式 API。
+6. 禁止从 pages/public 之外读取 server source，除非显式 API。
 
 不要让 JS 页面自己做 framework-level path normalization。
 
@@ -2232,7 +2232,7 @@ last_known_good = true
 dist/
 ├── tspserver        # executable
 ├── tsp.toml
-├── routes/
+├── pages/
 ├── components/
 ├── lib/
 ├── public/
@@ -2391,8 +2391,8 @@ current contract 建议先使用 runtime 内建页面。
 后续可增加：
 
 ```text
-routes/_404.tsp
-routes/_500.tsp
+pages/_404.tsp
+pages/_500.tsp
 ```
 
 但这两个页面的执行错误必须有 native fallback，防止递归错误。
@@ -2771,7 +2771,7 @@ current 不宣称 sandbox。
 ```text
 my-app/
 ├── tsp.toml
-├── routes/
+├── pages/
 │   ├── index.tsp
 │   ├── login.tsp
 │   └── users/
@@ -3021,7 +3021,7 @@ PageRoot mapping
 提供 debug dump：
 
 ```bash
-tsp graph routes/users/index.tsp
+tsp graph pages/users/index.tsp
 ```
 
 ---
@@ -3130,7 +3130,7 @@ HTMX fixtures
 
 ```text
 single executable runtime
-external routes/components/public
+external pages/components/public
 module resolver production mode
 Windows
 Linux
@@ -3503,7 +3503,7 @@ ADR-010 No generic middleware in current contract
 如果现在马上开始写，我建议第一个 PoC **只做 7 件事**：
 
 1. Rust 启动 HTTP server；
-2. `/` 映射 `routes/index.tsp`；
+2. `/` 映射 `pages/index.tsp`；
 3. transpile 标准 TSX；
 4. JSC instantiate/evaluate；
 5. 找 `GET` export；
@@ -3684,7 +3684,7 @@ TSP 可以宣布核心架构完成，至少需要满足：
 - [x] Windows executable；
 - [x] Linux executable packaging/build path；
 - [x] 不要求目标机安装 Bun CLI；
-- [x] external routes/components/public 可运行；
+- [x] external pages/components/public 可运行；
 - [x] production dependencies 可解析。
 
 ---

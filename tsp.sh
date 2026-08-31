@@ -63,7 +63,7 @@ build_host() {
 package_runtime() {
   local host
   host="$(resolve_host)"
-  bash "$ROOT_DIR/scripts/package-tspserver.sh" "$host" "$ROOT_DIR/dist/tspserver" "$ROOT_DIR/routes" "$ROOT_DIR/public"
+  bash "$ROOT_DIR/scripts/package-tspserver.sh" "$host" "$ROOT_DIR/dist/tspserver" "$ROOT_DIR/pages" "$ROOT_DIR/public"
 }
 
 build_runtime() { build_worker; build_host; package_runtime; }
@@ -71,13 +71,13 @@ build_runtime() { build_worker; build_host; package_runtime; }
 run_host() {
   local host
   host="$(resolve_host)"
-  TSP_PORT="${TSP_PORT:-9000}" TSP_ROUTES_DIR="${TSP_ROUTES_DIR:-$ROOT_DIR/routes}" TSP_PUBLIC_DIR="${TSP_PUBLIC_DIR:-$ROOT_DIR/public}" TSP_EMBEDDED_WORKER="${TSP_EMBEDDED_WORKER:-1}" TSP_WORKER_COUNT="${TSP_WORKER_COUNT:-2}" "$host" "$@"
+  TSP_PORT="${TSP_PORT:-9000}" TSP_ROUTES_DIR="${TSP_ROUTES_DIR:-$ROOT_DIR/pages}" TSP_PUBLIC_DIR="${TSP_PUBLIC_DIR:-$ROOT_DIR/public}" TSP_EMBEDDED_WORKER="${TSP_EMBEDDED_WORKER:-1}" TSP_WORKER_COUNT="${TSP_WORKER_COUNT:-2}" "$host" "$@"
 }
 
 run_smoke() {
   local host
   host="$(resolve_host)"
-  bash "$ROOT_DIR/scripts/smoke-tspserver.sh" "$host" "$ROOT_DIR/tests/smoke/routes" "${TSP_PORT:-9137}"
+  bash "$ROOT_DIR/scripts/smoke-tspserver.sh" "$host" "$ROOT_DIR/tests/smoke/pages" "${TSP_PORT:-9137}"
 }
 
 run_tests() {
@@ -92,25 +92,25 @@ run_check() {
 }
 
 # Phase 11 tooling: thin wrappers that exec the host's
-# introspection subcommands against the user's routes dir.
-# They do not start the server; they read the routes and
+# introspection subcommands against the user's pages dir.
+# They do not start the server; they read the pages and
 # print / write the result, then exit.
 run_routes() {
   local host
   host="$(resolve_host)"
-  TSP_ROUTES_DIR="${TSP_ROUTES_DIR:-$ROOT_DIR/routes}" "$host" routes
+  TSP_ROUTES_DIR="${TSP_ROUTES_DIR:-$ROOT_DIR/pages}" "$host" routes
 }
 
 run_graph() {
   local host
   host="$(resolve_host)"
-  TSP_ROUTES_DIR="${TSP_ROUTES_DIR:-$ROOT_DIR/routes}" "$host" graph
+  TSP_ROUTES_DIR="${TSP_ROUTES_DIR:-$ROOT_DIR/pages}" "$host" graph
 }
 
 run_check_app() {
   local host
   host="$(resolve_host)"
-  TSP_ROUTES_DIR="${TSP_ROUTES_DIR:-$ROOT_DIR/routes}" "$host" check
+  TSP_ROUTES_DIR="${TSP_ROUTES_DIR:-$ROOT_DIR/pages}" "$host" check
 }
 
 run_typings() {

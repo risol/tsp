@@ -3,7 +3,7 @@
 //! See `tsp-plan.md` sect.70 and `tsp-specification.md` for the
 //! current application contract implemented by this binary.
 //!
-//! Slice 10b boots a `PageRegistry`, walks the `routes/` directory
+//! Slice 10b boots a `PageRegistry`, walks the `pages/` directory
 //! once to discover exported HTTP methods (via `page::prepare`),
 //! registers one `PageSlot` per (route, method) pair, then
 //! hands the registry to the listener.
@@ -86,7 +86,7 @@ fn serve_main() -> ExitCode {
     };
 
     let routes_dir = resolve_routes_dir();
-    eprintln!("TSP: scanning routes from {}", routes_dir.display());
+    eprintln!("TSP: scanning pages from {}", routes_dir.display());
     // Slice 15a: the RouteTable is now Arc<Mutex<...>> under
     // the hood so the watcher can add/remove routes while
     // requests are in flight. We keep the boot-time scan
@@ -359,13 +359,13 @@ fn serve_main() -> ExitCode {
 fn resolve_routes_dir() -> PathBuf {
     match std::env::var("TSP_ROUTES_DIR") {
         Ok(s) => PathBuf::from(s),
-        Err(_) => PathBuf::from("routes"),
+        Err(_) => PathBuf::from("pages"),
     }
 }
 
 fn print_help() {
     println!(
-        "TSP commands:\n  tspserver              run the native HTTP server\n  tspserver check       validate routes and local imports\n  tspserver routes      list filesystem routes and exports\n  tspserver graph       print the resolved module graph\n  tspserver typings     write tsp:* TypeScript declaration files\n  tspserver --version   print the version and exit\n  tspserver --help      print this help and exit\n\nEnvironment:\n  TSP_ROUTES_DIR            route root (default: routes)\n  TSP_PUBLIC_DIR            public asset root (default: public)\n  TSP_PORT                  HTTP port (default: 3000)\n  TSP_TIMEOUT_MS            per-request timeout in ms; 0 disables the\n                            watchdog (default: 30000). The per-page\n                            `config.timeoutMs` overrides this per\n                            request (spec section 7 current contract PageConfig)\n  TSP_DEVELOPMENT           set to 1 for dev mode: page-throw 500\n                            responses render as self-contained HTML\n                            error pages (name + message + stack) instead\n                            of the prod JSON body (default: 0 / prod)\n  TSP_WORKER_COUNT          embedded self-spawned worker processes (default: 1)\n  TSP_WORKER_MAX_IN_FLIGHT  max concurrent requests per worker (default: 2*count)\n  TSP_WORKER_MAX_REQUESTS   recycle each worker after N requests\n  TSP_WORKER_MAX_AGE_MS     recycle each worker after this many ms\n  TSP_WORKER_MAX_MEMORY_BYTES  recycle each worker when RSS reaches this\n  TSP_INVALIDATION_FILE     shared cross-worker invalidation log\n  TSP_MAX_BODY_BYTES         per-request body size cap; requests with\n                            Content-Length over this are rejected with\n                            413 Payload Too Large (default: 1 MiB)\n  TSP_CGROUP_ROOT           explicit Linux cgroup v2 parent directory\n  TSP_WORKER_MEMORY_MAX / TSP_WORKER_CPU_MAX / TSP_WORKER_PIDS_MAX  cgroup limits\n  TSP_REDIS_URL             optional Redis URL for the session backend\n  TSP_CONFIG                JSON file declaring config-driven custom\n                            services (default: tsp.config.json);\n                            supports `kind: counter` with `initial`\n  TSP_APPLICATION_NAME      application name registered in the registry (default: main)"
+        "TSP commands:\n  tspserver              run the native HTTP server\n  tspserver check       validate routes and local imports\n  tspserver routes      list filesystem routes and exports\n  tspserver graph       print the resolved module graph\n  tspserver typings     write tsp:* TypeScript declaration files\n  tspserver --version   print the version and exit\n  tspserver --help      print this help and exit\n\nEnvironment:\n  TSP_ROUTES_DIR            page source root (default: pages)\n  TSP_PUBLIC_DIR            public asset root (default: public)\n  TSP_PORT                  HTTP port (default: 3000)\n  TSP_TIMEOUT_MS            per-request timeout in ms; 0 disables the\n                            watchdog (default: 30000). The per-page\n                            `config.timeoutMs` overrides this per\n                            request (spec section 7 current contract PageConfig)\n  TSP_DEVELOPMENT           set to 1 for dev mode: page-throw 500\n                            responses render as self-contained HTML\n                            error pages (name + message + stack) instead\n                            of the prod JSON body (default: 0 / prod)\n  TSP_WORKER_COUNT          embedded self-spawned worker processes (default: 1)\n  TSP_WORKER_MAX_IN_FLIGHT  max concurrent requests per worker (default: 2*count)\n  TSP_WORKER_MAX_REQUESTS   recycle each worker after N requests\n  TSP_WORKER_MAX_AGE_MS     recycle each worker after this many ms\n  TSP_WORKER_MAX_MEMORY_BYTES  recycle each worker when RSS reaches this\n  TSP_INVALIDATION_FILE     shared cross-worker invalidation log\n  TSP_MAX_BODY_BYTES         per-request body size cap; requests with\n                            Content-Length over this are rejected with\n                            413 Payload Too Large (default: 1 MiB)\n  TSP_CGROUP_ROOT           explicit Linux cgroup v2 parent directory\n  TSP_WORKER_MEMORY_MAX / TSP_WORKER_CPU_MAX / TSP_WORKER_PIDS_MAX  cgroup limits\n  TSP_REDIS_URL             optional Redis URL for the session backend\n  TSP_CONFIG                JSON file declaring config-driven custom\n                            services (default: tsp.config.json);\n                            supports `kind: counter` with `initial`\n  TSP_APPLICATION_NAME      application name registered in the registry (default: main)"
     );
 }
 
@@ -412,7 +412,7 @@ fn run_routes() -> ExitCode {
         } else if arg == "--help" || arg == "-h" {
             println!(
                 "Usage: tspserver routes [--json]\n\n\
-                 Prints one line per route in the routes/ directory:\n\
+                 Prints one line per route in the pages/ directory:\n\
                    <path>\\t<source>\\t<methods>\n\
                  --json    emit a JSON array of {{path, source, methods}} instead."
             );
@@ -537,7 +537,7 @@ fn run_check() -> ExitCode {
         } else if arg == "--help" || arg == "-h" {
             println!(
                 "Usage: tspserver check [--tsc] [--no-color]\n\n\
-                 Scans the routes/ directory and prints each route's\n\
+                 Scans the pages/ directory and prints each route's\n\
                  static export set. Returns 1 if any route fails to\n\
                  parse, 0 otherwise. Also validates `PageConfig`\n\
                  fields (contract.md §11): a `config.methods` mismatch\n\
@@ -696,18 +696,18 @@ fn run_check() -> ExitCode {
 }
 
 /// Phase 11 follow-up: real `tsc --noEmit` type-check pass
-/// over the routes directory.
+/// over the page source directory.
 ///
 /// The pass:
 ///   1. Walks `routes_root` and copies every `.tsp` file to
 ///      a temp directory as `.tsx` (tsc treats .tsp as
-///      unknown). `.ts` helper files (e.g. `routes/_db.ts`)
+///      unknown). `.ts` helper files (e.g. `pages/_db.ts`)
 ///      are copied verbatim.
 ///   2. Copies the three bundled `tsp:*` declaration files
 ///      into the temp dir's `tsp-types/` subdir.
 ///   3. Writes a `tsconfig.json` that maps the `tsp:*`
 ///      module names to those declarations and includes
-///      `routes/**/*.tsx` + `tsp-types/**/*.d.ts`.
+///      `pages/**/*.tsx` + `tsp-types/**/*.d.ts`.
 ///   4. Locates the `tsc` binary (CWD `node_modules/.bin`
 ///      first, then PATH).
 ///   5. Invokes `tsc --noEmit --project <tsconfig>` and
@@ -736,7 +736,7 @@ fn run_tsc_check(routes_root: &std::path::Path, no_color: bool) -> Result<(), St
             .map_err(|e| format!("clock: {e}"))?
             .as_nanos()
     ));
-    let temp_routes = temp.join("routes");
+    let temp_routes = temp.join("pages");
     let temp_types = temp.join("tsp-types");
     std::fs::create_dir_all(&temp_routes).map_err(|e| format!("mkdir temp routes: {e}"))?;
     std::fs::create_dir_all(&temp_types).map_err(|e| format!("mkdir temp tsp-types: {e}"))?;
@@ -850,7 +850,7 @@ fn run_tsc_check(routes_root: &std::path::Path, no_color: bool) -> Result<(), St
         // (it sees the temp dir, not the routes root). For
         // the user, those paths are noise -- their source
         // lives at `<routes>/foo.tsp`, not at
-        // `<some temp dir>/routes/foo.tsx`. Rewrite each
+        // `<some temp dir>/pages/foo.tsx`. Rewrite each
         // diagnostic's path prefix so the user can copy /
         // click straight to the original file.
         rewrite_tsc_paths(
@@ -879,10 +879,10 @@ fn run_tsc_check(routes_root: &std::path::Path, no_color: bool) -> Result<(), St
 }
 
 /// Rewrite `tsc` diagnostic paths from
-/// `<temp>/routes/<rest>` to `<routes_root>/<rest>` so
+/// `<temp>/pages/<rest>` to `<routes_root>/<rest>` so
 /// the user sees a path that actually exists on their
 /// disk. The rewrite is conservative: only paths that
-/// start with the temp `routes/` prefix are touched;
+/// start with the temp `pages/` prefix are touched;
 /// anything else (e.g. a path inside `node_modules/`)
 /// passes through unchanged. The output is written
 /// directly to stdout / stderr (the function takes the
@@ -1019,7 +1019,7 @@ fn strip_ansi(s: &str) -> String {
 /// Recursively copy `routes_root` into `dst_root`, renaming
 /// `.tsp` files to `.tsx` (TypeScript's compiler does not
 /// recognise the `.tsp` extension by default). All other
-/// files (notably `.ts` helpers like `routes/_db.ts`) are
+/// files (notably `.ts` helpers like `pages/_db.ts`) are
 /// copied verbatim. The directory layout under
 /// `dst_root` mirrors `routes_root` exactly.
 fn copy_routes_recursive(
@@ -1050,7 +1050,7 @@ fn copy_routes_recursive(
                 // .ts, .d.ts, .json, etc. -- copy verbatim.
                 // This is what makes the slice
                 // transparent to user helpers like
-                // `routes/_db.ts` (the SQL demo imports
+                // `pages/_db.ts` (the SQL demo imports
                 // from it).
                 std::fs::copy(&src, &dst)?;
             }
@@ -1111,8 +1111,8 @@ const TSC_TSCONFIG_JSON: &str = r#"{
     }
   },
   "include": [
-    "routes/**/*.tsx",
-    "routes/**/*.ts",
+    "pages/**/*.tsx",
+    "pages/**/*.ts",
     "tsp-types/**/*.d.ts"
   ]
 }
@@ -1134,7 +1134,7 @@ fn run_graph() -> ExitCode {
         } else if arg == "--help" || arg == "-h" {
             println!(
                 "Usage: tspserver graph [--json]\n\n\
-                 Prints one line per module in the routes/ directory:\n\
+                 Prints one line per module in the pages/ directory:\n\
                    <path>\\timports=[<a>,<b>,...]\n\
                  --json    emit a JSON array of {{path, imports}} instead."
             );

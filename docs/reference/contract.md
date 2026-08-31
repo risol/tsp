@@ -59,23 +59,23 @@ Evidence: `tsp-specification.md` §5.1, `tsp-plan.md` §5.1.
 
 ### 3. Route file system mapping rules
 
-The route table is built from the `routes/` directory (configurable via
+The route table is built from the `pages/` directory (configurable via
 `tsp.toml [routes] dir`). The mapping is:
 
 ```text
-routes/index.tsp             /
-routes/login.tsp             /login
-routes/users/index.tsp       /users
-routes/users/new.tsp         /users/new
-routes/users/[id].tsp        /users/:id
-routes/posts/[slug].tsp      /posts/:slug
+pages/index.tsp             /
+pages/login.tsp             /login
+pages/users/index.tsp       /users
+pages/users/new.tsp         /users/new
+pages/users/[id].tsp        /users/:id
+pages/posts/[slug].tsp      /posts/:slug
 ```
 
 Segment name pattern: `[A-Za-z_][A-Za-z0-9_]*`. Dynamic segments surface
 as `ctx.params.<name>`. Catch-all is `[...path]` only; optional catch-all
 is **not** in current contract. Priority is static > dynamic > catch-all, and
-ambiguous pairings (e.g. `routes/users/[id].tsp` next to
-`routes/users/[name].tsp`) make the host refuse to start with
+ambiguous pairings (e.g. `pages/users/[id].tsp` next to
+`pages/users/[name].tsp`) make the host refuse to start with
 `TSP1004: ambiguous routes ...`.
 
 What this freezes for application code:
@@ -491,7 +491,7 @@ Evidence: `tsp-specification.md` §21-§24, `tsp-plan.md` §21-§24.
 These are intentionally deferred to slice 9+ and are NOT part of the
 contract application code can rely on:
 
-- 404 / 500 custom error pages (`routes/_404.tsp` etc.) -- the host's
+- 404 / 500 custom error pages (`pages/_404.tsp` etc.) -- the host's
   built-in error pages are the current contract default; user-customisable pages
   land when the context bridge is in place (slice 9+).
 - Middleware / global hooks -- plan §44 explicitly defers the JS
@@ -685,7 +685,7 @@ UTF-8 file content (emoji + CJK survive byte-fidelity at
 26 bytes for "你好,世界! 🚀 café\n"), url-encoded
 form bodies, and the failure shape (`formData()` throws
 `ERR_FORMDATA_PARSE_ERROR` on non-parseable bodies; the
-production `routes/upload.tsp` page wraps the call in
+production `pages/upload.tsp` page wraps the call in
 `try/catch` and returns a 500 with the
 `formData-error: <message>` body so the e2e can assert on
 the failure shape rather than timing out on a hang).
@@ -856,7 +856,7 @@ to maintain).
   - The module-level doc comment for the password
     e2e is updated to point at `util` instead of
     the top-level `password` slot.
-- `routes/password.tsp` is rewritten to use
+- `pages/password.tsp` is rewritten to use
   `import { util }` + `util.password.*`. The HTTP
   shape (`GET /password`, `POST /password`) is
   unchanged; only the JS surface inside the page
@@ -880,7 +880,7 @@ to maintain).
     `const { password } = __tspServer;`).
 
 **What was NOT changed in this amendment.**
-- `routes/counter.tsp` and the slice 22
+- `pages/counter.tsp` and the slice 22
   `CounterService` plumbing are untouched (the
   config-driven `custom services` are a host-side
   service registry concept, not a `tsp:server` import).
@@ -1015,9 +1015,9 @@ config file cannot silently shadow a real one.
     refactor that switches to a different map
     type would fail the e2e with a clear diff.
 
-- `routes/kv.tsp` and `routes/flags.tsp` -- two
+- `pages/kv.tsp` and `pages/flags.tsp` -- two
   new demo routes mirroring the production-shape
-  `routes/counter.tsp` style. Each just echoes
+  `pages/counter.tsp` style. Each just echoes
   the requested slice of the snapshot; the
   `x-demo: slice22-kv` / `x-demo: slice22-flags`
   response headers let the e2e distinguish "the
@@ -1080,7 +1080,7 @@ and a narrow refinement of the contract contract.
   POST"). v1 ships with default GET only; the demo
   route mirrors that.
 
-- New demo: `routes/fragments.tsp` exposes two named
+- New demo: `pages/fragments.tsp` exposes two named
   fragments (`userList` and `echo`). The parent page
   returns both URLs through `ctx.fragment("name")` so
   the e2e can pin the URL builder, the dispatch
@@ -1515,7 +1515,7 @@ in their browser.
     body so the host never returns an empty
     500.
 
-- **Demo route `routes/dev_error_demo.tsp`**
+- **Demo route `pages/dev_error_demo.tsp`**
   exposes three throw shapes via `?kind=`:
   - `plain` (`new Error("plain boom ...")`)
   - `range` (`new RangeError("index out of
@@ -1623,7 +1623,7 @@ back off an upstream call, etc.).
   unknown-kind error message now lists
   `rate_limit` in the supported set.
 
-- **Demo route `routes/rate_limit.tsp`** exposes
+- **Demo route `pages/rate_limit.tsp`** exposes
   a `/rate_limit` endpoint that returns 200 with
   the snapshot when `count <= limit` and 429 with
   a `retry-after: 60` header when `count > limit`.
@@ -1898,7 +1898,7 @@ asserts:
     before the page router. It is dispatched
     in `host.rs` directly, not through the
     `PageRegistry`, so a route file at
-    `routes/__tsp/metrics.tsp` does not
+    `pages/__tsp/metrics.tsp` does not
     shadow it.
 
 **2. `tspserver check --tsc` (Phase 11

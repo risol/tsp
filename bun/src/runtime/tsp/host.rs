@@ -158,7 +158,7 @@ impl TspError {
     /// detail. Format: `[TSP-NNNN] <description>`.
     pub fn describe(self) -> &'static str {
         match self {
-            Self::RoutesDirMissing => "routes directory not found",
+            Self::RoutesDirMissing => "pages directory not found",
             Self::UnsupportedRouteShape => "unsupported route shape",
             Self::DuplicateRoutePath => "duplicate route path",
             Self::RouteIoError => "route filesystem error",
@@ -3575,7 +3575,7 @@ mod tests {
         // `<pre>` block. A regression here would either
         // leak script-injection surface to the dev or
         // strip the stack trace the operator needs.
-        let body = r#"{"kind":"tsp_error","error":"RangeError","message":"<bad> & 'quoted'","stack":"Error\n    at GET (routes/foo.tsp:5:7)\n"}"#;
+        let body = r#"{"kind":"tsp_error","error":"RangeError","message":"<bad> & 'quoted'","stack":"Error\n    at GET (pages/foo.tsp:5:7)\n"}"#;
         let (html, ct) = render_dev_error_page(body, "HTTP/1.1 500 Internal Server Error");
         assert_eq!(ct, "text/html; charset=utf-8");
         // The HTML escapes `<`, `>`, `&`, and `'` in
@@ -3591,7 +3591,7 @@ mod tests {
             "error name must render in the error-name slot; got: {html}"
         );
         assert!(
-            html.contains("Error\n    at GET (routes/foo.tsp:5:7)\n"),
+            html.contains("Error\n    at GET (pages/foo.tsp:5:7)\n"),
             "stack trace must be preserved verbatim (no escaping of newlines); got: {html}"
         );
         assert!(

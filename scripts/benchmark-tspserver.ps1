@@ -1,16 +1,16 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)] [string]$ServerBinary,
-  [string]$RoutesDirectory = "routes",
+  [string]$PagesDirectory = "pages",
   [int]$Port = 9140,
   [int]$Requests = 50,
   [string]$OutputJson = ""
 )
 
 $server = [System.IO.Path]::GetFullPath($ServerBinary)
-$routes = [System.IO.Path]::GetFullPath($RoutesDirectory)
+$pages = [System.IO.Path]::GetFullPath($PagesDirectory)
 if (!(Test-Path -LiteralPath $server -PathType Leaf)) { throw "server binary not found: $server" }
-if (!(Test-Path -LiteralPath $routes -PathType Container)) { throw "routes directory not found: $routes" }
+if (!(Test-Path -LiteralPath $pages -PathType Container)) { throw "pages directory not found: $pages" }
 if ($Requests -lt 1) { throw "Requests must be positive" }
 
 $info = [System.Diagnostics.ProcessStartInfo]::new()
@@ -19,7 +19,7 @@ $info.WorkingDirectory = (Get-Location).Path
 $info.UseShellExecute = $false
 $info.CreateNoWindow = $true
 $info.Environment["TSP_PORT"] = "$Port"
-$info.Environment["TSP_ROUTES_DIR"] = $routes
+$info.Environment["TSP_ROUTES_DIR"] = $pages
 $info.Environment["TSP_EMBEDDED_WORKER"] = "1"
 $process = [System.Diagnostics.Process]::new()
 $process.StartInfo = $info

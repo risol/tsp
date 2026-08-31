@@ -7,7 +7,7 @@ edition.workspace = true
 #
 # The legacy `src/main.ts` host is gone. This crate is the runtime
 # entry point for the current TSP server.
-# (HTTP -> routes/index.tsp -> TSX transform -> JSC -> GET -> response)
+# (HTTP -> pages/index.tsp -> TSX transform -> JSC -> GET -> response)
 # and lives behind `bin/tspserver.rs`. Library code is the same source
 # the bin re-uses so future tests and embedded callers can drive the
 # host without spawning a process.

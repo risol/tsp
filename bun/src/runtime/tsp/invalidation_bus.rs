@@ -97,16 +97,16 @@ mod tests {
         let mut second = InvalidationBus::open(path.clone()).unwrap();
         first
             .publish(&[
-                PathBuf::from("routes/index.tsp"),
-                PathBuf::from("routes/shared.tsx"),
+                PathBuf::from("pages/index.tsp"),
+                PathBuf::from("pages/shared.tsx"),
             ])
             .unwrap();
         assert!(first.read_since().unwrap().is_empty());
         assert_eq!(
             second.read_since().unwrap(),
             vec![
-                PathBuf::from("routes/index.tsp"),
-                PathBuf::from("routes/shared.tsx")
+                PathBuf::from("pages/index.tsp"),
+                PathBuf::from("pages/shared.tsx")
             ]
         );
         assert!(second.read_since().unwrap().is_empty());

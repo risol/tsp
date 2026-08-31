@@ -1,6 +1,6 @@
 // Slice 17d demo: bun's native `bun:sql` (exposed as
 // `tsp:server.sql`) talking to a SQLite file backing the
-// `main` data source declared in `routes/_db.ts`.
+// `main` data source declared in `pages/_db.ts`.
 //
 // Endpoints that exercise the page-side connection lifecycle
 // (plan §17.3):
@@ -25,7 +25,7 @@
 //                                      source (different sqlite
 //                                      file) per the sibling
 //                                      multi-datasource config
-//                                      in `routes/_db.ts`. Returns
+//                                      in `pages/_db.ts`. Returns
 //                                      200 with the events table
 //                                      contents.
 //

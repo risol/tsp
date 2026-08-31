@@ -148,7 +148,7 @@ The default layout is:
 ```text
 app/
 ├── tsp.toml
-├── routes/
+├── pages/
 │   ├── index.tsp
 │   └── ...
 ├── components/
@@ -161,7 +161,7 @@ app/
 
 The following directories have special meaning by default:
 
-- `routes/` — route-root `.tsp` files;
+- `pages/` — route-root `.tsp` files;
 - `public/` — static files.
 
 The runtime MAY allow these locations to be changed through configuration.
@@ -550,7 +550,7 @@ Within one page generation, repeated imports of the same canonical source module
 By default, route modules are discovered below:
 
 ```text
-<app-root>/routes
+<app-root>/pages
 ```
 
 Only `.tsp` files under the configured route directory participate in automatic file-system routing.
@@ -560,10 +560,10 @@ Only `.tsp` files under the configured route directory participate in automatic 
 The following mappings are REQUIRED:
 
 ```text
-routes/index.tsp          -> /
-routes/login.tsp          -> /login
-routes/users/index.tsp    -> /users
-routes/users/new.tsp      -> /users/new
+pages/index.tsp          -> /
+pages/login.tsp          -> /login
+pages/users/index.tsp    -> /users
+pages/users/new.tsp      -> /users/new
 ```
 
 ## 11.3 Dynamic segment
@@ -573,7 +573,7 @@ A filename or directory named `[name]` defines one dynamic path segment.
 Example:
 
 ```text
-routes/users/[id].tsp -> /users/:id
+pages/users/[id].tsp -> /users/:id
 ```
 
 For a request to:
@@ -595,7 +595,7 @@ A filename or directory named `[...name]` defines a catch-all segment.
 Example:
 
 ```text
-routes/files/[...path].tsp
+pages/files/[...path].tsp
 ```
 
 The matched parameter MUST be exposed as a slash-joined string after URL path decoding.
@@ -635,13 +635,13 @@ Example:
 MUST match:
 
 ```text
-routes/users/new.tsp
+pages/users/new.tsp
 ```
 
 before:
 
 ```text
-routes/users/[id].tsp
+pages/users/[id].tsp
 ```
 
 ## 11.7 Ambiguous routes
@@ -1804,7 +1804,7 @@ A minimal example is:
 
 ```toml
 [app]
-routes = "routes"
+routes = "pages"
 public = "public"
 
 [server]
@@ -2300,7 +2300,7 @@ Conceptually:
 deploy/
 ├── tspserver
 ├── tsp.toml
-├── routes/
+├── pages/
 ├── components/
 ├── lib/
 ├── public/

@@ -2,13 +2,13 @@
 set -euo pipefail
 
 if [[ $# -lt 1 || $# -gt 4 ]]; then
-  echo "usage: $0 <tspserver> [output-dir] [routes-dir] [public-dir]" >&2
+  echo "usage: $0 <tspserver> [output-dir] [pages-dir] [public-dir]" >&2
   exit 2
 fi
 
 server_binary=$1
 output_dir=${2:-dist/tspserver}
-routes_dir=${3:-routes}
+pages_dir=${3:-pages}
 public_dir=${4:-public}
 
 [[ -f "$server_binary" ]] || { echo "server binary not found: $server_binary" >&2; exit 1; }
@@ -19,8 +19,8 @@ server_target="$output_dir/$server_name"
 if [[ "$(realpath "$server_binary")" != "$(realpath "$server_target" 2>/dev/null || true)" ]]; then
   cp "$server_binary" "$server_target"
 fi
-rm -rf "$output_dir/routes" "$output_dir/public"
-if [[ -d "$routes_dir" ]]; then cp -R "$routes_dir" "$output_dir/routes"; fi
+rm -rf "$output_dir/pages" "$output_dir/routes" "$output_dir/public"
+if [[ -d "$pages_dir" ]]; then cp -R "$pages_dir" "$output_dir/pages"; fi
 if [[ -d "$public_dir" ]]; then cp -R "$public_dir" "$output_dir/public"; fi
 
 # embedded-worker distribution contract: the packaged directory must NOT
@@ -44,7 +44,7 @@ cat > "$output_dir/tspserver-runtime.json" <<JSON
   "server": "$server_name",
   "worker": "$server_name",
   "embedded_worker": true,
-  "routes": "routes",
+  "pages": "pages",
   "public": "public",
   "resolver": "bundled-runtime"
 }

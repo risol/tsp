@@ -6,7 +6,7 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$OutputDirectory = "dist/tspserver",
 
-  [string]$RoutesDirectory = "routes",
+  [string]$PagesDirectory = "pages",
 
   [string]$PublicDirectory = "public"
 )
@@ -23,8 +23,11 @@ $serverTarget = Join-Path $outputPath $serverName
 if ($serverPath -ne $serverTarget) {
   Copy-Item -LiteralPath $serverPath -Destination $serverTarget -Force
 }
-if (Test-Path -LiteralPath $RoutesDirectory -PathType Container) {
-  Copy-Item -LiteralPath $RoutesDirectory -Destination (Join-Path $outputPath "routes") -Recurse -Force
+if (Test-Path -LiteralPath $PagesDirectory -PathType Container) {
+  Copy-Item -LiteralPath $PagesDirectory -Destination (Join-Path $outputPath "pages") -Recurse -Force
+}
+if (Test-Path -LiteralPath (Join-Path $outputPath "routes")) {
+  Remove-Item -LiteralPath (Join-Path $outputPath "routes") -Recurse -Force
 }
 if (Test-Path -LiteralPath $PublicDirectory -PathType Container) {
   Copy-Item -LiteralPath $PublicDirectory -Destination (Join-Path $outputPath "public") -Recurse -Force
@@ -52,7 +55,7 @@ $manifest = [ordered]@{
   server = $serverName
   worker = $serverName
   embedded_worker = $true
-  routes = "routes"
+  pages = "pages"
   public = "public"
   resolver = "bundled-runtime"
 }

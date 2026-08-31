@@ -95,7 +95,7 @@ pub enum JscError {
     /// Spawning the bun process failed (permission, etc.).
     Spawn(io::Error),
     /// bun exited non-zero. We surface the stderr tail (truncated to
-    /// 1 KiB) so a JS error from `routes/index.tsp` shows up in the
+    /// 1 KiB) so a JS error from `pages/index.tsp` shows up in the
     /// 500 page without overflowing the response body.
     BunFailed {
         code: Option<i32>,

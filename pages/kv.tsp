@@ -10,7 +10,7 @@
 //   GET /kv            -> echoes the entire entries map
 //   GET /kv?key=X      -> echoes one entry (null if missing)
 //
-// The page mirrors `routes/counter.tsp` / `routes/flags.tsp`
+// The page mirrors `pages/counter.tsp` / `pages/flags.tsp`
 // shape: a single GET that reports a `x-demo` header so
 // the e2e can assert the page actually ran (200) versus
 // the host rejecting (4xx with TSP error code).

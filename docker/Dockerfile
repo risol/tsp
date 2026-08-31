@@ -11,14 +11,14 @@ RUN groupadd --system tspserver \
 WORKDIR /app
 
 COPY dist/tspserver/tspserver /usr/local/bin/tspserver
-COPY routes/ /app/routes/
+COPY pages/ /app/pages/
 COPY public/ /app/public/
 
 RUN chmod +x /usr/local/bin/tspserver \
     && chown -R tspserver:tspserver /app
 
 ENV TSP_PORT=9000 \
-    TSP_ROUTES_DIR=/app/routes \
+    TSP_ROUTES_DIR=/app/pages \
     TSP_PUBLIC_DIR=/app/public \
     TSP_EMBEDDED_WORKER=1 \
     TSP_WORKER_COUNT=2

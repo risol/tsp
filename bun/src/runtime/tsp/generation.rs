@@ -103,7 +103,7 @@ pub enum BuildResult {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PageRef {
     /// The URL path the route is mounted at. E.g. "/" for
-    /// `routes/index.tsp`.
+    /// `pages/index.tsp`.
     pub route: String,
     /// The HTTP method the slot dispatches. A `.tsp` file
     /// that exports both `GET` and `POST` becomes two
@@ -779,7 +779,7 @@ mod tests {
     fn first_load_unloaded_to_building_to_clean() {
         let r = PageRegistry::new();
         let p = page("/", HttpMethod::Get);
-        r.register(p.clone(), modid("routes/index.tsp"));
+        r.register(p.clone(), modid("pages/index.tsp"));
         let snap = r.snapshot(&p).unwrap();
         assert_eq!(snap.state, PageState::Unloaded);
         assert!(snap.current_id.is_none());
@@ -787,7 +787,7 @@ mod tests {
         let snap = r.snapshot(&p).unwrap();
         assert_eq!(snap.state, PageState::Building);
         guard.commit(
-            vec![modid("routes/index.tsp")],
+            vec![modid("pages/index.tsp")],
             "<h1>Hello</h1>".to_string(),
         );
         let snap = r.snapshot(&p).unwrap();
@@ -799,7 +799,7 @@ mod tests {
     fn first_load_failure_keeps_no_current() {
         let r = PageRegistry::new();
         let p = page("/", HttpMethod::Get);
-        r.register(p.clone(), modid("routes/index.tsp"));
+        r.register(p.clone(), modid("pages/index.tsp"));
         let guard = r.begin_build(&p).unwrap();
         guard.fail("transpile error".into());
         let snap = r.snapshot(&p).unwrap();
@@ -811,7 +811,7 @@ mod tests {
     fn clean_to_dirty_to_building_to_clean_lkg_promotes() {
         let r = PageRegistry::new();
         let p = page("/", HttpMethod::Get);
-        r.register(p.clone(), modid("routes/index.tsp"));
+        r.register(p.clone(), modid("pages/index.tsp"));
         // First build succeeds
         let g1 = r.begin_build(&p).unwrap();
         g1.commit(vec![], "body1".to_string());
@@ -834,7 +834,7 @@ mod tests {
     fn invalidation_during_build_keeps_slot_dirty() {
         let r = PageRegistry::new();
         let p = page("/", HttpMethod::Get);
-        r.register(p.clone(), modid("routes/index.tsp"));
+        r.register(p.clone(), modid("pages/index.tsp"));
 
         let first = r.begin_build(&p).unwrap();
         first.commit(vec![], "body1".to_string());
@@ -856,7 +856,7 @@ mod tests {
     fn failed_rebuild_keeps_lkg() {
         let r = PageRegistry::new();
         let p = page("/", HttpMethod::Get);
-        r.register(p.clone(), modid("routes/index.tsp"));
+        r.register(p.clone(), modid("pages/index.tsp"));
         // First build succeeds. Per "LKG = last successful
         // build", after the first commit LKG = g1 and
         // current = g1.
@@ -880,7 +880,7 @@ mod tests {
     fn dropped_guard_resets_state() {
         let r = PageRegistry::new();
         let p = page("/", HttpMethod::Get);
-        r.register(p.clone(), modid("routes/index.tsp"));
+        r.register(p.clone(), modid("pages/index.tsp"));
         let g1 = r.begin_build(&p).unwrap();
         // Drop without commit.
         drop(g1);
@@ -893,7 +893,7 @@ mod tests {
     fn begin_build_rejects_clean_and_building() {
         let r = PageRegistry::new();
         let p = page("/", HttpMethod::Get);
-        r.register(p.clone(), modid("routes/index.tsp"));
+        r.register(p.clone(), modid("pages/index.tsp"));
         let g = r.begin_build(&p).unwrap();
         g.commit(vec![], "body".to_string());
         // Now Clean. begin_build must be rejected.
@@ -925,7 +925,7 @@ mod tests {
         let r1 = PageRegistry::new();
         let r2 = r1.clone();
         let p = page("/", HttpMethod::Get);
-        r1.register(p.clone(), modid("routes/index.tsp"));
+        r1.register(p.clone(), modid("pages/index.tsp"));
         // Both handles see the same slot.
         assert!(r1.snapshot(&p).is_some());
         assert!(r2.snapshot(&p).is_some());
@@ -941,7 +941,7 @@ mod tests {
         use std::thread;
         let r = PageRegistry::new();
         let p = page("/", HttpMethod::Get);
-        r.register(p.clone(), modid("routes/index.tsp"));
+        r.register(p.clone(), modid("pages/index.tsp"));
 
         // Thread A: owns the build, sleeps a bit, then commits.
         let r_a = r.clone();
@@ -998,7 +998,7 @@ mod tests {
     fn request_pinning_survives_commit_overwrite() {
         let r = PageRegistry::new();
         let p = page("/", HttpMethod::Get);
-        r.register(p.clone(), modid("routes/index.tsp"));
+        r.register(p.clone(), modid("pages/index.tsp"));
         let g1 = r.begin_build(&p).unwrap();
         g1.commit(vec![], "v1".to_string());
         // Pin v1.
@@ -1024,7 +1024,7 @@ mod tests {
     fn generation_release_drops_old_payload() {
         let r = PageRegistry::new();
         let p = page("/", HttpMethod::Get);
-        r.register(p.clone(), modid("routes/index.tsp"));
+        r.register(p.clone(), modid("pages/index.tsp"));
         let g1 = r.begin_build(&p).unwrap();
         g1.commit(vec![], "release-me".to_string());
         // Capture a strong count via Arc::strong_count before
@@ -1070,7 +1070,7 @@ mod tests {
         use std::thread;
         let r = PageRegistry::new();
         let p = page("/", HttpMethod::Get);
-        r.register(p.clone(), modid("routes/index.tsp"));
+        r.register(p.clone(), modid("pages/index.tsp"));
         // First commit so LKG is established.
         let g1 = r.begin_build(&p).unwrap();
         g1.commit(vec![], "lkg-body".to_string());
@@ -1119,7 +1119,7 @@ mod tests {
         let r = PageRegistry::new();
         let route = Route {
             path: "/x".to_string(),
-            source: PathBuf::from("routes/x.tsp"),
+            source: PathBuf::from("pages/x.tsp"),
             methods: vec![HttpMethod::Get, HttpMethod::Post],
             segments: vec![Segment::Static("x".to_string())],
             params: std::collections::HashMap::new(),
@@ -1139,7 +1139,7 @@ mod tests {
         let r = PageRegistry::new();
         let route = Route {
             path: "/x".to_string(),
-            source: PathBuf::from("routes/x.tsp"),
+            source: PathBuf::from("pages/x.tsp"),
             methods: vec![HttpMethod::Get, HttpMethod::Post],
             segments: vec![Segment::Static("x".to_string())],
             params: std::collections::HashMap::new(),

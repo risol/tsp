@@ -718,9 +718,14 @@ function __tspPublishResponse__(__tspResponse__) {
 const __tspAsyncRender__ = {};
 function __tspRenderNodeSync__(__node__, __child__) {
  if (__node__ && typeof __node__.then === 'function') throw __tspAsyncRender__;
- if (__node__ == null || typeof __node__ === 'boolean') return '';
+ if (__node__ == null) {
+  if (__child__) return '';
+  const __tspType__ = (typeof __node__);
+  throw new Error('TSP3001: handler returned unsupported value ' + __tspType__.charAt(0).toUpperCase() + __tspType__.slice(1) + '. Expected HtmlNode or Response.');
+ }
+ if (__child__ && typeof __node__ === 'boolean') return '';
  if (typeof __node__ === 'string') return __child__ ? __tspEscape__(__node__) : __node__;
- if (typeof __node__ === 'number' || typeof __node__ === 'bigint') return String(__node__);
+ if (__child__ && (typeof __node__ === 'number' || typeof __node__ === 'bigint')) return String(__node__);
  if (Array.isArray(__node__)) {
   let __body__ = '';
   for (const __item__ of __node__) __body__ += __tspRenderNodeSync__(__item__, true);
@@ -922,9 +927,14 @@ fn wrap_for_bun_cli_inner(
          }\n\
          async function __tspRenderNode__(__node__, __child__) {\n\
          \x20 __node__ = await __node__;\n\
-         \x20 if (__node__ == null || typeof __node__ === 'boolean') return '';\n\
+         \x20 if (__node__ == null) {\n\
+         \x20\x20 if (__child__) return '';\n\
+         \x20\x20 const __tspType__ = (typeof __node__);\n\
+         \x20\x20 throw new Error('TSP3001: handler returned unsupported value ' + __tspType__.charAt(0).toUpperCase() + __tspType__.slice(1) + '. Expected HtmlNode or Response.');\n\
+         \x20 }\n\
+         \x20 if (__child__ && typeof __node__ === 'boolean') return '';\n\
          \x20 if (typeof __node__ === 'string') return __child__ ? __tspEscape__(__node__) : __node__;\n\
-         \x20 if (typeof __node__ === 'number' || typeof __node__ === 'bigint') return String(__node__);\n\
+         \x20 if (__child__ && (typeof __node__ === 'number' || typeof __node__ === 'bigint')) return String(__node__);\n\
          \x20 if (Array.isArray(__node__)) return (await Promise.all(__node__.map(__n__ => __tspRenderNode__(__n__, true)))).join('');\n\
          \x20 if (__node__.__tspRaw !== undefined) return __node__.__tspRaw;\n\
          \x20 if (typeof __node__ !== 'object' || !__node__.props) {
@@ -1803,7 +1813,7 @@ export const frag = fragment(() => null);\n\
     // Multi-route dispatch regression tests
     //
     // The user observed that requesting /, /time, /svc, /users/42
-    // against a routes/ tree with 8 distinct .tsp files all returned
+    // against a pages/ tree with 8 distinct .tsp files all returned
     // the same `Hello GET /` body (which is uniquely index.tsp's GET
     // output). To localize the bug between master and worker we want
     // the wrap to be source-specific: a wrap built from time.tsp's
@@ -2034,7 +2044,7 @@ export async function POST(ctx) { return new Response('post-handler', { status: 
     // End-to-end pipeline test (real Bun execution)
     //
     // The unit tests above verify the wrap STRING. This one takes the
-    // full production pipeline for the actual `routes/nanoid.tsp`
+    // full production pipeline for the actual `pages/nanoid.tsp`
     // shape -- `tsx_to_js` (import rewrite + fragment rewrite), then
     // `wrap_for_bun_cli` (nanoid prelude + envelope transport) -- and
     // executes the generated module with the REAL `bun` binary. If
@@ -2046,7 +2056,7 @@ export async function POST(ctx) { return new Response('post-handler', { status: 
 
     #[test]
     fn nanoid_pipeline_generates_runable_module_under_real_bun() {
-        // Mirror of production `routes/nanoid.tsp` (import + GET + POST).
+        // Mirror of production `pages/nanoid.tsp` (import + GET + POST).
         let source = r#"// Slice 17a regression test fixture.
 import { nanoid } from "tsp:server";
 
@@ -2531,7 +2541,7 @@ export async function GET() {
         // We use bun:sqlite (no MySQL needed) so the test is
         // self-contained: write a tiny in-memory DB, INSERT,
         // SELECT, return the row. The page mirrors
-        // `routes/sql_demo.tsp` in production.
+        // `pages/sql_demo.tsp` in production.
         let source = r#"// Slice 17d regression test fixture.
 import { sql } from "tsp:server";
 
@@ -2539,7 +2549,7 @@ export async function GET(ctx) {
   // `sql(url)` is the factory call (returns a connection
   // function from bun's per-worker pool). `sql\`url\`` would
   // be a QUERY, not a connect -- easy to confuse. The page
-  // mirrors `routes/sql_demo.tsp` in production.
+  // mirrors `pages/sql_demo.tsp` in production.
   const url = "sqlite://" + (process.env.TSP_TEST_DB_FILE || ":memory:");
   const conn = await sql(url);
   try {
@@ -2733,7 +2743,7 @@ export function GET() {
         // relink.
         //
         // We use cost=4 to keep the test under a second. The
-        // page mirrors `routes/password.tsp` in production.
+        // page mirrors `pages/password.tsp` in production.
         //
         // Slice 22 follow-up: `password` was merged into
         // `util` (one less top-level export, one less
@@ -2857,7 +2867,7 @@ export function GET() {
     /// script to the original `.tsp` file (the
     /// directive value is the absolute path with the
     /// `tsp://` scheme + the current execution
-    /// generation, e.g. `tsp://D:/GitHub/tsp/routes/foo.tsp?generation=42`).
+    /// generation, e.g. `tsp://D:/GitHub/tsp/pages/foo.tsp?generation=42`).
     /// A future slice adds the matching
     /// `//# sourceMappingURL=data:...` directive (which
     /// would remap the transpiled line/col back to the

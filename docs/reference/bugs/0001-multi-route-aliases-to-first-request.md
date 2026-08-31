@@ -5,7 +5,7 @@
 > Reporter: Mavis (during slice-12 smoke re-verification)
 > Fix author: Mavis
 > Fix reviewer: Sol
-> Affected: TSP master+worker IPC path on multi-route `routes/`
+> Affected: TSP master+worker IPC path on multi-route `pages/`
 > Severity: Blocker for any deployment with `> 1` `.tsp` file
 > Workaround: None needed — fixed in one line
 
@@ -22,12 +22,12 @@ added to `bun/src/runtime/tsp/tests/start_order.rs`; 187/187 lib tests
 
 ## TL;DR
 
-When `routes/` contains more than one `.tsp` file, every URL on the
+When `pages/` contains more than one `.tsp` file, every URL on the
 running server returns **the first request's response body verbatim**,
 regardless of method or path. The first request was to `/`, so all
 subsequent requests (`/time`, `/svc`, `/users/42`, `POST /`, ...) get
-`routes/index.tsp`'s `GET` handler output. The single-route smoke test
-(`tests/smoke/routes/` contains only `index.tsp`) does NOT catch
+`pages/index.tsp`'s `GET` handler output. The single-route smoke test
+(`tests/smoke/pages/` contains only `index.tsp`) does NOT catch
 this.
 
 ## Repro
@@ -38,7 +38,7 @@ this.
 ./tsp.sh build:host       # copy bun.exe to dist/tspserver/tspserver.exe
 
 $env:TSP_PORT            = 3000
-$env:TSP_ROUTES_DIR      = "D:\GitHub\tsp\dist\tspserver\routes"  # 8 .tsp files
+$env:TSP_ROUTES_DIR      = "D:\GitHub\tsp\dist\tspserver\pages"  # 8 .tsp files
 $env:TSP_EMBEDDED_WORKER = 1
 $env:TSP_WORKER_COUNT    = 2
 & ".\dist\tspserver\tspserver.exe"
@@ -54,7 +54,7 @@ foreach ($u in '/','/time','/svc','/session','/abort','/slow','/upload','/users/
 <!doctype html><h1>Hello GET /</h1><p>seen=none</p><p>cookies.has(sid)=false</p>
 ```
 
-That's `routes/index.tsp` line 16 verbatim:
+That's `pages/index.tsp` line 16 verbatim:
 ```js
 return `<!doctype html><h1>Hello ${ctx.method} ${ctx.path}</h1>...`;
 ```
@@ -84,11 +84,11 @@ DEBUG page::prepare: route.path="/svc"   source=".../svc.tsp"   byte_len=1158
 DEBUG worker execute_request:
     request.path=".../time.tsp"  request.method=GET
     script_bytes=17463
-    source_url=//# sourceURL=tsp://D:/.../routes/time.tsp?generation=1
+    source_url=//# sourceURL=tsp://D:/.../pages/time.tsp?generation=1
 DEBUG worker execute_request:
     request.path=".../svc.tsp"   request.method=GET
     script_bytes=17512
-    source_url=//# sourceURL=tsp://D:/.../routes/svc.tsp?generation=1
+    source_url=//# sourceURL=tsp://D:/.../pages/svc.tsp?generation=1
 ```
 
 Each request produces a **different** `script_bytes` (16523–18469)
@@ -270,12 +270,12 @@ The existing test suite did not catch this:
   without evaluating it. They cannot catch a worker-side bug in
   the Bun VM evaluation path.
 - **End-to-end smoke** (`scripts/smoke-tspserver.{sh,ps1}`)
-  uses `tests/smoke/routes/` which contains a single
+  uses `tests/smoke/pages/` which contains a single
   `index.tsp`. The bug only manifests with `>= 2` `.tsp` files
   in the routes dir.
 
 **Required new regression test**: spawn the real
-`dist/tspserver/tspserver.exe` against a temp `routes/` dir that
+`dist/tspserver/tspserver.exe` against a temp `pages/` dir that
 contains at least two distinct `.tsp` files, send one request to
 each (in sequence, on a single-worker pool so the alias is
 deterministic), and assert that each request's body matches the

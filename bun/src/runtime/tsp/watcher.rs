@@ -69,7 +69,7 @@ pub const DEFAULT_POLL_MS: u64 = 500;
 /// implement `Debug`; the manual impl omits the callback from
 /// the printed shape.
 pub struct WatchConfig {
-    /// Directory to watch (routes/ root + its recursive subdirs).
+    /// Directory to watch (pages/ root + its recursive subdirs).
     pub routes_root: PathBuf,
     /// Poll interval in milliseconds.
     pub poll_ms: u64,

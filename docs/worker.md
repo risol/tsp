@@ -14,14 +14,14 @@ The root workflow builds the single runtime executable:
 ./tsp.sh build
 ```
 
-The packaged runtime, routes, public assets, and runtime manifest are
+The packaged runtime, pages, public assets, and runtime manifest are
 written to `dist/tspserver/`.
 
 ## Run
 
 ```bash
 TSP_PORT=9137 \
-TSP_ROUTES_DIR="$PWD/tests/smoke/routes" \
+TSP_ROUTES_DIR="$PWD/tests/smoke/pages" \
 ./tsp.sh start
 ```
 
@@ -64,6 +64,6 @@ For latency baselines, run the packaged executable directly:
 ```bash
 ./scripts/benchmark-tspserver.sh \
   dist/tspserver/tspserver \
-  tests/smoke/routes \
+  tests/smoke/pages \
   50
 ```

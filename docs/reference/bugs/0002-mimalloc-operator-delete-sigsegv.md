@@ -39,10 +39,10 @@ the first request:
 ```bash
 cd /src
 cp bun/build/release/bun-profile /tmp/tspserver
-cp -R tests/smoke/routes /tmp/tspserver-routes
+cp -R tests/smoke/pages /tmp/tspserver-pages
 
 TSP_PORT=9215 \
-TSP_ROUTES_DIR=/tmp/tspserver-routes \
+TSP_ROUTES_DIR=/tmp/tspserver-pages \
 TSP_EMBEDDED_WORKER=1 \
 TSP_WORKER_COUNT=2 \
 /tmp/tspserver

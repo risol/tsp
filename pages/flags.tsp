@@ -14,7 +14,7 @@
 //                             (new checkout flow, beta UI,
 //                             A/B test bucket assignment, ...).
 //
-// The page mirrors `routes/kv.tsp` shape: a single GET
+// The page mirrors `pages/kv.tsp` shape: a single GET
 // that reports a `x-demo` header so the e2e can assert
 // the page actually ran (200) versus the host rejecting
 // (4xx with TSP error code).

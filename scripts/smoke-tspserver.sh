@@ -2,20 +2,20 @@
 set -euo pipefail
 
 if [[ $# -lt 1 || $# -gt 3 ]]; then
-  echo "usage: $0 <tspserver> [routes-dir] [port]" >&2
+  echo "usage: $0 <tspserver> [pages-dir] [port]" >&2
   exit 2
 fi
 
 server=$(realpath "$1")
-source_routes=$(realpath "${2:-tests/smoke/routes}")
+source_pages=$(realpath "${2:-tests/smoke/pages}")
 port=${3:-9137}
 [[ -x "$server" ]] || { echo "server binary is not executable: $server" >&2; exit 1; }
-[[ -d "$source_routes" ]] || { echo "routes directory not found: $source_routes" >&2; exit 1; }
+[[ -d "$source_pages" ]] || { echo "pages directory not found: $source_pages" >&2; exit 1; }
 
 temp_root=$(mktemp -d "${TMPDIR:-/tmp}/tspserver-smoke.XXXXXX")
-routes="$temp_root/routes"
-mkdir -p "$routes"
-cp -R "$source_routes/." "$routes/"
+pages="$temp_root/pages"
+mkdir -p "$pages"
+cp -R "$source_pages/." "$pages/"
 server_log="$temp_root/server.log"
 pid=0
 
@@ -27,7 +27,7 @@ cleanup() {
 trap cleanup EXIT
 
 TSP_PORT="$port" \
-TSP_ROUTES_DIR="$routes" \
+TSP_ROUTES_DIR="$pages" \
 TSP_EMBEDDED_WORKER=1 \
 TSP_WORKER_COUNT=2 \
 "$server" >"$server_log" 2>&1 &
@@ -74,8 +74,8 @@ metrics=$(curl -fsS --max-time 30 "http://127.0.0.1:$port/__tsp/metrics")
 # argument and aborts with `invalid command code f`. The
 # `sed > new && mv` pipeline is portable across every POSIX
 # `sed` and avoids leaving a `.bak` artefact on disk.
-sed 's/Hello from TSP/Hello after reload/' "$routes/index.tsp" >"$routes/index.tsp.next"
-mv "$routes/index.tsp.next" "$routes/index.tsp"
+sed 's/Hello from TSP/Hello after reload/' "$pages/index.tsp" >"$pages/index.tsp.next"
+mv "$pages/index.tsp.next" "$pages/index.tsp"
 for _ in $(seq 1 150); do
   body=$(curl -fsS --max-time 2 "http://127.0.0.1:$port/" || true)
   if [[ "$body" == *"Hello after reload"* ]]; then

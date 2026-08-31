@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     environment:
       TSP_PORT: 9000
-      TSP_ROUTES_DIR: /app/routes
+      TSP_ROUTES_DIR: /app/pages
       TSP_PUBLIC_DIR: /app/public
       TSP_EMBEDDED_WORKER: 1
       TSP_WORKER_COUNT: 2
@@ -13,7 +13,7 @@ services:
     ports:
       - "9000:9000"
     volumes:
-      - ../routes:/app/routes:ro
+      - ../pages:/app/pages:ro
       - ../public:/app/public:ro
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://127.0.0.1:9000/"]

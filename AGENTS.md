@@ -23,11 +23,11 @@ global dependency injection, React page runtime, or `src/main.ts` host.
 
 ## Route rules
 
-- `.tsp` files under `routes/` are HTTP route modules.
+- `.tsp` files under `pages/` are HTTP route modules.
 - Export HTTP methods explicitly, such as `GET`, `POST`, `PUT`, or `DELETE`.
 - Use `tsp:server` for `Context`, response helpers, fragments, and errors.
 - Use `tsp:html` for trusted HTML and escaping helpers.
-- Dynamic route segments use `[name]`, for example `routes/users/[id].tsp`.
+- Dynamic route segments use `[name]`, for example `pages/users/[id].tsp`.
 - Static assets belong in `public/` and must not be implemented as route handlers.
 - Do not import from the deleted legacy `src/` tree or use legacy global types.
 
