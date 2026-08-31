@@ -79,7 +79,7 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: |
           brew install llvm@21 cmake ninja nasm
-          echo "/opt/homebrew/opt/llvm@21/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix llvm@21)/bin" >> "$GITHUB_PATH"
 
       - name: Install pinned LLVM toolchain (Windows)
         if: matrix.os == 'windows-latest'
@@ -114,8 +114,25 @@ jobs:
             routes \
             public
 
-      - name: Run native process-model + start-order tests
+      - name: Run native process-model + start-order tests (Linux/Windows)
+        if: matrix.os != 'macos-latest'
         working-directory: bun
+        run: |
+          cargo test -p bun_runtime_tsp --test process_model --no-fail-fast --locked -- --test-threads=1
+          cargo test -p bun_runtime_tsp --test start_order --no-fail-fast --locked
+
+      - name: Run native process-model + start-order tests (macOS)
+        if: matrix.os == 'macos-latest'
+        working-directory: bun
+        env:
+          # The release build needs LLVM 21, but these standalone Rust tests
+          # do not. Use Apple's linker instead of the generated lld flags:
+          # Homebrew clang rejects `-fuse-ld=lld` on the hosted macOS runner.
+          CC: /usr/bin/clang
+          CXX: /usr/bin/clang++
+          RUSTFLAGS: -C link-arg=-Qunused-arguments -A linker_messages
+          CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER: /usr/bin/clang++
+          CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER: /usr/bin/clang++
         run: |
           cargo test -p bun_runtime_tsp --test process_model --no-fail-fast --locked -- --test-threads=1
           cargo test -p bun_runtime_tsp --test start_order --no-fail-fast --locked
