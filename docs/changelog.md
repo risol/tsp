@@ -4,6 +4,8 @@ All notable changes to TSP will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-31
+
 ### Added
 - v2.4 Master + IPC embedded Bun Workers with cross-platform lifecycle,
   timeout, crash replacement, backpressure, and hot-reload coverage.
@@ -21,10 +23,10 @@ All notable changes to TSP will be documented in this file.
   `Response.headers` Cache-Control always wins.
 - `config.timeoutMs` per-page request timeout (spec §7 v2.0 core PageConfig).
   Overrides the global `TSP_TIMEOUT_MS` per request; `0` disables the watchdog.
-- `tspserver_v2 check` reports three new categories of spec §46 export-
-  validation violations at check time (the runtime still serves the page;
-  full generation-build enforcement lands with the AST detector in a
-  future slice):
+- `config.methods` static validation (FREEZE §11): `tspserver_v2 check`
+  reports three new categories of spec §46 export-validation violations at
+  check time (the runtime still serves the page; full generation-build
+  enforcement lands with the AST detector in a future slice):
   - `config.methods` mismatch (declared set vs. actual exports)
   - unknown runtime exports (`export function NAME(...)` whose NAME is
     not a standard HTTP method handler)
@@ -38,6 +40,48 @@ All notable changes to TSP will be documented in this file.
 - `tspserver_v2 --version` flag and a fully-documented `--help` output
   that lists every env var the host honors (including the previously
   undocumented `TSP_TIMEOUT_MS` and `TSP_DEVELOPMENT`).
+- `tspserver_v2 typings` subcommand (with `tsp.sh typings` and
+  `TSP_TYPINGS_DIR` / `--out <DIR>` overrides) emits the typed
+  declaration files for `tsp:server`, `tsp:html`, and `tsp:runtime`
+  (FREEZE item 7, plan §11).
+- `tspserver_v2 check --tsc` runs a real `tsc --noEmit` against the
+  application routes so type errors are surfaced as part of `check`,
+  not only as runtime failures.
+- `/__tsp/metrics` endpoint pinned end-to-end (Amendment 10): HEAD and
+  405 paths covered; `nosniff` added to metrics responses.
+- Per-page `config.methods` HEAD body-drop + OPTIONS 204 responses
+  preserve the frozen host contract.
+- `VirtualMachine::vm_trace` helper plus a per-VM `startup_trace` slot
+  (`bun/src/jsc/VirtualMachine.rs`) so embedding startup-trace callbacks
+  remain available to per-request VM methods, not just `init`. The slot
+  is a `fn(&str)` pointer (no captures, no VM/JSC work) populated once
+  by `init` from `InitOptions::startup_trace` and read by `vm_trace`.
+- Segmented stage markers inside `VirtualMachine::reload_entry_point` /
+  `load_entry_point` (`entry-eval:begin`, `:set-main:end`,
+  `:debugger:end`, `:pre-exec:begin/end`, `:generate-entry:begin/end`,
+  `:preloads:begin/end`, `:module-loader:begin/end`, `:end`,
+  `load-entry:reload-end`, `:wait:begin`, `:wait:rejected`, `:wait:end`)
+  so a Windows first-call crash inside `load_entry_point` is
+  attributable to one of: synthetic `bun:main` generation, pre-execution
+  bootstrap, preload evaluation, `JSModuleLoader` evaluation, or
+  promise resolution + event-loop tick.
+- Per-iteration markers inside `EventLoop::wait_for_promise`
+  (`bun/src/jsc/event_loop.rs`): `load-entry:wait:iter:0` /
+  `:iter:N`, `load-entry:wait:tick:begin` / `:tick:end`,
+  `load-entry:wait:auto-tick:begin` / `:auto-tick:end`, and
+  `load-entry:wait:resolved`. Rate-limited to the first four iterations
+  so a successful wait does not flood the trace.
+- `tick_turn` sub-stage markers (`bun/src/jsc/event_loop.rs`):
+  `tick:concurrent:initial:begin/end`, `tick:gc-timer:initial:begin/end`,
+  `tick:inner:tick-with-count:begin/end`, `tick:inner:concurrent:begin/end`,
+  `tick:inner:rejected:begin/end`, `tick:microtasks:begin/end`,
+  `tick:tail:tick-with-count:begin/end`, `tick:tail:concurrent:begin/end`,
+  `tick:rejected:final:begin`. Per-iteration markers inside the inner
+  and tail loops are rate-limited to the first iteration.
+- `drain_microtasks_with_global` sub-stage markers
+  (`bun/src/jsc/event_loop.rs`): `drain-mt:release-weak-refs:begin/end`,
+  `drain-mt:drain-microtasks:begin/end`,
+  `drain-mt:deferred-tasks:begin/end`, `drain-mt:quic:begin/end`.
 
 ### Fixed
 - Pre-existing port collision between `multi_route_dispatch_does_not_alias_to_first_request`
@@ -58,105 +102,34 @@ All notable changes to TSP will be documented in this file.
   `ConnectionReset` on the LAST read (the response body has already been
   received; the RST just terminates the stream). The tolerance is
   restricted to AFTER the first successful read.
-
-## Unreleased — 2026-08-30
-
-### Added
-- `VirtualMachine::vm_trace` helper plus a per-VM `startup_trace` slot
-  (`bun/src/jsc/VirtualMachine.rs`) so embedding startup-trace callbacks
-  remain available to per-request VM methods, not just `init`. The slot
-  is a `fn(&str)` pointer (no captures, no VM/JSC work) populated once
-  by `init` from `InitOptions::startup_trace` and read by `vm_trace`.
-- Segmented stage markers inside `VirtualMachine::reload_entry_point` /
-  `load_entry_point` (`entry-eval:begin`, `:set-main:end`,
-  `:debugger:end`, `:pre-exec:begin/end`, `:generate-entry:begin/end`,
-  `:preloads:begin/end`, `:module-loader:begin/end`, `:end`,
-  `load-entry:reload-end`, `:wait:begin`, `:wait:rejected`, `:wait:end`)
-  so a Windows first-call crash inside `load_entry_point` is
-  attributable to one of: synthetic `bun:main` generation, pre-execution
-  bootstrap, preload evaluation, `JSModuleLoader` evaluation, or
-  promise resolution + event-loop tick.
-- Per-iteration markers inside `EventLoop::wait_for_promise`
-  (`bun/src/jsc/event_loop.rs`): `load-entry:wait:iter:0` /
-  `:iter:N`, `load-entry:wait:tick:begin` / `:tick:end`,
-  `load-entry:wait:auto-tick:begin` / `:auto-tick:end`, and
-  `load-entry:wait:resolved`. Rate-limited to the first four iterations
-  so a successful wait does not flood the trace. The Windows first-call
-  crash was bounded to this function by the previous slice's trace; the
-  new markers split `tick` (microtask drain) from `auto_tick`
-  (runtime hook → uSockets poll → Windows HANDLE) so the next run can
-  attribute the fault to one of those.
-
-### Diagnostics
-- BUG-0003 (`docs/v2/bugs/0003-windows-ci-worker-sigsegv-invalid-handle.md`)
-  now records the confirmed root cause: the embedded worker's synthetic ESM
-  `bun:main` evaluation left a module-resume job that crashed in the first
-  Windows JSC microtask checkpoint. The final worker path directly transpiles
-  and evaluates the wrapper body as a plain script, avoiding both that resume
-  job and the failed CommonJS module-builder workaround. Removing the obsolete
-  generated-worker stdin listener and lazy optional-Bun-API access remain
-  independent hardening.
-- Added native stderr markers around the `JSNextTickQueue` and
-  `JSC::VM::drainMicrotasks()` sub-stages; these localized the fault before
-  the final direct-transpile fix.
-
-### In progress
-- BUG-0003 fix implemented: the embedded worker now directly transpiles the
-  generated wrapper with the Rust TSX pipeline, unwraps the printer's
-  CommonJS shell, and evaluates the body as a plain script. Synchronous
-  handlers publish before the first microtask checkpoint, while asynchronous
-  handlers retain the normal event-loop fallback. Local Windows smoke and
-  [CI run `33340458504`](https://github.com/risol/tsp/actions/runs/33340458504)
+- BUG-0003 (`docs/v2/bugs/0003-windows-ci-worker-sigsegv-invalid-handle.md`):
+  the embedded worker's synthetic ESM `bun:main` evaluation left a
+  module-resume job that crashed in the first Windows JSC microtask
+  checkpoint. The final worker path directly transpiles and evaluates
+  the wrapper body as a plain script, avoiding both that resume job and
+  the failed CommonJS module-builder workaround. Local Windows smoke
+  and [CI run `33340458504`](https://github.com/risol/tsp/actions/runs/33340458504)
   pass on Linux, macOS, and Windows.
-- The WebKit/JSC pin now uses `b9a6abf2d598`, which contains WebKit's
-  `MicrotaskCallCache` invalidation when detached `CodeBlock` objects are
-  deleted. Windows CI run `33319229316` still failed at the same JSC
-  microtask-drain boundary, so this dependency update is not recorded as the
-  BUG-0003 fix.
-- ~~Windows first-call SIGSEGV in the TSP embedded worker at
-  `0xFFFFFFFFFFFFFFFF`. The `VirtualMachine::init` call leaves
-  `uws::Loop::internal_loop_data.jsc_vm` non-null, so the JSC park hook
-  (`Bun__JSC_onBeforeWait`) fires from `us_loop_run` /
-  `us_loop_run_bun_tick` and — Windows + mimalloc — drives
-  `mi_on_thread_idle()` against an unvalidated retired-page list. The
-  worker now clears `jsc_vm` after init (`bun/src/runtime/tsp_worker.rs`),
-  which short-circuits the `if (loop->data.jsc_vm)` guard in uSockets and
-  skips the park hook. The TSP worker is the JS thread for its process
-  and never re-enters from another thread, so the per-poll heap-access
-  release is unnecessary. Windows CI is expected to pass the first
-  request, repeated requests, and hot reload.~~ Reverted: the
+- Embedded worker no longer installs a generated-worker stdin listener,
+  and the optional Bun API surface is exposed through lazy getters so
+  importing `tsp:server` does not initialize a native subsystem as a
+  side effect.
+- Reverted the `jsc_vm=null` change for the TSP embedded worker: the
   Windows CI run on `61b0fdf9f4` showed the crash is in
   `EventLoop::tick`, not `auto_tick`; on a fresh worker
   `is_active()=false`, so `auto_tick` takes the `else` branch
   (`tick_without_idle()` → `us_loop_pump()`) which does not invoke the
-  park hook. The `jsc_vm=null` change is therefore a no-op for the
-  crash and was reverted.
+  park hook. The `jsc_vm=null` change was a no-op for the crash.
 
 ### Diagnostics
-- Added `tick_turn` sub-stage markers (`bun/src/jsc/event_loop.rs`):
-  `tick:concurrent:initial:begin/end`, `tick:gc-timer:initial:begin/end`,
-  `tick:inner:tick-with-count:begin/end`, `tick:inner:concurrent:begin/end`,
-  `tick:inner:rejected:begin/end`, `tick:microtasks:begin/end`,
-  `tick:tail:tick-with-count:begin/end`, `tick:tail:concurrent:begin/end`,
-  `tick:rejected:final:begin`. Per-iteration markers inside the inner
-  and tail loops are rate-limited to the first iteration (the Windows
-  first-call crash is deterministic on iteration 1). The next failing
-  CI run will show which sub-stage's `:end` marker is the first one
-  not to print, localising the fault to a specific `tick_turn` step
-  (most likely `tick:microtasks:begin/end` for the
-  `drain_microtasks_with_global` JSC microtask drain where the
-  synthetic `bun:main` body runs).
-- Added `drain_microtasks_with_global` sub-stage markers
-  (`bun/src/jsc/event_loop.rs`): `drain-mt:release-weak-refs:begin/end`,
-  `drain-mt:drain-microtasks:begin/end`,
-  `drain-mt:deferred-tasks:begin/end`, `drain-mt:quic:begin/end`. The
-  Windows CI run on `ab1c2f2e6` showed `tick:microtasks:begin`
-  printed but `tick:microtasks:end` did not, narrowing the fault to
-  this function. The four markers split the 4-step drain to identify
-  the failing FFI or Rust call.
-- The temporary `TSP_PRELUDE_ENTERED` stdout tripwire was removed. The Windows
-  worker manager discards worker stdout, so native diagnostics use inherited
-  stderr or an explicit sink.
+- BUG-0003 confirmed root cause recorded in
+  `docs/v2/bugs/0003-windows-ci-worker-sigsegv-invalid-handle.md`. The
+  Windows worker crash is no longer opaque: the segmented trace
+  narrows the fault to a single sub-stage of `drain_microtasks_with_global`
+  before the direct-transpile fix.
+- The temporary `TSP_PRELUDE_ENTERED` stdout tripwire was removed. The
+  Windows worker manager discards worker stdout, so native diagnostics
+  use inherited stderr or an explicit sink.
 
 ### Test count
 332 tests, all green on 5 consecutive full-suite runs.
