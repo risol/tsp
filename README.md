@@ -1,63 +1,132 @@
 # TSP — TypeScript Server Page
 
-![TSP banner](./docs/images/banner.png)
+<p align="center">
+  <img src="./logo.png" alt="TSP logo" width="220">
+</p>
+
+<p align="center">
+  A native Rust web runtime for <code>.tsp</code> pages, powered by Bun and
+  inspired by the simplicity of classic PHP.
+</p>
+
+<p align="center">
+  <a href="https://github.com/risol/tsp/releases/latest">Download the latest release</a>
+  ·
+  <a href="https://github.com/risol/tsp/releases">All releases</a>
+</p>
 
 [![CI](https://github.com/risol/tsp/actions/workflows/ci.yml/badge.svg)](https://github.com/risol/tsp/actions/workflows/ci.yml)
-[![Latest release](https://img.shields.io/github/v/release/risol/tsp?display_name=tag)](https://github.com/risol/tsp/releases)
+[![Latest release](https://img.shields.io/github/v/release/risol/tsp?display_name=tag)](https://github.com/risol/tsp/releases/latest)
 
-TSP is a native Rust HTTP runtime that embeds Bun in worker child processes
-for executing `.tsp` route modules. It uses explicit HTTP method exports and
-does not use the former `Page()`/React application host.
+TSP is a self-contained server runtime for building dynamic websites and HTTP
+services with TypeScript. A Rust host handles HTTP, routing, request context,
+and process management, while embedded Bun workers execute `.tsp` route
+modules. The result is one native `tspserver` binary with a familiar
+page-oriented development model and modern TypeScript APIs.
+
+## Download
+
+Download a prebuilt package from the [latest GitHub Release](https://github.com/risol/tsp/releases/latest).
+Release packages are currently provided for:
+
+- Linux x64 (`.tar.gz`)
+- Windows x64 (`.zip`)
+- macOS (`.tar.gz`)
+
+No Rust or Bun installation is required to run a release package. Extract the
+archive, then start the platform-specific `tspserver` executable.
 
 ## Quick start
 
-Requirements:
-
-- Rust toolchain required by `bun/Cargo.toml`
-- Bun 1.x for building the embedded worker
-- Git with submodules when starting from a fresh checkout
-
-Build the runtime package:
+After extracting a release package:
 
 ```bash
-git clone --recursive https://github.com/risol/tsp.git
-cd tsp
-./tsp.sh build
+./tspserver
 ```
 
-Build a Linux x64 `tspserver` entirely inside Docker. The container uses
-the same Bun, Rust nightly, and LLVM versions as the Linux GitHub Actions
-release job, so a Windows or macOS host does not need the native build
-toolchain:
+On Windows PowerShell:
 
-```bash
-# Optional: build the reusable compiler environment once.
-bash docker/build-builder-image.sh
-
-# Compile the server using that environment.
-bash docker/build-linux.sh
+```powershell
+.\tspserver.exe
 ```
 
-The executable is written to `dist/tspserver-linux-x64/tspserver`. To build the
-runtime image after compiling it, use:
+The server listens on port `9000` by default, loads routes from `pages/`, and
+serves static assets from `public/`. Point the runtime at an existing project
+with environment variables:
 
-```bash
-bash docker/build.sh
+```text
+TSP_PORT=9000
+TSP_ROUTES_DIR=./pages
+TSP_PUBLIC_DIR=./public
+TSP_WORKER_COUNT=2
 ```
 
-Run the development server:
+## Design features
 
-```bash
-./tsp.sh dev
-```
+TSP is designed around a small, explicit boundary between native infrastructure
+and application code. The host owns the server lifecycle and the page runtime
+owns request-level application behavior.
 
-The server listens on port `9000` by default and loads routes from `pages/`.
-Route changes are watched and published without restarting the host.
+### Native host with embedded Bun workers
+
+Rust owns HTTP, routing, request scheduling, deadlines, process management, and
+long-lived services. Bun workers execute TypeScript and JSX in isolated,
+persistent processes. This keeps native resources out of disposable page code
+and gives the release package a single self-contained `tspserver` binary.
+
+### `.tsp` is standard TSX
+
+There are no PHP-style template delimiters, special page classes, or hidden
+global framework objects. A `.tsp` file is a normal TypeScript/JSX module and a
+route entry point. Export `GET`, `POST`, `PUT`, or `DELETE` explicitly so the
+HTTP contract is visible in the file itself.
+
+### Filesystem routing with predictable behavior
+
+The route tree maps directly to URLs: `pages/index.tsp` serves `/`, while
+`pages/users/[id].tsp` exposes a dynamic `id` parameter. Static files stay in
+`public/` and are handled separately from executable route modules. Route
+precedence and ambiguous routes are validated deterministically at startup.
+
+### Disposable page generations
+
+Each route is evaluated as an immutable page generation. A source change builds
+a new candidate generation, validates it, and publishes it atomically. New
+requests use the new generation while in-flight requests finish on the one they
+started with. If a reload fails, TSP keeps serving the last known-good
+generation instead of taking down the route.
+
+### Native ownership of durable state
+
+Page generations are replaceable; durable state is not hidden inside them.
+Sessions, services, worker coordination, and other long-lived resources belong
+to the native runtime or explicit external modules, so a route reload does not
+silently reset application infrastructure.
+
+### JSX for server rendering, without React
+
+TSP's JSX runtime produces an HTML node tree for server rendering. It provides
+components, async components, escaping, trusted HTML helpers, layouts, and
+fragments without requiring a client-side React runtime or client state model.
+
+### Explicit request and response APIs
+
+Every handler receives a request-scoped `Context` with the URL, route
+parameters, query, cookies, session, services, and abort signal. Responses are
+returned as JSX, text, HTML, JSON, redirects, or standard `Response` values;
+TSP does not infer response meaning from arbitrary object shapes.
+
+### Development ergonomics with production boundaries
+
+Development hot reload updates route generations without restarting the host.
+The same route contract, worker isolation, request lifetime rules, and native
+ownership boundaries remain in place when the prebuilt release binary is
+deployed.
 
 ## Route contract
 
-Routes are `.tsp` modules. They export HTTP method handlers and may import the
-reserved modules `tsp:server` and `tsp:html`.
+Routes are `.tsp` modules. Export the HTTP methods your route supports and use
+the reserved `tsp:server` and `tsp:html` modules for runtime helpers.
 
 ```tsx
 import { type Context, type PageConfig } from "tsp:server";
@@ -71,63 +140,33 @@ export function GET(ctx: Context) {
 }
 ```
 
-The context exposes the request, URL, route parameters, query parameters,
-cookies, session, services, abort signal, and route metadata. Handlers may
-return JSX, strings, or `Response` values created with `json`, `html`, `text`,
-`redirect`, or `notFound` from `tsp:server`.
-
-Dynamic routes use filesystem segments such as `pages/users/[id].tsp`.
-Static assets belong under `public/` and are served independently from route
-modules.
+Handlers may return JSX, strings, or standard `Response` values created with
+helpers such as `json`, `html`, `text`, `redirect`, and `notFound`. Static
+assets belong in `public/` and are served independently from route modules.
 
 ## Configuration
 
-The native host is configured through environment variables:
+The runtime is configured through environment variables. In addition to the
+paths and port above, `tspserver` supports worker pool sizing, request and
+worker limits, timeouts, Redis-backed sessions, Linux cgroup limits, and
+diagnostics. Run:
 
 ```text
-TSP_PORT=9000
-TSP_ROUTES_DIR=./pages
-TSP_PUBLIC_DIR=./public
-TSP_EMBEDDED_WORKER=1
-TSP_WORKER_COUNT=2
+tspserver --help
 ```
 
-See `./tsp.sh --help` and `tspserver --help` for worker recycling,
-timeouts, Redis sessions, cgroup limits, and diagnostics.
+for the complete list of options.
 
-## Commands
+## Documentation
 
-```bash
-./tsp.sh build          # Build the single-file runtime and dist/tspserver package
-./tsp.sh build:host     # Copy the built runtime to dist/tspserver
-./tsp.sh build:worker   # Build the single-file runtime
-./tsp.sh start          # Run the packaged server
-./tsp.sh dev            # Run with route hot reload
-./tsp.sh check          # cargo check for the host
-./tsp.sh test           # Rust tests plus embedded-worker smoke test
-./tsp.sh test:rust      # Rust unit and Worker IPC tests
-./tsp.sh test:smoke     # HTTP, metrics, and hot-reload smoke test
-./tsp.sh package        # Package the single runtime binary
-```
-
-## Repository layout
-
-```text
-.
-├── bun/src/runtime/tsp/       Native host, router, watcher, services, worker
-├── pages/                    Application route fixtures
-├── public/                    Optional static assets
-├── tests/smoke/            End-to-end route fixture
-├── scripts/                   Build, package, benchmark, and smoke workflows
-├── docs/reference/          Contract and examples
-├── types/                   TypeScript declarations for builtin modules
-└── tsp.sh                   Root workflow wrapper
-```
-
-The specification is in [`tsp-specification.md`](./tsp-specification.md).
-The application contract is [`docs/reference/contract.md`](./docs/reference/contract.md).
-The embedded worker deployment guide is [`docs/worker.md`](./docs/worker.md).
+- [TSP specification](./docs/tsp-specification.md)
+- [Architecture and implementation plan](./docs/tsp-plan.md)
+- [Application contract](./docs/reference/contract.md)
+- [Embedded worker guide](./docs/worker.md)
+- [Release and CI guide](./docs/github-ci-cd.md)
 
 ## License
 
-TSP is released under the MIT License.
+TSP's original source code and contributions are released under the [MIT
+License](./LICENSE). The runtime embeds Bun and includes third-party
+components with their own licenses; see [Bun's license and notices](./bun/LICENSE.md).

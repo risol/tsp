@@ -8,10 +8,10 @@ This document is the current contract application-facing contract. Any later
 spec change that contradicts a frozen item must come with an
 ADR (plan §69).
 
-This document is the consolidation of the 12 contract items `tsp-plan.md`
+This document is the consolidation of the 12 contract items `../tsp-plan.md`
 §60 says must be frozen before any non-trivial user code lands. The answers
-are extracted from `tsp-specification.md` (the 1817-line normative
-document) and `tsp-plan.md` §3-§60. Once Sol signs off, **the items
+are extracted from `../tsp-specification.md` (the 1817-line normative
+document) and `../tsp-plan.md` §3-§60. Once Sol signs off, **the items
 below are the API surface application code is allowed to rely on**; later
 slices (in-process JSC bridge, watcher + atomic reload, watcher-free
 reload via filesystem diff, etc.) build on these, they do not renegotiate
@@ -39,7 +39,7 @@ What this freezes for application code:
 - A `.tsp` file can be parsed, statically analysed, and transpiled by
   the host's bundler / transpiler / IDE without custom frontends.
 
-Evidence: `tsp-specification.md` §3.1, `tsp-plan.md` §3.1.
+Evidence: `../tsp-specification.md` §3.1, `../tsp-plan.md` §3.1.
 
 ### 2. `.tsp` modules cannot be imported
 
@@ -55,7 +55,7 @@ What this freezes for application code:
 - No two route entries can share a `.tsp` instance -- they are
   generation-root, not module-graph interior.
 
-Evidence: `tsp-specification.md` §5.1, `tsp-plan.md` §5.1.
+Evidence: `../tsp-specification.md` §5.1, `../tsp-plan.md` §5.1.
 
 ### 3. Route file system mapping rules
 
@@ -84,7 +84,7 @@ What this freezes for application code:
 - Renaming a file moves its URL; deleting a file removes its route.
 - Dynamic segment values are accessible as `ctx.params.<name>`.
 
-Evidence: `tsp-specification.md` §6, `tsp-plan.md` §6.
+Evidence: `../tsp-specification.md` §6, `../tsp-plan.md` §6.
 
 ### 4. Named HTTP method exports
 
@@ -115,7 +115,7 @@ What this freezes for application code:
 - A 405 from the host carries a real `Allow:` header listing the verbs
   the file actually exports.
 
-Evidence: `tsp-specification.md` §4.2, §42; `tsp-plan.md` §4.2,
+Evidence: `../tsp-specification.md` §4.2, §42; `../tsp-plan.md` §4.2,
 §42.
 
 ### 5. `HandlerResult = HtmlNode | Response`
@@ -137,7 +137,7 @@ What this freezes for application code:
   helpers from `tsp:server` are the idiomatic way to build a `Response`
   without `new Response(...)`.
 
-Evidence: `tsp-specification.md` §4.3, §10; `tsp-plan.md` §4.3,
+Evidence: `../tsp-specification.md` §4.3, §10; `../tsp-plan.md` §4.3,
 §10.4.
 
 ### 6. `Context` minimal API
@@ -174,7 +174,7 @@ What this freezes for application code:
   fragment; the host owns the internal route (NOT a hard-coded
   `/__tsp/fragment/...` path).
 
-Evidence: `tsp-specification.md` §8, `tsp-plan.md` §8.
+Evidence: `../tsp-specification.md` §8, `../tsp-plan.md` §8.
 
 ### 7. `fragment()` API
 
@@ -211,7 +211,7 @@ What this freezes for application code:
   `fetch` / `hx-get` / `<a href>` target. The `{ method: "POST" }`
   form lands in a follow-up.
 
-Evidence: `tsp-specification.md` §14, `tsp-plan.md` §14,
+Evidence: `../tsp-specification.md` §14, `../tsp-plan.md` §14,
 `Amendment 4` below.
 
 ### 8. `tsp:*` builtin module naming
@@ -364,7 +364,7 @@ and
 `cookies_runtime_parses_request_and_emits_set_cookie_on_write`
 tests in `tests/start_order.rs`).
 
-Evidence: `tsp-specification.md` §16, `tsp-plan.md` §16, §17.3, §18.
+Evidence: `../tsp-specification.md` §16, `../tsp-plan.md` §16, §17.3, §18.
 
 ### 9. JSX child / attribute escaping semantics
 
@@ -397,7 +397,7 @@ What this freezes for application code:
 - Event handlers on the server are rejected -- client interactivity
   arrives through fragment URLs + form posts, not onClick.
 
-Evidence: `tsp-specification.md` §11.4-§11.6, `tsp-plan.md`
+Evidence: `../tsp-specification.md` §11.4-§11.6, `../tsp-plan.md`
 §11.4-§11.6.
 
 ### 10. Async components
@@ -421,7 +421,7 @@ What this freezes for application code:
 - The renderer flattens nested promises, so a component can `await`
   multiple sources before returning.
 
-Evidence: `tsp-specification.md` §12.2, `tsp-plan.md` §12.2.
+Evidence: `../tsp-specification.md` §12.2, `../tsp-plan.md` §12.2.
 
 ### 11. PageConfig fields
 
@@ -448,7 +448,7 @@ What this freezes for application code:
 - `bodyLimit` is per-page; the global hard limit is in `tsp.toml` and
   applies first (page config cannot raise the ceiling).
 
-Evidence: `tsp-specification.md` §7, `tsp-plan.md` §7.
+Evidence: `../tsp-specification.md` §7, `../tsp-plan.md` §7.
 
 ### 12. Generation / LKG request-visible semantics
 
@@ -482,7 +482,7 @@ What this freezes for application code:
 - A page can be served by LKG for an arbitrary amount of time after a
   change is detected; there is no deadline.
 
-Evidence: `tsp-specification.md` §21-§24, `tsp-plan.md` §21-§24.
+Evidence: `../tsp-specification.md` §21-§24, `../tsp-plan.md` §21-§24.
 
 ---
 
@@ -509,7 +509,7 @@ contract application code can rely on:
 
 ### Spec §67 items NOT frozen by Phase 0 (deliberate scoping)
 
-`tsp-specification.md` §67 lists 25 "frozen protocol decisions"
+`../tsp-specification.md` §67 lists 25 "frozen protocol decisions"
 that should be treated as protocol freeze candidates before current contract
 is declared stable. Phase 0 froze 12 of them (the ones matching
 plan §60's 12-item freeze list). The remaining 13 are **not**
@@ -586,7 +586,7 @@ above and gets a commit hash.
 ## Sign-off
 
 Phase 0 closed 2026-08-24 when Sol confirmed the 12 items above as
-the current contract. Mavis updated `tsp-specification.md` to mark
+the current contract. Mavis updated `../tsp-specification.md` to mark
 the corresponding sections as "frozen" and any later spec change
 that contradicts a frozen item must come with an ADR (plan §69).
 

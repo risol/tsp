@@ -1,9 +1,9 @@
 # TSP Specification (Phase 0 summary)
 
-> Status: Phase 0 of `tsp-plan.md` §61.
+> Status: Phase 0 of `../tsp-plan.md` §61.
 > Date: 2026-08-24
-> Authoritative source: `tsp-specification.md` (1817 lines) and
-> `tsp-plan.md` (3659 lines) at the repo root. This document is the
+> Authoritative source: `../tsp-specification.md` (1817 lines) and
+> `../tsp-plan.md` (3659 lines) in the docs directory. This document is the
 > **index** that points at the right section of those for each
 > concern; it does not re-derive the spec.
 
@@ -22,7 +22,7 @@ TSP
 application. The host owns lifecycle; the application owns business
 logic; JSC is the execution engine; the protocol is the contract.
 
-The full architecture diagram is `tsp-plan.md` §73.
+The full architecture diagram is `../tsp-plan.md` §73.
 
 ## How to read this set of documents
 
@@ -32,8 +32,8 @@ The full architecture diagram is `tsp-plan.md` §73.
 | `tsp-module.md`                    | `.tsp` file format, exports, import rules, route mapping.    |
 | `jsx-runtime.md`                   | JSX -> HTMLNode contract, escaping, components, fragments.   |
 | `context.md`                       | Context ABI, PageConfig, fragment, services, cookies, session. |
-| `tsp-specification.md` (root)   | Full normative spec (1817 lines). The source of truth; everything above is a slice / index of this. |
-| `tsp-plan.md` (root)            | Architecture plan (75 sections, 12 phases). Slice / milestone layout, risks, ADRs. |
+| `../tsp-specification.md`       | Full normative spec (1817 lines). The source of truth; everything above is a slice / index of this. |
+| `../tsp-plan.md`                | Architecture plan (75 sections, 12 phases). Slice / milestone layout, risks, ADRs. |
 | `progress.md`                      | Per-slice progress log. Start here to see what is done, what is deferred, and why. |
 
 ## Phase 0 deliverable
@@ -44,7 +44,7 @@ later slices build on them, not against them.
 
 ## Phase 0 completion condition
 
-Per `tsp-plan.md` §61:
+Per `../tsp-plan.md` §61:
 
 > Phase 0 closes when the 12 freeze items have explicit answers and
 > 10-20 `.tsp` example fixtures demonstrate the contract. No v1

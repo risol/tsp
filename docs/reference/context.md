@@ -1,7 +1,7 @@
 # TSP Context, PageConfig, and Builtins
 
-> Phase 0 topic doc. Source of truth: `tsp-specification.md` §7-§8,
-> §10, §14, §16, §18-§19 and `tsp-plan.md` §7-§8, §10, §14, §16,
+> Phase 0 topic doc. Source of truth: `../tsp-specification.md` §7-§8,
+> §10, §14, §16, §18-§19 and `../tsp-plan.md` §7-§8, §10, §14, §16,
 > §18-§19, §60 freeze items 5, 6, 7, 8, 11.
 
 `Context` is the per-request value the host passes to every page

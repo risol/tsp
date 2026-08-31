@@ -1,7 +1,7 @@
 # TSP JSX Runtime Contract
 
-> Phase 0 topic doc. Source of truth: `tsp-specification.md` §11-§12
-> and `tsp-plan.md` §11-§12, §60 freeze items 9, 10.
+> Phase 0 topic doc. Source of truth: `../tsp-specification.md` §11-§12
+> and `../tsp-plan.md` §11-§12, §60 freeze items 9, 10.
 
 The TSP JSX runtime is the framework's server-side element tree. It is
 **not React**. The element tree is the server-render model; the host
@@ -137,7 +137,7 @@ the output HTML.
 For current contract, both `class` and `className` are accepted; the canonical
 output uses the HTML-native `class`. The same applies to `for` /
 `htmlFor`. The runtime does not invent a different naming
-convention. See `tsp-plan.md` §11.5.
+convention. See `../tsp-plan.md` §11.5.
 
 ## What is NOT in current contract
 

@@ -1,7 +1,7 @@
 # TSP `.tsp` Module Format
 
-> Phase 0 topic doc. Source of truth: `tsp-specification.md` §3-§6
-> and `tsp-plan.md` §3-§6, §60 freeze items 1, 2, 3, 4.
+> Phase 0 topic doc. Source of truth: `../tsp-specification.md` §3-§6
+> and `../tsp-plan.md` §3-§6, §60 freeze items 1, 2, 3, 4.
 
 A `.tsp` file is the **route entry module** -- it is a standard TSX
 file with a small set of framework-level named exports. This document
@@ -12,7 +12,7 @@ covers the file format only; the JSX runtime contract lives in
 
 `.tsp` files MUST parse with a standard TypeScript / JSX parser
 (freeze 1). No `<template>`, no `<script>`, no `{% %}`, no `@page` /
-`@fragment` decorators. Syntax is plain TSX. (See `tsp-plan.md`
+`@fragment` decorators. Syntax is plain TSX. (See `../tsp-plan.md`
 §3.1 for the explicit list of forbidden syntaxes.)
 
 What this means in practice:
@@ -37,7 +37,7 @@ If two routes need to share code, the shared code lives in
 `components/*.tsx` (or `lib/*.ts`) and is imported normally from both
 `.tsp` files.
 
-The rationale is in `tsp-plan.md` §5.1: a `.tsp` is a generation
+The rationale is in `../tsp-plan.md` §5.1: a `.tsp` is a generation
 root, and the module graph cannot let one generation root depend on
 another.
 
@@ -72,12 +72,12 @@ The full list of HTTP method exports is the standard verb set
 response when the page exports `GET` but no explicit `HEAD` -- the
 host strips the body and keeps the status / headers. `OPTIONS` is
 synthesised as a 204 with `Allow: <methods>` when the page omits
-it. See `tsp-plan.md` §42.
+it. See `../tsp-plan.md` §42.
 
 `export default function Page() {}` is **not** interpreted as a
 default page handler (plan §4.2.1). It is a regular named export
 from the application's point of view; the host ignores it for
-routing. The motivation is in `tsp-plan.md` §4.2.1: HTTP method
+routing. The motivation is in `../tsp-plan.md` §4.2.1: HTTP method
 semantics are clearer when the verb is the export name.
 
 ## Handler type
@@ -168,7 +168,7 @@ Persistent External Module
 
 The watcher only watches Reloadable modules. Persistent External
 modules do not invalidate the page graph. See
-`tsp-plan.md` §5.3 for the rationale (rebuild cost, dev-loop
+`../tsp-plan.md` §5.3 for the rationale (rebuild cost, dev-loop
 stability).
 
 ## What is NOT in current contract
