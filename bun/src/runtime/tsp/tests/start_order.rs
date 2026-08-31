@@ -2249,8 +2249,8 @@ fn multipart_form_data_round_trips_through_real_binary() {
 // ---------------------------------------------------------------------------
 // Config-driven custom service (slice 22 prototype, plan §17.5 / §21)
 //
-// The host reads a JSON config file pointed at by `TSP_CONFIG`
-// (default: `tsp.config.json`) and registers each declared
+// The host reads a JSON config file pointed at by `--config` or
+// `TSP_CONFIG` (default: `tsp.config.json`) and registers each declared
 // `services.<name>` entry as a host-singleton. The only kind
 // the slice 22 prototype supports is `counter` (a per-name
 // `AtomicU64` that post-increments on every snapshot); a
@@ -2261,7 +2261,7 @@ fn multipart_form_data_round_trips_through_real_binary() {
 //
 //   1. Write a temp `tsp.config.json` declaring two counters
 //      (`hits` initial=0, `views` initial=100).
-//   2. Spawn the master with `TSP_CONFIG=<temp>`.
+//   2. Spawn the master with `--config <temp>`.
 //   3. GET /counter 3 times. The host snapshot for the page
 //      carries both counters; the page reads their
 //      `value` property.
@@ -2319,9 +2319,10 @@ fn config_driven_counter_service_increments_across_requests() {
     // increment per request. ---
     let port: u16 = 34_500 + (std::process::id() as u16 % 500);
     let mut child = std::process::Command::new(master)
+        .arg("--config")
+        .arg(&config_path)
         .env("TSP_PORT", port.to_string())
         .env("TSP_ROUTES_DIR", &routes_dir)
-        .env("TSP_CONFIG", &config_path)
         .env("TSP_EMBEDDED_WORKER", "1")
         .env("TSP_WORKER_COUNT", "1")
         .stdout(Stdio::null())

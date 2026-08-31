@@ -691,8 +691,10 @@ production `pages/upload.tsp` page wraps the call in
 the failure shape rather than timing out on a hang).
 
 **Config-driven custom services (slice 22 prototype, plan
-§17.5 / §21).** The host reads a JSON file pointed at by
-`TSP_CONFIG` (default: `tsp.config.json`) at boot. Each
+§17.5 / §21).** The host reads a JSON file selected by the
+server's `--config <PATH>` / `-c <PATH>` flag, then by
+`TSP_CONFIG`, and finally by the root `tsp.config.json` at
+boot. Each
 `services.<name>` entry the file declares is registered
 as a host-owned singleton on the `ServiceRegistry`; pages
 read `ctx.services.<name>` exactly the same way they
@@ -1362,10 +1364,10 @@ without a master restart.
 
 - **`WatchConfig` accepts a config-file watcher.**
   Two new fields:
-  - `config_path: Option<PathBuf>` -- the file to
-    poll (the bin passes `tsp.config.json` or
-    the `TSP_CONFIG` env override when the file
-    exists at boot).
+   - `config_path: Option<PathBuf>` -- the file to
+     poll (the bin passes the selected `--config` path,
+     `TSP_CONFIG` path, or root `tsp.config.json` when
+     the file exists at boot).
   - `on_config_reload: Option<Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>>`
     -- the callback invoked with the new file
     text when the content hash changes.

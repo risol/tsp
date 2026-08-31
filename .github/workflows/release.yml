@@ -115,7 +115,9 @@ jobs:
             "${{ matrix.runtime }}" \
             "$package_dir" \
             pages \
-            public
+            public \
+            tsp.config.json
+          test -f "$package_dir/tsp.config.json"
 
       - name: Run native process-model + start-order tests (Linux/Windows)
         if: matrix.os != 'macos-latest'

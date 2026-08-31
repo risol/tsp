@@ -172,7 +172,10 @@ jobs:
         run: bun run build:release
 
       - name: Package single-file TSP runtime
-        run: bash scripts/package-tspserver.sh bun/build/release/bun dist/tspserver routes public
+        run: bash scripts/package-tspserver.sh bun/build/release/bun dist/tspserver routes public tsp.config.json
+
+      - name: Verify default config is packaged
+        run: test -f dist/tspserver/tsp.config.json
 
       - name: Run smoke test
         run: bash scripts/smoke-tspserver.sh dist/tspserver/tspserver
@@ -218,7 +221,11 @@ jobs:
         run: bun run build:release
 
       - name: Package single-file TSP runtime
-        run: bash scripts/package-tspserver.sh bun/build/release/bun.exe dist/tspserver routes public
+        run: bash scripts/package-tspserver.sh bun/build/release/bun.exe dist/tspserver routes public tsp.config.json
+
+      - name: Verify default config is packaged
+        shell: pwsh
+        run: if (!(Test-Path -LiteralPath 'dist/tspserver/tsp.config.json')) { throw 'Default config was not packaged' }
 
       - name: Run smoke test (Windows)
         shell: pwsh
@@ -259,7 +266,10 @@ jobs:
         run: bun run build:release
 
       - name: Package single-file TSP runtime
-        run: bash scripts/package-tspserver.sh bun/build/release/bun dist/tspserver routes public
+        run: bash scripts/package-tspserver.sh bun/build/release/bun dist/tspserver routes public tsp.config.json
+
+      - name: Verify default config is packaged
+        run: test -f dist/tspserver/tsp.config.json
 
       - name: Run smoke test
         run: bash scripts/smoke-tspserver.sh dist/tspserver/tspserver

@@ -59,6 +59,6 @@ sh ./scripts/smoke-tspserver.sh \
   dist/tspserver/tspserver
 ```
 
-On Windows, use `scripts/smoke-tspserver.ps1` with the `.exe` path. The
-package scripts emit a `tspserver-runtime.json` manifest containing one runtime
-executable; the Master creates worker children automatically.
+On Windows, use `scripts/smoke-tspserver.ps1` with the `.exe` path. The package
+contains one runtime executable and the default `tsp.config.json`; the Master
+creates worker children automatically.

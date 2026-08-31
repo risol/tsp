@@ -63,7 +63,7 @@ build_host() {
 package_runtime() {
   local host
   host="$(resolve_host)"
-  bash "$ROOT_DIR/scripts/package-tspserver.sh" "$host" "$ROOT_DIR/dist/tspserver" "$ROOT_DIR/pages" "$ROOT_DIR/public"
+  bash "$ROOT_DIR/scripts/package-tspserver.sh" "$host" "$ROOT_DIR/dist/tspserver" "$ROOT_DIR/pages" "$ROOT_DIR/public" "$ROOT_DIR/tsp.config.json"
 }
 
 build_runtime() { build_worker; build_host; package_runtime; }
@@ -71,7 +71,7 @@ build_runtime() { build_worker; build_host; package_runtime; }
 run_host() {
   local host
   host="$(resolve_host)"
-  TSP_PORT="${TSP_PORT:-9000}" TSP_ROUTES_DIR="${TSP_ROUTES_DIR:-$ROOT_DIR/pages}" TSP_PUBLIC_DIR="${TSP_PUBLIC_DIR:-$ROOT_DIR/public}" TSP_EMBEDDED_WORKER="${TSP_EMBEDDED_WORKER:-1}" TSP_WORKER_COUNT="${TSP_WORKER_COUNT:-2}" "$host" "$@"
+  TSP_PORT="${TSP_PORT:-9000}" TSP_ROUTES_DIR="${TSP_ROUTES_DIR:-$ROOT_DIR/pages}" TSP_PUBLIC_DIR="${TSP_PUBLIC_DIR:-$ROOT_DIR/public}" TSP_CONFIG="${TSP_CONFIG:-$ROOT_DIR/tsp.config.json}" TSP_EMBEDDED_WORKER="${TSP_EMBEDDED_WORKER:-1}" TSP_WORKER_COUNT="${TSP_WORKER_COUNT:-2}" "$host" "$@"
 }
 
 run_smoke() {
@@ -160,7 +160,7 @@ Usage: ./tsp.sh <command>
   clean                  Remove package output
 
 Environment:
-  TSP_PORT, TSP_ROUTES_DIR, TSP_PUBLIC_DIR, TSP_BUN_BIN
+  TSP_PORT, TSP_ROUTES_DIR, TSP_PUBLIC_DIR, TSP_CONFIG, TSP_BUN_BIN
   TSP_TYPINGS_DIR        default --out target for the `typings` command
 EOF
     ;;

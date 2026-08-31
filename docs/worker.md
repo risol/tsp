@@ -14,8 +14,9 @@ The root workflow builds the single runtime executable:
 ./tsp.sh build
 ```
 
-The packaged runtime, pages, public assets, and runtime manifest are
-written to `dist/tspserver/`.
+The packaged runtime, default `tsp.config.json`, pages, and public assets are
+written to `dist/tspserver/`. No separate runtime manifest is required because
+the Master creates worker children automatically from the packaged executable.
 
 ## Run
 
@@ -28,6 +29,14 @@ TSP_ROUTES_DIR="$PWD/tests/smoke/pages" \
 On Linux the Master pre-forks worker children before it starts request and
 watcher threads. On Windows it self-spawns the same executable in an internal
 `--tsp-worker` mode. Neither deployment needs a separate Bun executable.
+
+## Configuration
+
+The package includes the root `tsp.config.json` as its default configuration.
+Use `tspserver --config <PATH>` (or `-c <PATH>`) to select another file. The
+resolution order is the command-line flag, `TSP_CONFIG`, then
+`./tsp.config.json`. `tsp.sh start` and `tsp.sh dev` automatically use the
+repository-root configuration unless `TSP_CONFIG` or `--config` overrides it.
 
 ## Operational settings
 

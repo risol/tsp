@@ -8,15 +8,21 @@ param(
 
   [string]$PagesDirectory = "pages",
 
-  [string]$PublicDirectory = "public"
+  [string]$PublicDirectory = "public",
+
+  [string]$ConfigFile = "tsp.config.json"
 )
 
 $serverPath = [System.IO.Path]::GetFullPath($ServerBinary)
 $outputPath = [System.IO.Path]::GetFullPath($OutputDirectory)
+$configPath = [System.IO.Path]::GetFullPath($ConfigFile)
 $serverName = if ($serverPath.EndsWith(".exe", [System.StringComparison]::OrdinalIgnoreCase)) { "tspserver.exe" } else { "tspserver" }
 
 if (!(Test-Path -LiteralPath $serverPath -PathType Leaf)) {
   throw "server binary not found: $serverPath"
+}
+if (!(Test-Path -LiteralPath $configPath -PathType Leaf)) {
+  throw "config file not found: $configPath"
 }
 New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
 $serverTarget = Join-Path $outputPath $serverName
@@ -31,6 +37,10 @@ if (Test-Path -LiteralPath (Join-Path $outputPath "routes")) {
 }
 if (Test-Path -LiteralPath $PublicDirectory -PathType Container) {
   Copy-Item -LiteralPath $PublicDirectory -Destination (Join-Path $outputPath "public") -Recurse -Force
+}
+$configTarget = Join-Path $outputPath "tsp.config.json"
+if ($configPath -ne [System.IO.Path]::GetFullPath($configTarget)) {
+  Copy-Item -LiteralPath $configPath -Destination $configTarget -Force
 }
 
 # embedded-worker distribution contract: the packaged directory must NOT
@@ -50,15 +60,10 @@ if (Test-Path -LiteralPath $staleBunNoExt -PathType Leaf) {
   Remove-Item -LiteralPath $staleBunNoExt -Force
 }
 
-$manifest = [ordered]@{
-  runtime = "tspserver"
-  server = $serverName
-  worker = $serverName
-  embedded_worker = $true
-  pages = "pages"
-  public = "public"
-  resolver = "bundled-runtime"
+$staleManifest = Join-Path $outputPath "tspserver-runtime.json"
+if (Test-Path -LiteralPath $staleManifest -PathType Leaf) {
+  Write-Warning "removing retired runtime manifest from $outputPath"
+  Remove-Item -LiteralPath $staleManifest -Force
 }
-$manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $outputPath "tspserver-runtime.json") -Encoding UTF8
 
 Write-Host "Packaged single-file TSP runtime at $outputPath"

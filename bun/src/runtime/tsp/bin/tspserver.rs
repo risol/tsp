@@ -67,6 +67,8 @@ pub fn run() -> ExitCode {
             print_help();
             ExitCode::SUCCESS
         }
+        Some("--config") | Some("-c") => serve_main(),
+        Some(value) if value.starts_with("--config=") => serve_main(),
         _ => serve_main(),
     }
 }
@@ -77,6 +79,13 @@ fn main() -> ExitCode {
 }
 
 fn serve_main() -> ExitCode {
+    let config_path = match resolve_config_path() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("TSP: {error}");
+            return ExitCode::from(2);
+        }
+    };
     let port = match host::resolve_port() {
         Ok(p) => p,
         Err(e) => {
@@ -212,7 +221,8 @@ fn serve_main() -> ExitCode {
     };
     // Slice 22 prototype: load config-driven custom services
     // (plan §17.5 / §21). The host reads a JSON file pointed
-    // at by `TSP_CONFIG` (default: `tsp.config.json`) and
+    // at by `--config`, `TSP_CONFIG`, or the default
+    // `tsp.config.json` in the current application root. The
     // registers any `services.<name>` entries it declares.
     // Currently only `kind: "counter"` is supported; a typo'd
     // kind is a hard error so a misconfigured deploy fails
@@ -226,14 +236,12 @@ fn serve_main() -> ExitCode {
     // not tear services down (plan sect.61 Phase 8
     // acceptance).
     let mut registry_builder = ServiceRegistry::with_backends(session_backend);
-    let config_path =
-        std::env::var("TSP_CONFIG").unwrap_or_else(|_| "tsp.config.json".to_string());
     let mut custom_labels: Vec<String> = Vec::new();
-    if std::path::Path::new(&config_path).is_file() {
+    if config_path.is_file() {
         let text = std::fs::read_to_string(&config_path)
-            .unwrap_or_else(|e| panic!("TSP: read {config_path}: {e}"));
+            .unwrap_or_else(|e| panic!("TSP: read {}: {e}", config_path.display()));
         let custom = load_config_services(&text)
-            .unwrap_or_else(|e| panic!("TSP: parse {config_path}: {e}"));
+            .unwrap_or_else(|e| panic!("TSP: parse {}: {e}", config_path.display()));
         // §22.3: route the config-declared services through
         // `apply_config_snapshot` so the registry's
         // `config_decls` set is populated. A future reload
@@ -246,13 +254,14 @@ fn serve_main() -> ExitCode {
             custom_labels.push(svc.name().to_string());
         }
         eprintln!(
-            "TSP: custom services from {config_path}: {}",
+            "TSP: custom services from {}: {}",
+            config_path.display(),
             custom_labels.join(", ")
         );
     } else {
         eprintln!(
-            "TSP: no config at {config_path} (set TSP_CONFIG to enable \
-             custom services)"
+            "TSP: no config at {} (create the default file or use --config <PATH>)",
+            config_path.display()
         );
     }
     // §22.3: the registry is wrapped in an `RwLock` so the
@@ -328,9 +337,7 @@ fn serve_main() -> ExitCode {
         // not fire a reload. If the file is missing at
         // boot, the watcher's first poll that sees the
         // file fires the callback.
-        config_path: std::path::Path::new(&config_path)
-            .is_file()
-            .then(|| PathBuf::from(&config_path)),
+        config_path: config_path.is_file().then(|| config_path.clone()),
         on_config_reload: Some(on_config_reload),
     };
     let watcher_handle = watcher::spawn(watch_config, graph, routes_for_watcher, registry_arc);
@@ -339,10 +346,10 @@ fn serve_main() -> ExitCode {
         routes_dir.display(),
         watcher::DEFAULT_POLL_MS
     );
-    if config_path != "tsp.config.json" || std::path::Path::new(&config_path).is_file() {
+    if config_path != PathBuf::from("tsp.config.json") || config_path.is_file() {
         eprintln!(
             "TSP: config hot-reload watching {} (poll interval = watcher poll)",
-            config_path
+            config_path.display()
         );
     }
 
@@ -363,7 +370,53 @@ fn resolve_routes_dir() -> PathBuf {
     }
 }
 
+fn resolve_config_path() -> Result<PathBuf, String> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut config_from_flag: Option<PathBuf> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let argument = &args[index];
+        if argument == "--config" || argument == "-c" {
+            if config_from_flag.is_some() {
+                return Err("--config may be specified only once".to_string());
+            }
+            index += 1;
+            let path = args.get(index).ok_or_else(|| {
+                "--config requires a path (for example: --config tsp.config.json)".to_string()
+            })?;
+            if path.is_empty() {
+                return Err("--config requires a non-empty path".to_string());
+            }
+            config_from_flag = Some(PathBuf::from(path));
+        } else if let Some(path) = argument.strip_prefix("--config=") {
+            if config_from_flag.is_some() {
+                return Err("--config may be specified only once".to_string());
+            }
+            if path.is_empty() {
+                return Err("--config requires a non-empty path".to_string());
+            }
+            config_from_flag = Some(PathBuf::from(path));
+        } else {
+            return Err(format!(
+                "unexpected argument `{argument}`; use `--config <PATH>` only with the server"
+            ));
+        }
+        index += 1;
+    }
+
+    if let Some(path) = config_from_flag {
+        return Ok(path);
+    }
+    if let Some(path) = std::env::var_os("TSP_CONFIG").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(path));
+    }
+    Ok(PathBuf::from("tsp.config.json"))
+}
+
 fn print_help() {
+    println!(
+        "Server option: --config, -c <PATH> (precedence: flag, TSP_CONFIG, ./tsp.config.json)"
+    );
     println!(
         "TSP commands:\n  tspserver              run the native HTTP server\n  tspserver check       validate routes and local imports\n  tspserver routes      list filesystem routes and exports\n  tspserver graph       print the resolved module graph\n  tspserver typings     write tsp:* TypeScript declaration files\n  tspserver --version   print the version and exit\n  tspserver --help      print this help and exit\n\nEnvironment:\n  TSP_ROUTES_DIR            page source root (default: pages)\n  TSP_PUBLIC_DIR            public asset root (default: public)\n  TSP_PORT                  HTTP port (default: 3000)\n  TSP_TIMEOUT_MS            per-request timeout in ms; 0 disables the\n                            watchdog (default: 30000). The per-page\n                            `config.timeoutMs` overrides this per\n                            request (spec section 7 current contract PageConfig)\n  TSP_DEVELOPMENT           set to 1 for dev mode: page-throw 500\n                            responses render as self-contained HTML\n                            error pages (name + message + stack) instead\n                            of the prod JSON body (default: 0 / prod)\n  TSP_WORKER_COUNT          embedded self-spawned worker processes (default: 1)\n  TSP_WORKER_MAX_IN_FLIGHT  max concurrent requests per worker (default: 2*count)\n  TSP_WORKER_MAX_REQUESTS   recycle each worker after N requests\n  TSP_WORKER_MAX_AGE_MS     recycle each worker after this many ms\n  TSP_WORKER_MAX_MEMORY_BYTES  recycle each worker when RSS reaches this\n  TSP_INVALIDATION_FILE     shared cross-worker invalidation log\n  TSP_MAX_BODY_BYTES         per-request body size cap; requests with\n                            Content-Length over this are rejected with\n                            413 Payload Too Large (default: 1 MiB)\n  TSP_CGROUP_ROOT           explicit Linux cgroup v2 parent directory\n  TSP_WORKER_MEMORY_MAX / TSP_WORKER_CPU_MAX / TSP_WORKER_PIDS_MAX  cgroup limits\n  TSP_REDIS_URL             optional Redis URL for the session backend\n  TSP_CONFIG                JSON file declaring config-driven custom\n                            services (default: tsp.config.json);\n                            supports `kind: counter` with `initial`\n  TSP_APPLICATION_NAME      application name registered in the registry (default: main)"
     );
