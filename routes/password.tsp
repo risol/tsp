@@ -42,7 +42,7 @@
 // `round=4` is the bcrypt minimum, kept low so the integration
 // test runs in well under a second; production should use
 // `round=10-12` for bcrypt or `argon2id` with sane parameters
-// (config knob in v2.5+).
+// (config knob in a future release).
 import { util } from "tsp:server";
 
 export async function GET(ctx) {

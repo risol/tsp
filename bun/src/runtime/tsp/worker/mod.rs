@@ -1,4 +1,4 @@
-//! Process-level worker protocol and lifecycle primitives for TSP v2.4.
+//! Process-level worker protocol and lifecycle primitives for TSP embedded-worker.
 //!
 //! The worker boundary is deliberately independent from the current JSC
 //! bridge. The master must be able to speak the same versioned protocol to a

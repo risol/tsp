@@ -1,4 +1,4 @@
-ARG BUILDER_IMAGE=tspserver-v2-build-env:latest
+ARG BUILDER_IMAGE=tspserver-build-env:latest
 ARG GIT_SHA=unknown
 FROM ${BUILDER_IMAGE} AS builder
 
@@ -22,8 +22,8 @@ RUN bun scripts/build/fetch-cli.ts dep \
 RUN bun install --frozen-lockfile
 
 RUN bun run build:release \
-    && install -D -m 0755 build/release/bun /out/tspserver_v2
+    && install -D -m 0755 build/release/bun /out/tspserver
 
 # Export only the Linux executable with `--output type=local`.
 FROM scratch AS artifact
-COPY --from=builder /out/tspserver_v2 /tspserver_v2
+COPY --from=builder /out/tspserver /tspserver

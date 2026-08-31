@@ -20,6 +20,7 @@
 #include "JavaScriptCore/JSType.h"
 #include "JavaScriptCore/NumberObject.h"
 #include "JavaScriptCore/JSCJSValue.h"
+#include "JavaScriptCore/Options.h"
 #include "JavaScriptCore/JSGlobalObject.h"
 #include "JavaScriptCore/JSPromiseConstructor.h"
 #include "JavaScriptCore/DeleteAllCodeEffort.h"
@@ -7057,6 +7058,17 @@ extern "C" JSC::EncodedJSValue Bun__REPL__evaluate(
     // from the REPL transform wrapper. We don't set it here anymore.
 
     return JSC::JSValue::encode(result);
+}
+
+// Embedded TSP workers evaluate a fresh, generated top-level program for every
+// request. JSC's VM-scoped source-provider and unlinked-code caches are designed
+// for reusable scripts, so retaining those request-specific programs makes a
+// long-lived worker grow until the Windows native runtime terminates it.
+// This is called after JSCInitialize but before the worker creates its first VM.
+extern "C" void Bun__JSC__disableEphemeralScriptCaches()
+{
+    JSC::Options::useSourceProviderCache() = false;
+    JSC::Options::useCodeCache() = false;
 }
 
 // REPL completion function - gets completions for a partial property access

@@ -1,7 +1,7 @@
 //! Protocol-only worker used by Worker Manager integration tests.
 //!
 //! This binary exercises the master process boundary without initializing
-//! Bun. The real embedded worker is covered by the v2.4 smoke test.
+//! Bun. The real embedded worker is covered by the embedded-worker smoke test.
 
 #[path = "worker/protocol.rs"]
 #[allow(unreachable_pub, dead_code)]
@@ -81,6 +81,16 @@ where
                 let script = String::from_utf8_lossy(&request.script);
                 if request.path.contains("crash") || script.contains("__TSP_TEST_CRASH__") {
                     std::process::exit(17);
+                }
+                if let Some(marker_path) = script.strip_prefix("__TSP_TEST_CRASH_ONCE__:") {
+                    let first_request = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(marker_path)
+                        .is_ok();
+                    if first_request {
+                        std::process::exit(17);
+                    }
                 }
                 if request.path.contains("sleep") || script.contains("__TSP_TEST_SLEEP__") {
                     std::thread::sleep(std::time::Duration::from_millis(250));

@@ -1,7 +1,7 @@
-//! Generation + PageSlot + PageState for TSP v2 slice 10a
+//! Generation + PageSlot + PageState for TSP slice 10a
 //! (plan sect.20.3-20.4 + sect.21).
 //!
-//! See `tsp-v2-plan.md` sect.20.3 (PageSlot) and sect.21
+//! See `tsp-plan.md` sect.20.3 (PageSlot) and sect.21
 //! (Generation + atomic publish). This file lands the data
 //! structures + the state machine. The actual transpile +
 //! evaluate + publish (sect.21.1) lands in slice 10b; the

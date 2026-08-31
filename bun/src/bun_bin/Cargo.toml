@@ -36,7 +36,7 @@ bun_platform.workspace = true
 bun_runtime.workspace = true
 # bun_jsc.workspace = true
 
-# The TSP master is linked into the Bun-produced tspserver_v2 executable.
+# The TSP master is linked into the Bun-produced tspserver executable.
 # Worker mode stays in bun_runtime::tsp_worker and is selected before the
 # master entry is invoked.
 bun_runtime_tsp = { path = "../runtime/tsp", features = ["embedded-worker-entry"] }

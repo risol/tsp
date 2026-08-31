@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IMAGE_NAME="${1:-tspserver-v2-build-env}"
+IMAGE_NAME="${1:-tspserver-build-env}"
 IMAGE_TAG="${2:-latest}"
 IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
 

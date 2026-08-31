@@ -29,7 +29,7 @@
 //                                      200 with the events table
 //                                      contents.
 //
-// v2's router matches exact paths (no sub-path dispatch yet),
+// The router matches exact paths (no sub-path dispatch yet),
 // so the multi-endpoint demo uses a `?probe=` / `?source=`
 // query parameter instead of `/pool` / `multi` path suffixes.
 // Once the router grows prefix dispatch (slice 7+), the page

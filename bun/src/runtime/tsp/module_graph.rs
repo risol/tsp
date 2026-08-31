@@ -1,6 +1,6 @@
-//! Module Graph for TSP v2 slice 9 (plan sect.20).
+//! Module Graph for TSP slice 9 (plan sect.20).
 //!
-//! See `tsp-v2-plan.md` sect.20.1-20.3 (ModuleGraph + ModuleNode +
+//! See `tsp-plan.md` sect.20.1-20.3 (ModuleGraph + ModuleNode +
 //! PageSlot). This file lands the data structure; the actual build
 //! pipeline (transpile -> evaluate -> validate) lands in slice 10
 //! (Generation + Atomic Reload). The watcher (slice 11) feeds
@@ -43,7 +43,7 @@ impl ModuleId {
     /// Build an id from a path under the application root. The
     /// path is canonicalised (best effort; symlinks are NOT
     /// followed on Windows because the LAYERING note in
-    /// `tsp-v2-plan.md` sect.31 reserves that for a future
+    /// `tsp-plan.md` sect.31 reserves that for a future
     /// security config).
     pub fn from_path(path: &Path) -> Self {
         Self(canonicalize_best_effort(path))
@@ -616,7 +616,7 @@ mod tests {
     #[test]
     fn graph_rejects_local_imports_outside_routes_root() {
         let root = std::env::temp_dir().join(format!(
-            "tsp-v2-graph-root-{}-{}",
+            "tspserver-graph-root-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

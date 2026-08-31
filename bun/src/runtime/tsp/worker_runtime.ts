@@ -1,6 +1,6 @@
 // Persistent TSP worker bootstrap.
 //
-// The native v2 host sends one generated .tsx wrapper per request. Bun owns
+// The native host sends one generated .tsx wrapper per request. Bun owns
 // importing and evaluating that wrapper; the host only receives the existing
 // __TSP_OUT_V1__ response envelope. The protocol is intentionally tiny for
 // the first vertical slice and is length-safe because every field is a single

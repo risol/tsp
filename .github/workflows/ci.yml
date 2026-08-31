@@ -1,4 +1,4 @@
-name: TSP v2 CI
+name: TSP CI
 
 on:
   pull_request:
@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: tsp-v2-ci-${{ github.workflow }}-${{ github.ref }}
+  group: tspserver-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -21,7 +21,7 @@ env:
 
 jobs:
   native-linux:
-    name: Native v2 runtime (Linux)
+    name: Native runtime (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 35
     defaults:
@@ -58,11 +58,11 @@ jobs:
       - name: Run start-order contract test
         run: cargo test -p bun_runtime_tsp --test start_order --no-fail-fast --locked
 
-      - name: Check v2 host
-        run: cargo check -p bun_runtime_tsp --bin tspserver_v2 --target x86_64-unknown-linux-gnu --locked
+      - name: Check host
+        run: cargo check -p bun_runtime_tsp --bin tspserver --target x86_64-unknown-linux-gnu --locked
 
   native-windows:
-    name: Native v2 runtime (Windows)
+    name: Native runtime (Windows)
     runs-on: windows-latest
     timeout-minutes: 35
     defaults:
@@ -87,8 +87,8 @@ jobs:
         with:
           toolchain: nightly-2026-07-20
 
-      - name: Check v2 host
-        run: cargo check -p bun_runtime_tsp --bin tspserver_v2 --target x86_64-pc-windows-msvc --locked
+      - name: Check host
+        run: cargo check -p bun_runtime_tsp --bin tspserver --target x86_64-pc-windows-msvc --locked
 
       - name: Run Worker IPC integration tests
         run: cargo test -p bun_runtime_tsp --test worker_integration --no-fail-fast --locked -- --test-threads=1
@@ -100,7 +100,7 @@ jobs:
         run: cargo test -p bun_runtime_tsp --test start_order --no-fail-fast --locked
 
   native-macos:
-    name: Native v2 runtime (macOS)
+    name: Native runtime (macOS)
     runs-on: macos-latest
     timeout-minutes: 35
     defaults:
@@ -125,8 +125,8 @@ jobs:
         with:
           toolchain: nightly-2026-07-20
 
-      - name: Check v2 host
-        run: cargo check -p bun_runtime_tsp --bin tspserver_v2 --locked
+      - name: Check host
+        run: cargo check -p bun_runtime_tsp --bin tspserver --locked
 
       - name: Run Worker IPC integration tests
         run: cargo test -p bun_runtime_tsp --test worker_integration --no-fail-fast --locked -- --test-threads=1
@@ -172,10 +172,10 @@ jobs:
         run: bun run build:release
 
       - name: Package single-file TSP runtime
-        run: bash scripts/package-tspserver-v2.sh bun/build/release/bun dist/tsp-v2 routes public
+        run: bash scripts/package-tspserver.sh bun/build/release/bun dist/tspserver routes public
 
-      - name: Run v2 smoke test
-        run: bash scripts/smoke-tspserver-v2.sh dist/tsp-v2/tspserver_v2
+      - name: Run smoke test
+        run: bash scripts/smoke-tspserver.sh dist/tspserver/tspserver
 
   smoke-windows:
     name: Embedded worker smoke test (Windows)
@@ -218,13 +218,13 @@ jobs:
         run: bun run build:release
 
       - name: Package single-file TSP runtime
-        run: bash scripts/package-tspserver-v2.sh bun/build/release/bun.exe dist/tsp-v2 routes public
+        run: bash scripts/package-tspserver.sh bun/build/release/bun.exe dist/tspserver routes public
 
-      - name: Run v2 smoke test (Windows)
+      - name: Run smoke test (Windows)
         shell: pwsh
         env:
           TSP_WORKER_STARTUP_TRACE: '1'
-        run: ./scripts/smoke-tspserver-v2.ps1 -ServerBinary dist/tsp-v2/tspserver_v2.exe
+        run: ./scripts/smoke-tspserver.ps1 -ServerBinary dist/tspserver/tspserver.exe
 
   smoke-macos:
     name: Embedded worker smoke test (macOS)
@@ -259,7 +259,7 @@ jobs:
         run: bun run build:release
 
       - name: Package single-file TSP runtime
-        run: bash scripts/package-tspserver-v2.sh bun/build/release/bun dist/tsp-v2 routes public
+        run: bash scripts/package-tspserver.sh bun/build/release/bun dist/tspserver routes public
 
-      - name: Run v2 smoke test
-        run: bash scripts/smoke-tspserver-v2.sh dist/tsp-v2/tspserver_v2
+      - name: Run smoke test
+        run: bash scripts/smoke-tspserver.sh dist/tspserver/tspserver

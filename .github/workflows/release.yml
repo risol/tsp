@@ -1,4 +1,4 @@
-name: TSP v2 Release
+name: TSP Release
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: tsp-v2-release-${{ github.ref }}
+  group: tspserver-release-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -28,12 +28,12 @@ jobs:
             gh release create "$GITHUB_REF_NAME" \
               --repo "$GITHUB_REPOSITORY" \
               --draft \
-              --title "TSP v2 $GITHUB_REF_NAME" \
+              --title "TSP $GITHUB_REF_NAME" \
               --generate-notes
           fi
 
   build-and-upload:
-    name: Build v2 ${{ matrix.target }} release
+    name: Build ${{ matrix.target }} release
     needs: create-release
     strategy:
       fail-fast: false
@@ -42,15 +42,15 @@ jobs:
           - os: ubuntu-latest
             target: linux-x64
             runtime: bun/build/release/bun
-            server: release/tsp-v2-linux-x64/tspserver_v2
+            server: release/tspserver-linux-x64/tspserver
           - os: windows-latest
             target: windows-x64
             runtime: bun/build/release/bun.exe
-            server: release/tsp-v2-windows-x64/tspserver_v2.exe
+            server: release/tspserver-windows-x64/tspserver.exe
           - os: macos-latest
             target: macos
             runtime: bun/build/release/bun
-            server: release/tsp-v2-macos/tspserver_v2
+            server: release/tspserver-macos/tspserver
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     steps:
@@ -103,12 +103,12 @@ jobs:
         working-directory: bun
         run: bun run build:release
 
-      - name: Package v2 release asset
+      - name: Package release asset
         shell: bash
         run: |
           set -euo pipefail
-          package_dir="release/tsp-v2-${{ matrix.target }}"
-          bash scripts/package-tspserver-v2.sh \
+          package_dir="release/tspserver-${{ matrix.target }}"
+          bash scripts/package-tspserver.sh \
             "${{ matrix.runtime }}" \
             "$package_dir" \
             routes \
@@ -137,26 +137,26 @@ jobs:
           cargo test -p bun_runtime_tsp --test process_model --no-fail-fast --locked -- --test-threads=1
           cargo test -p bun_runtime_tsp --test start_order --no-fail-fast --locked
 
-      - name: Run v2 smoke test
+      - name: Run smoke test
         if: matrix.os != 'windows-latest'
-        run: bash scripts/smoke-tspserver-v2.sh "${{ matrix.server }}"
+        run: bash scripts/smoke-tspserver.sh "${{ matrix.server }}"
 
-      - name: Run v2 smoke test on Windows
+      - name: Run smoke test on Windows
         if: matrix.os == 'windows-latest'
         shell: pwsh
         env:
           TSP_WORKER_STARTUP_TRACE: '1'
-        run: ./scripts/smoke-tspserver-v2.ps1 -ServerBinary "${{ matrix.server }}"
+        run: ./scripts/smoke-tspserver.ps1 -ServerBinary "${{ matrix.server }}"
 
-      - name: Archive v2 release asset
+      - name: Archive release asset
         shell: bash
-        run: tar -czf "tsp-v2-${{ matrix.target }}.tar.gz" -C release "tsp-v2-${{ matrix.target }}"
+        run: tar -czf "tspserver-${{ matrix.target }}.tar.gz" -C release "tspserver-${{ matrix.target }}"
 
-      - name: Upload v2 release asset
+      - name: Upload release asset
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
-        run: gh release upload "$GITHUB_REF_NAME" "tsp-v2-${{ matrix.target }}.tar.gz" --repo "$GITHUB_REPOSITORY" --clobber
+        run: gh release upload "$GITHUB_REF_NAME" "tspserver-${{ matrix.target }}.tar.gz" --repo "$GITHUB_REPOSITORY" --clobber
 
   publish-release:
     name: Publish release

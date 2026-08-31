@@ -1,6 +1,6 @@
-//! Filesystem watcher for TSP v2 slice 11 (plan sect.22).
+//! Filesystem watcher for TSP slice 11 (plan sect.22).
 //!
-//! See `tsp-v2-plan.md` sect.22.1-22.3:
+//! See `tsp-plan.md` sect.22.1-22.3:
 //! - 22.1: watcher produces `Changed(path)` events.
 //! - 22.2: **lazy reload** -- a file change marks the affected
 //!   `PageSlot` dirty; the rebuild happens on the NEXT request
@@ -57,7 +57,7 @@ use crate::router::RouteTable;
 /// enough that a dev edit feels instant on the next request.
 ///
 /// Not currently read by `spawn` (the config carries its own
-/// `poll_ms`); used by the host (`bin/tspserver_v2.rs`) when it
+/// `poll_ms`); used by the host (`bin/tspserver.rs`) when it
 /// constructs a `WatchConfig` from the CLI / defaults.
 pub const DEFAULT_POLL_MS: u64 = 500;
 
@@ -192,7 +192,7 @@ pub struct FileSnapshot {
 }
 
 /// Reverse dependency index used by the watcher. It is deliberately kept
-/// outside `ModuleGraph` for now because the v2 build pipeline does not yet
+/// outside `ModuleGraph` for now because the build pipeline does not yet
 /// return its resolved dependency list. The index is conservative: when a
 /// source cannot be resolved or read, `complete` becomes false and the
 /// watcher falls back to invalidating every registered page.
@@ -438,7 +438,7 @@ fn reconcile_routes(
     for path in &removed {
         table.remove_by_path(path);
         let n = registry.unregister_path(path);
-        eprintln!("TSPv2PoC1: watch: removed route {path} (dropped {n} slot(s))");
+        eprintln!("TSP: watch: removed route {path} (dropped {n} slot(s))");
     }
 
     Ok((added.len(), removed.len()))
@@ -674,7 +674,7 @@ fn collect_sources_with_previous(
 /// to stop it (and that joins on drop).
 ///
 /// The thread owns `last_seen` and its dependency index. The graph argument
-/// remains accepted for compatibility with the v2 host, but invalidation is
+/// remains accepted for compatibility with the host, but invalidation is
 /// driven by the watcher-owned index so route and import changes can rebuild
 /// it without restarting the process.
 pub fn spawn(
@@ -688,7 +688,7 @@ pub fn spawn(
     let wake = Arc::new((Mutex::new(()), Condvar::new()));
     let wake_in_thread = wake.clone();
     let thread = thread::Builder::new()
-        .name("tsp-v2-watcher".to_string())
+        .name("tspserver-watcher".to_string())
         .spawn(move || {
             let poll = Duration::from_millis(config.poll_ms);
             // Initial snapshot so the first poll only reports
@@ -705,11 +705,11 @@ pub fn spawn(
                 .and_then(|path| match InvalidationBus::open(path) {
                     Ok(bus) => Some(bus),
                     Err(error) => {
-                        eprintln!("TSPv2PoC1: invalidation bus disabled: {error}");
+                        eprintln!("TSP: invalidation bus disabled: {error}");
                         None
                     }
                 });
-            // Kept in the spawn API for compatibility with the v2 host while
+            // Kept in the spawn API for compatibility with the host while
             // the watcher-owned index is being migrated away from the frozen
             // graph representation.
             let _graph = graph;
@@ -750,11 +750,11 @@ pub fn spawn(
                 );
                 if !changed.changed_files.is_empty() {
                     let generation = crate::jsc_bridge::bump_execution_generation();
-                    eprintln!("TSPv2PoC1: published execution generation {generation}");
+                    eprintln!("TSP: published execution generation {generation}");
                 }
                 if let Some(bus) = invalidation_bus.as_mut() {
                     if let Err(error) = bus.publish(&changed.changed_files) {
-                        eprintln!("TSPv2PoC1: invalidation publish failed: {error}");
+                        eprintln!("TSP: invalidation publish failed: {error}");
                     }
                     match bus.read_since() {
                         Ok(remote_files) if !remote_files.is_empty() => {
@@ -765,27 +765,27 @@ pub fn spawn(
                                 let _ = registry.mark_dirty(&page_ref);
                             }
                             eprintln!(
-                                "TSPv2PoC1: invalidation bus received {} file(s)",
+                                "TSP: invalidation bus received {} file(s)",
                                 remote_files.len()
                             );
                         }
                         Ok(_) => {}
-                        Err(error) => eprintln!("TSPv2PoC1: invalidation read failed: {error}"),
+                        Err(error) => eprintln!("TSP: invalidation read failed: {error}"),
                     }
                 }
                 if !changed.changed_files.is_empty() {
                     eprintln!(
-                        "TSPv2PoC1: watch: {} file(s) changed, {} page(s) marked dirty",
+                        "TSP: watch: {} file(s) changed, {} page(s) marked dirty",
                         changed.changed_files.len(),
                         changed.marked
                     );
                 }
                 if let Some(error) = changed.reconcile_error {
-                    eprintln!("TSPv2PoC1: watch: route reconciliation failed: {error}");
+                    eprintln!("TSP: watch: route reconciliation failed: {error}");
                 }
                 if !changed.snapshot_complete && changed.snapshot_errors > 0 {
                     eprintln!(
-                        "TSPv2PoC1: watch: source snapshot incomplete ({} error(s)); retaining previous snapshot",
+                        "TSP: watch: source snapshot incomplete ({} error(s)); retaining previous snapshot",
                         changed.snapshot_errors
                     );
                 }
@@ -803,17 +803,17 @@ pub fn spawn(
                     match poll_config_once(path, &mut last_config_hash) {
                         Ok(Some(text)) => match callback(&text) {
                             Ok(summary) => eprintln!(
-                                "TSPv2PoC1: config reloaded from {}: {}",
+                                "TSP: config reloaded from {}: {}",
                                 path.display(),
                                 summary
                             ),
                             Err(error) => eprintln!(
-                                "TSPv2PoC1: config reload apply failed: {error}"
+                                "TSP: config reload apply failed: {error}"
                             ),
                         },
                         Ok(None) => {}
                         Err(error) => eprintln!(
-                            "TSPv2PoC1: config reload read failed: {error} (retaining previous snapshot)"
+                            "TSP: config reload read failed: {error} (retaining previous snapshot)"
                         ),
                     }
                 }
@@ -838,7 +838,7 @@ mod tests {
     fn temp_dir() -> PathBuf {
         let mut p = std::env::temp_dir();
         let suffix = format!(
-            "tsp-v2-watcher-test-{}-{}.d",
+            "tspserver-watcher-test-{}-{}.d",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

@@ -3,20 +3,20 @@ name = "bun_runtime_tsp"
 version.workspace = true
 edition.workspace = true
 
-# TSP v2 native host (see `tsp-v2-plan.md` sect.26).
+# TSP native host (see `tsp-plan.md` sect.26).
 #
-# v1 `src/main.ts` is unchanged. This crate is the side-by-side v2 runtime
-# entry point; PoC 1 (plan sect.70) is the 7-step vertical slice
+# The legacy `src/main.ts` host is gone. This crate is the runtime
+# entry point for the current TSP server.
 # (HTTP -> routes/index.tsp -> TSX transform -> JSC -> GET -> response)
-# and lives behind `bin/tspserver_v2.rs`. Library code is the same source
+# and lives behind `bin/tspserver.rs`. Library code is the same source
 # the bin re-uses so future tests and embedded callers can drive the
 # host without spawning a process.
 [lib]
 path = "lib.rs"
 
 [[bin]]
-name = "tspserver_v2"
-path = "bin/tspserver_v2.rs"
+name = "tspserver"
+path = "bin/tspserver.rs"
 
 [[bin]]
 name = "tsp_worker_test_stub"
@@ -35,7 +35,7 @@ workspace = true
 # Subsequent `cargo build` calls are fast.
 [features]
 in-process-jsc = ["dep:bun_runtime"]
-# Enabled only when this host is linked into the bundled `tspserver_v2`
+# Enabled only when this host is linked into the bundled `tspserver`
 # executable. The master then creates workers from the same executable.
 embedded-worker-entry = []
 

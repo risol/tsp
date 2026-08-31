@@ -1,4 +1,4 @@
-//! Embedded Bun worker entry point for the TSP v2.4 process architecture.
+//! Embedded Bun worker entry point for the TSP embedded-worker process architecture.
 //!
 //! This module is compiled into the Bun worker executable. It is intentionally
 //! not part of the Rust master crate's dependency graph: the master must not
@@ -31,6 +31,7 @@ unsafe extern "C" {
         filename_len: usize,
         exception: *mut JSValue,
     ) -> JSValue;
+    fn Bun__JSC__disableEphemeralScriptCaches();
 }
 
 pub fn requested() -> bool {
@@ -204,6 +205,21 @@ impl EmbeddedVm {
         startup_trace("jsc-initialize:begin");
         crate::jsc::initialize(false);
         startup_trace("jsc-initialize:end");
+        // This process evaluates a fresh generated top-level program for every
+        // request. Disable JSC's VM-scoped script caches before the first VM is
+        // created; retaining request-specific programs is unsafe for a
+        // long-lived embedded worker on Windows.
+        startup_trace("jsc-ephemeral-caches:disable:begin");
+        unsafe {
+            Bun__JSC__disableEphemeralScriptCaches();
+        }
+        startup_trace("jsc-ephemeral-caches:disable:end");
+        // The generated wrapper is request-specific and includes a fresh source
+        // URL, so Bun's on-disk runtime transpiler cache cannot hit. Disable it in
+        // the worker as well; otherwise every request creates a never-reused
+        // `.pile` entry in the user's global cache.
+        crate::jsc::runtime_transpiler_cache::IS_DISABLED
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         bun_ast::initialize_store();
         startup_trace("ast-store:end");
         let log = Box::leak(Box::new(bun_ast::Log::init()));
@@ -281,10 +297,12 @@ impl EmbeddedVm {
         if request.script.is_empty() {
             return self.execute_path(&request.path);
         }
+        // Reuse one process-unique path. The source is passed as a virtual
+        // module, so a new filename per request only leaks path entries into
+        // Bun's process-lifetime FilenameStore and defeats cache identity.
         let path = std::env::temp_dir().join(format!(
-            "tsp-embedded-worker-{}-{}.tsx",
-            std::process::id(),
-            NEXT_SCRIPT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            "tsp-embedded-worker-{}.tsx",
+            std::process::id()
         ));
         std::fs::write(&path, &request.script)
             .map_err(|error| format!("failed to materialize request script: {error}"))?;
@@ -350,6 +368,7 @@ impl EmbeddedVm {
         // SAFETY: all pointers refer to live byte slices for the duration of
         // the synchronous call; `global` is the VM's live opaque handle and
         // `exception` is a stack out-parameter understood by the C++ shim.
+        startup_trace("request:evaluate:begin");
         unsafe {
             let _ = Bun__REPL__evaluate(
                 self.vm.global(),
@@ -360,6 +379,8 @@ impl EmbeddedVm {
                 &raw mut exception,
             );
         }
+        startup_trace("request:evaluate:end");
+        startup_trace("request:response-check:begin");
         if !exception.is_undefined() && !exception.is_null() {
             let detail = self
                 .read_global_string("_error")?
@@ -375,6 +396,7 @@ impl EmbeddedVm {
             startup_trace("request:error-ready");
             return Err(error);
         }
+        startup_trace("request:response-check:end");
 
         // Async handlers and Response.text() still use ordinary Promise jobs.
         // They are not ESM module-resume jobs, so drive the normal event loop
@@ -422,7 +444,7 @@ impl EmbeddedVm {
         // this drop the second call returns the first request's
         // already-resolved promise, the new wrap preamble never runs,
         // and every URL aliases to whichever .tsp the first request hit
-        // (see docs/v2/bugs/0001). `clear_entry_point` removes the
+        // (see docs/reference/bugs/0001). `clear_entry_point` removes the
         // `bun:main` entry only; shared modules (e.g. `tsp:server`
         // shims) keep their cache hits across requests.
         startup_trace("request:clear-entry:begin");
@@ -496,6 +518,3 @@ impl EmbeddedVm {
         Ok(Some(String::from_utf8_lossy(value.slice()).into_owned()))
     }
 }
-
-static NEXT_SCRIPT_ID: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(1);

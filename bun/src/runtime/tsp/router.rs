@@ -1,6 +1,6 @@
-//! Filesystem route scanner + matcher for TSP v2 PoC 1 slice 3.
+//! Filesystem route scanner + matcher for TSP PoC 1 slice 3.
 //!
-//! See `tsp-v2-plan.md` sect.6 (filesystem routing), sect.4.2 (named HTTP
+//! See `tsp-plan.md` sect.6 (filesystem routing), sect.4.2 (named HTTP
 //! method exports), and sect.42 (method dispatch / 405 / HEAD / OPTIONS).
 //!
 //! Slice 3 implements only the static portion of the routing table:
@@ -22,7 +22,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-/// Standard HTTP methods the v2 page protocol recognises (plan sect.4.2,
+/// Standard HTTP methods the TSP page protocol recognises (plan sect.4.2,
 /// spec sect.6.1/6.5/6.6).
 ///
 /// `HEAD` is the synthetic-fallback case: when a page exports `GET` but
@@ -676,10 +676,10 @@ fn scan_recursive(root: &Path, dir: &Path, out: &mut Vec<Route>) -> Result<(), R
 /// - directory segments work the same way: `routes/users/[id]/posts.tsp`
 ///   -> `/users/:id/posts` with [Static("users"), Param("id"), Static("posts")]
 /// - the optional catch-all shape `[name...]` (matches zero or more
-///   segments) is not in v2.0 (FREEZE item 3); `[...name]` requires
+///   segments) is not in current contract (contract item 3); `[...name]` requires
 ///   at least one segment.
 ///
-/// The segment name must satisfy FREEZE item 3's pattern
+/// The segment name must satisfy contract item 3's pattern
 /// `[A-Za-z_][A-Za-z0-9_]*` -- this is the only place we reject
 /// dynamic / catch-all shapes other than the unsupported shapes the
 /// spec never defined.
@@ -726,7 +726,7 @@ fn url_path_for(
         segments.push(parse_one(s, abs)?);
     }
     let stem_seg = parse_one(stem, abs)?;
-    // FREEZE item 3: a catch-all can only appear as the LAST segment
+    // contract item 3: a catch-all can only appear as the LAST segment
     // of the path -- the segment stream must end with `[...name]` or
     // a static segment, never a `*name` followed by anything else.
     if let Segment::CatchAll(_) = stem_seg {
@@ -759,7 +759,7 @@ fn segments_template(segs: &[Segment]) -> String {
 /// stem) into a `Segment`. Static segments are returned as-is; a
 /// `[name]` token is `Param(name)`; a `[...name]` token is
 /// `CatchAll(name)`. Anything else (mismatched brackets, empty
-/// `[]`, names that fail the FREEZE item 3 identifier pattern) is
+/// `[]`, names that fail the contract item 3 identifier pattern) is
 /// `UnsupportedShape` so the runtime refuses to boot.
 fn parse_segment(token: &str, file: &Path) -> Result<Segment, RouterError> {
     if !token.contains('[') && !token.contains(']') {
@@ -793,7 +793,7 @@ fn parse_segment(token: &str, file: &Path) -> Result<Segment, RouterError> {
     })
 }
 
-/// FREEZE item 3 segment-name rule: `[A-Za-z_][A-Za-z0-9_]*`.
+/// contract item 3 segment-name rule: `[A-Za-z_][A-Za-z0-9_]*`.
 /// Empty `[]` / non-identifier names are rejected at scan time
 /// so a typo'd `routes/users/[1st].tsp` refuses to boot rather
 /// than silently 404'ing.
@@ -943,7 +943,7 @@ mod tests {
 
     #[test]
     fn url_path_rejects_invalid_segment_names() {
-        // FREEZE item 3 pattern: `1st` is not a valid identifier.
+        // contract item 3 pattern: `1st` is not a valid identifier.
         let root = Path::new("/app/routes");
         let abs = Path::new("/app/routes/users/[1st].tsp");
         let err = url_path_for(root, abs, "[1st]").unwrap_err();
@@ -961,7 +961,7 @@ mod tests {
     #[test]
     fn url_path_rejects_non_final_catch_all() {
         // A catch-all followed by anything else is not allowed
-        // (FREEZE item 3: catch-all is the last segment).
+        // (contract item 3: catch-all is the last segment).
         let root = Path::new("/app/routes");
         let abs = Path::new("/app/routes/[...path]/tail.tsp");
         let err = url_path_for(root, abs, "tail").unwrap_err();
@@ -1232,7 +1232,7 @@ mod tests {
         // 1xxx partition so a future refactor cannot
         // silently renumber these -- the spec's
         // ambiguous-routes example references
-        // `TSP1004` (FREEZE item 14) and the rest are
+        // `TSP1004` (contract item 14) and the rest are
         // discoverable by name.
         let cases: &[(RouterError, &str)] = &[
             (

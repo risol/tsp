@@ -107,6 +107,47 @@ fn crashed_worker_is_replaced_before_next_request() {
 }
 
 #[test]
+fn timed_execution_retries_after_worker_disconnect() {
+    install_github_failure_reporter();
+    let marker = unique_socket_location("retry-once", ".marker");
+    let script = format!("__TSP_TEST_CRASH_ONCE__:{}", marker.display()).into_bytes();
+    let mut manager = WorkerManager::new(stub_binary(), socket_path("retry"));
+    manager
+        .start_worker()
+        .expect("stub worker should become ready");
+
+    let response = manager
+        .execute_with_timeout(request("retry", &script), 1_000)
+        .expect("replacement worker should retry the disconnected request");
+    assert_eq!(response.body, script);
+    manager.stop_worker().expect("worker should stop");
+    let _ = std::fs::remove_file(marker);
+}
+
+#[test]
+fn timed_execution_does_not_retry_non_idempotent_request() {
+    install_github_failure_reporter();
+    let marker = unique_socket_location("no-retry-once", ".marker");
+    let script = format!("__TSP_TEST_CRASH_ONCE__:{}", marker.display()).into_bytes();
+    let mut post = request("no-retry", &script);
+    post.method = "POST".into();
+    let mut manager = WorkerManager::new(stub_binary(), socket_path("no-retry"));
+    manager
+        .start_worker()
+        .expect("stub worker should become ready");
+
+    let error = manager
+        .execute_with_timeout(post, 1_000)
+        .expect_err("a POST must not be replayed after an ambiguous disconnect");
+    assert!(matches!(
+        error,
+        ManagerError::WorkerExited | ManagerError::Protocol(_)
+    ));
+    manager.stop_worker().expect("worker should stop");
+    let _ = std::fs::remove_file(marker);
+}
+
+#[test]
 fn timeout_restarts_a_stuck_worker() {
     install_github_failure_reporter();
     let mut manager = WorkerManager::new(stub_binary(), socket_path("timeout"));

@@ -3,8 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-OUTPUT_DIR="${1:-$PROJECT_ROOT/dist/tsp-v2-linux-x64}"
-BUILDER_IMAGE="${TSP_BUILDER_IMAGE:-tspserver-v2-build-env:latest}"
+OUTPUT_DIR="${1:-$PROJECT_ROOT/dist/tspserver-linux-x64}"
+BUILDER_IMAGE="${TSP_BUILDER_IMAGE:-tspserver-build-env:latest}"
 TSP_BUILD_REVISION="${GITHUB_SHA:-${GIT_SHA:-}}"
 
 if [ -z "$TSP_BUILD_REVISION" ]; then
@@ -21,14 +21,14 @@ command -v docker >/dev/null 2>&1 || {
 }
 
 mkdir -p "$OUTPUT_DIR"
-rm -f "$OUTPUT_DIR/tspserver_v2"
+rm -f "$OUTPUT_DIR/tspserver"
 
 if ! docker image inspect "$BUILDER_IMAGE" >/dev/null 2>&1; then
   echo "Build environment ${BUILDER_IMAGE} was not found; creating it..."
   bash "$SCRIPT_DIR/build-builder-image.sh" "${BUILDER_IMAGE%:*}" "${BUILDER_IMAGE##*:}"
 fi
 
-echo "Building tspserver_v2 for Linux in Docker..."
+echo "Building tspserver for Linux in Docker..."
 docker buildx build \
   --progress=plain \
   --platform linux/amd64 \
@@ -39,12 +39,12 @@ docker buildx build \
   -f "$SCRIPT_DIR/Dockerfile.build-linux" \
   "$PROJECT_ROOT/bun"
 
-test -x "$OUTPUT_DIR/tspserver_v2" || {
-  echo "Error: Docker build did not produce $OUTPUT_DIR/tspserver_v2" >&2
+test -x "$OUTPUT_DIR/tspserver" || {
+  echo "Error: Docker build did not produce $OUTPUT_DIR/tspserver" >&2
   exit 1
 }
 
-echo "Built Linux tspserver_v2: $OUTPUT_DIR/tspserver_v2"
+echo "Built Linux tspserver: $OUTPUT_DIR/tspserver"
 if command -v file >/dev/null 2>&1; then
-  file "$OUTPUT_DIR/tspserver_v2"
+  file "$OUTPUT_DIR/tspserver"
 fi

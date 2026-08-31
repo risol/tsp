@@ -1,15 +1,15 @@
-// Phase 9 — Fragments (plan §14 / FREEZE item 7)
+// Phase 9 — Fragments (plan §14 / contract item 7)
 //
-// The `fragment()` helper is the v2 protocol for a page
+// The `fragment()` helper is the protocol for a page
 // subtree reachable via an internal URL. The application
 // declares fragments as named exports, then asks the host
 // for the URL through `ctx.fragment("name")`. The host
 // owns the URL shape -- the application MUST NOT hard-code
 // any path (plan §14.3).
 //
-// The v1 contract is `fragment(handler)` with default
+// The legacy contract is `fragment(handler)` with default
 // method GET. The `{ method, handler }` form lands in a
-// follow-up slice; the FREEZE Amendment 4 narrows the
+// follow-up slice; the contract Amendment 4 narrows the
 // surface until the host has a real fragment-method
 // validation step (so a POST to a GET fragment is rejected
 // by the host, not by the page).

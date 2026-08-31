@@ -7,7 +7,7 @@
 //!
 //! - The master never spawns a Bun grandchild process.
 //! - The worker's executable path matches the master's (Windows:
-//!   self-spawn of the same `tspserver_v2.exe`; Unix: `fork()` of
+//!   self-spawn of the same `tspserver.exe`; Unix: `fork()` of
 //!   the master so they share an executable).
 //! - The worker receives `--tsp-worker` so it can route to the
 //!   worker entry point instead of the master entry point.

@@ -7,23 +7,23 @@ All notable changes to TSP will be documented in this file.
 ## [0.3.0] - 2026-08-31
 
 ### Added
-- v2.4 Master + IPC embedded Bun Workers with cross-platform lifecycle,
+- embedded-worker Master + IPC embedded Bun Workers with cross-platform lifecycle,
   timeout, crash replacement, backpressure, and hot-reload coverage.
-- Native v2 build, package, benchmark, CI, release, and smoke-test workflows.
-- v2 route fixtures covering methods, dynamic parameters, cookies, sessions,
+- Native current build, package, benchmark, CI, release, and smoke-test workflows.
+- route fixtures covering methods, dynamic parameters, cookies, sessions,
   request bodies, cancellation, static assets, and response handling.
-- v2-only root workflow. The former TypeScript/Bun application host and its
+- current root workflow. The former TypeScript/Bun application host and its
   compatibility surface are no longer shipped.
-- `config.bodyLimit` per-page request body cap (FREEZE.md §11). POST / PUT /
+- `config.bodyLimit` per-page request body cap (`contract.md` §11). POST / PUT /
   PATCH / DELETE with body over the per-page cap return 413; the cap is
   silently clamped to the global `TSP_MAX_BODY_BYTES`. Hand-rolled parser
   supports `int`, `int * int * ...`, and underscore separators.
-- `config.cache` per-page default `Cache-Control` header (plan §55, FREEZE.md
+- `config.cache` per-page default `Cache-Control` header (plan §55, `contract.md`
   §11). The runtime applies the value as a default header; the page's own
   `Response.headers` Cache-Control always wins.
-- `config.timeoutMs` per-page request timeout (spec §7 v2.0 core PageConfig).
+- `config.timeoutMs` per-page request timeout (spec §7 current contract PageConfig).
   Overrides the global `TSP_TIMEOUT_MS` per request; `0` disables the watchdog.
-- `config.methods` static validation (FREEZE §11): `tspserver_v2 check`
+- `config.methods` static validation (contract §11): `tspserver check`
   reports three new categories of spec §46 export-validation violations at
   check time (the runtime still serves the page; full generation-build
   enforcement lands with the AST detector in a future slice):
@@ -34,17 +34,17 @@ All notable changes to TSP will be documented in this file.
     ignored at runtime; `check` surfaces it)
 - `TSP3001: handler returned unsupported value <Type>. Expected HtmlNode or
   Response.` typed error for invalid handler return values (spec §6.3 / plan
-  §10.4 / FREEZE item 5). The wrap-side helper distinguishes top-level
+  §10.4 / contract item 5). The wrap-side helper distinguishes top-level
   contract violations (`TSP3001`) from nested JSX-child errors
   (`TSP3102`) via the `__child__` flag.
-- `tspserver_v2 --version` flag and a fully-documented `--help` output
+- `tspserver --version` flag and a fully-documented `--help` output
   that lists every env var the host honors (including the previously
   undocumented `TSP_TIMEOUT_MS` and `TSP_DEVELOPMENT`).
-- `tspserver_v2 typings` subcommand (with `tsp.sh typings` and
+- `tspserver typings` subcommand (with `tsp.sh typings` and
   `TSP_TYPINGS_DIR` / `--out <DIR>` overrides) emits the typed
   declaration files for `tsp:server`, `tsp:html`, and `tsp:runtime`
-  (FREEZE item 7, plan §11).
-- `tspserver_v2 check --tsc` runs a real `tsc --noEmit` against the
+  (contract item 7, plan §11).
+- `tspserver check --tsc` runs a real `tsc --noEmit` against the
   application routes so type errors are surfaced as part of `check`,
   not only as runtime failures.
 - `/__tsp/metrics` endpoint pinned end-to-end (Amendment 10): HEAD and
@@ -102,7 +102,7 @@ All notable changes to TSP will be documented in this file.
   `ConnectionReset` on the LAST read (the response body has already been
   received; the RST just terminates the stream). The tolerance is
   restricted to AFTER the first successful read.
-- BUG-0003 (`docs/v2/bugs/0003-windows-ci-worker-sigsegv-invalid-handle.md`):
+- BUG-0003 (`docs/reference/bugs/0003-windows-ci-worker-sigsegv-invalid-handle.md`):
   the embedded worker's synthetic ESM `bun:main` evaluation left a
   module-resume job that crashed in the first Windows JSC microtask
   checkpoint. The final worker path directly transpiles and evaluates
@@ -123,7 +123,7 @@ All notable changes to TSP will be documented in this file.
 
 ### Diagnostics
 - BUG-0003 confirmed root cause recorded in
-  `docs/v2/bugs/0003-windows-ci-worker-sigsegv-invalid-handle.md`. The
+  `docs/reference/bugs/0003-windows-ci-worker-sigsegv-invalid-handle.md`. The
   Windows worker crash is no longer opaque: the segmented trace
   narrows the fault to a single sub-stage of `drain_microtasks_with_global`
   before the direct-transpile fix.

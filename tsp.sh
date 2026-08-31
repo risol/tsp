@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# TSP v2 build, test, and local runtime workflow.
+# TSP build, test, and local runtime workflow.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUST_TOOLCHAIN="${TSP_RUST_TOOLCHAIN:-nightly-2026-07-20}"
 
@@ -37,8 +37,8 @@ resolve_runtime_binary() {
 }
 
 resolve_host() {
-  resolve_file "$ROOT_DIR/dist/tsp-v2/tspserver_v2.exe" "$ROOT_DIR/dist/tsp-v2/tspserver_v2" ||
-    die "v2 host not found; run './tsp.sh build:host'"
+  resolve_file "$ROOT_DIR/dist/tspserver/tspserver.exe" "$ROOT_DIR/dist/tspserver/tspserver" ||
+    die "host not found; run './tsp.sh build:host'"
 }
 
 build_worker() {
@@ -51,19 +51,19 @@ build_worker() {
 build_host() {
   local binary
   binary="$(resolve_runtime_binary)"
-  mkdir -p "$ROOT_DIR/dist/tsp-v2"
+  mkdir -p "$ROOT_DIR/dist/tspserver"
   if [[ "$binary" == *.exe ]]; then
-    cp "$binary" "$ROOT_DIR/dist/tsp-v2/tspserver_v2.exe"
+    cp "$binary" "$ROOT_DIR/dist/tspserver/tspserver.exe"
   else
-    cp "$binary" "$ROOT_DIR/dist/tsp-v2/tspserver_v2"
+    cp "$binary" "$ROOT_DIR/dist/tspserver/tspserver"
   fi
-  echo "Built single-file TSP runtime in $ROOT_DIR/dist/tsp-v2"
+  echo "Built single-file TSP runtime in $ROOT_DIR/dist/tspserver"
 }
 
 package_runtime() {
   local host
   host="$(resolve_host)"
-  bash "$ROOT_DIR/scripts/package-tspserver-v2.sh" "$host" "$ROOT_DIR/dist/tsp-v2" "$ROOT_DIR/routes" "$ROOT_DIR/public"
+  bash "$ROOT_DIR/scripts/package-tspserver.sh" "$host" "$ROOT_DIR/dist/tspserver" "$ROOT_DIR/routes" "$ROOT_DIR/public"
 }
 
 build_runtime() { build_worker; build_host; package_runtime; }
@@ -77,7 +77,7 @@ run_host() {
 run_smoke() {
   local host
   host="$(resolve_host)"
-  bash "$ROOT_DIR/scripts/smoke-tspserver-v2.sh" "$host" "$ROOT_DIR/tests/v2_smoke/routes" "${TSP_PORT:-9137}"
+  bash "$ROOT_DIR/scripts/smoke-tspserver.sh" "$host" "$ROOT_DIR/tests/smoke/routes" "${TSP_PORT:-9137}"
 }
 
 run_tests() {
@@ -122,7 +122,7 @@ run_typings() {
 }
 
 case "${1:-help}" in
-  build|build:v2|build:tspserver:v2|build:tspserver:v2:rel) build_runtime ;;
+  build|build:tspserver|build:tspserver:rel) build_runtime ;;
   build:host) build_host ;;
   build:worker) build_worker ;;
   start|dev) shift; run_host "$@" ;;
@@ -135,29 +135,29 @@ case "${1:-help}" in
   graph) run_graph ;;
   typings) shift; run_typings "$@" ;;
   package) package_runtime ;;
-  clean) rm -rf "$ROOT_DIR/dist/tsp-v2" ;;
+  clean) rm -rf "$ROOT_DIR/dist/tspserver" ;;
   help|-h|--help)
     cat <<'EOF'
 Usage: ./tsp.sh <command>
 
-  build / build:v2       Build the single-file runtime and v2 package
-  build:host             Copy the built runtime into dist/tsp-v2
+  build                  Build the single-file runtime and package
+  build:host             Copy the built runtime into dist/tspserver
   build:worker           Build the single-file runtime
-  start                  Run the v2 server with self-created workers
-  dev                    Run the v2 server (route hot reload is always enabled)
-  test                   Run Rust tests and the v2 embedded-worker smoke test
+  start                  Run the server with self-created workers
+  dev                    Run the server (route hot reload is always enabled)
+  test                   Run Rust tests and the embedded-worker smoke test
   test:rust              Run Rust unit and Worker IPC tests
-  test:smoke             Run the v2 hot-reload smoke test
+  test:smoke             Run the hot-reload smoke test
   check                  Run cargo check for the bundled runtime
   check:app              Run tsp check for the application routes
-  routes                 List the application routes (tspserver_v2 routes)
+  routes                 List the application routes (tspserver routes)
   graph                  Print the application module graph
-                          (tspserver_v2 graph)
+                          (tspserver graph)
   typings                Write the tsp:* TypeScript declaration files
                           (default output: ./.tsp-types; override with
                           --out <DIR> or TSP_TYPINGS_DIR)
   package                Package the single runtime binary
-  clean                  Remove v2 package output
+  clean                  Remove package output
 
 Environment:
   TSP_PORT, TSP_ROUTES_DIR, TSP_PUBLIC_DIR, TSP_BUN_BIN

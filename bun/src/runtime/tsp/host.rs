@@ -1,6 +1,6 @@
-//! TCP listener + request dispatcher for TSP v2 PoC 1 slices 2..12.
+//! TCP listener + request dispatcher for TSP PoC 1 slices 2..12.
 //!
-//! See `tsp-v2-plan.md` sect.61 Phase 1 + sect.20-22. Responsibilities:
+//! See `tsp-plan.md` sect.61 Phase 1 + sect.20-22. Responsibilities:
 //!
 //! 2. Bind to `0.0.0.0:<port>` (default 3000; override via `TSP_PORT`).
 //! 3. Accept each connection on its own thread.
@@ -45,7 +45,7 @@ use std::sync::RwLock;
 
 /// Stable error codes for development diagnostics
 /// (spec sect.6.3 / sect.37). The full set lives in
-/// `docs/v2/progress.md` slice 16h; the contract is:
+/// `docs/reference/progress.md` slice 16h; the contract is:
 ///
 /// - 1xxx: route / filesystem configuration errors
 ///   (scanner + shape + duplicate + ambiguous)
@@ -60,12 +60,12 @@ use std::sync::RwLock;
 ///
 /// The wire form is `[TSP-NNNN] <detail>` on the FIRST
 /// line of the error body. Subsequent lines keep the
-/// pre-16h "TSP v2 PoC 1 slice N: ..." trace so existing
+/// pre-16h "TSP PoC 1 slice N: ..." trace so existing
 /// tooling that greps for `slice 12` etc. continues to
 /// work.
 ///
 /// Note on overlap with the page-side examples: the
-/// 10 `.tsp` fixtures in `docs/v2/examples/` use the
+/// 10 `.tsp` fixtures in `docs/reference/examples/` use the
 /// 2xxx / 3xxx ranges from the application surface
 /// perspective (the page author types `TSP2003` /
 /// `TSP3001` into their dev loop). 16h's prefix table
@@ -131,9 +131,9 @@ pub enum TspError {
 
 impl TspError {
     /// The canonical `TSP-NNNN` string. Spec sect.6.3
-    /// and FREEZE item 14 anchor these codes; the
+    /// and contract item 14 anchor these codes; the
     /// application-side spec examples in
-    /// `docs/v2/examples/09-no-tsp-imports.tsp` and
+    /// `docs/reference/examples/09-no-tsp-imports.tsp` and
     /// `10-shape-magic.tsp` reference `TSP2003` /
     /// `TSP3001` directly.
     pub fn code(self) -> &'static str {
@@ -184,7 +184,7 @@ impl TspError {
 /// timeout, or `TSP3012` subprocess failure) use
 /// `format_error_body_raw`
 /// below. Detail lines follow so the pre-16h grep
-/// patterns (`TSP v2 PoC 1 slice 12: ...`) keep
+/// patterns (`TSP PoC 1 slice 12: ...`) keep
 /// working -- existing dev tooling scans for those
 /// substrings and 16h does not want to break that.
 pub fn format_error_body(code: TspError, detail: &str) -> String {
@@ -1028,7 +1028,7 @@ fn parse_session_writes(v: Option<&JsonValue>) -> Vec<SessionWrite> {
                 match json_value_to_session(v) {
                     Some(sv) => out.push(SessionWrite::Set(k.to_string(), sv)),
                     None => eprintln!(
-                        "TSPv2PoC1: session write to '{k}' has non-portable value; dropped"
+                        "TSP: session write to '{k}' has non-portable value; dropped"
                     ),
                 }
             }
@@ -1276,7 +1276,7 @@ fn render_dev_error_page(body: &str, status_line: &str) -> (String, String) {
          <head>\n\
          <meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <title>TSP v2 \u{2014} Dev Error: ",
+         <title>TSP \u{2014} Dev Error: ",
     );
     html_escape_into(&mut html, &error);
     html.push_str("</title>\n<style>\n\
@@ -1287,7 +1287,7 @@ fn render_dev_error_page(body: &str, status_line: &str) -> (String, String) {
          .error-name { font-weight: 600; color: #b00020; }\n\
          .meta { color: #666; font-size: 0.85em; margin-top: 2em; padding-top: 1em; border-top: 1px solid #eee; }\n\
          </style>\n</head>\n<body>\n\
-         <h1>TSP v2 \u{2014} Dev Error</h1>\n\
+         <h1>TSP \u{2014} Dev Error</h1>\n\
          <div class=\"error-name\">",
     );
     html_escape_into(&mut html, &error);
@@ -1425,7 +1425,7 @@ pub fn serve_with_public_root(
     let addr = format!("{host}:{port}");
     let listener = TcpListener::bind(&addr).map_err(HostError::Bind)?;
     eprintln!(
-        "TSPv2PoC1: listening on http://{addr} (slice 12, {} route(s) loaded)",
+        "TSP: listening on http://{addr} (slice 12, {} route(s) loaded)",
         routes.len()
     );
 
@@ -1439,7 +1439,7 @@ pub fn serve_with_public_root(
                 return Err(HostError::Accept(e));
             }
         };
-        eprintln!("TSPv2PoC1: accepted {peer}");
+        eprintln!("TSP: accepted {peer}");
         let routes_for_thread = Arc::clone(&routes);
         let public_root_for_thread = public_root.clone();
         thread::spawn(move || {
@@ -1451,7 +1451,7 @@ pub fn serve_with_public_root(
                 services,
                 public_root_for_thread.as_deref(),
             ) {
-                eprintln!("TSPv2PoC1: {e}");
+                eprintln!("TSP: {e}");
             }
         });
     }
@@ -1490,7 +1490,7 @@ fn handle_connection(
             let body_text = format_error_body(
                 TspError::BodyTooLarge,
                 &format!(
-                    "TSP v2 PoC 1 slice 16d: request body exceeds configured limit of {limit} bytes\n"
+                    "TSP PoC 1 slice 16d: request body exceeds configured limit of {limit} bytes\n"
                 ),
             );
             let head = format!(
@@ -1652,7 +1652,7 @@ fn handle_connection(
                     }
                     metrics::global().record_response("HTTP/1.1 200 OK");
                     metrics::global().record_duration(request_started.elapsed().as_millis() as u64);
-                    eprintln!("TSPv2PoC1: static {}", asset.path.display());
+                    eprintln!("TSP: static {}", asset.path.display());
                     let _ = stream.shutdown(Shutdown::Both);
                     return Ok(());
                 }
@@ -1680,7 +1680,7 @@ fn handle_connection(
             None,
             format_error_body(
                 TspError::MalformedRequestLine,
-                "TSP v2 PoC 1 slice 10b: malformed request line\n",
+                "TSP PoC 1 slice 10b: malformed request line\n",
             ),
             Vec::new(),
         ),
@@ -1713,7 +1713,7 @@ fn handle_connection(
             let (dispatch_path, fragment_name, dispatch_query) = fragment_target(&path, &query)
                 .unwrap_or_else(|| (path.clone(), None, query.clone()));
             let matched = routes.lookup(&dispatch_path, method);
-            // FREEZE.md §11 / `config.bodyLimit`: a page
+            // contract.md §11 / `config.bodyLimit`: a page
             // may declare a per-page body cap. If the
             // request body is larger than the page's
             // cap, return 413 BEFORE running the page
@@ -1760,7 +1760,7 @@ fn handle_connection(
                     let body_text = format_error_body(
                         TspError::BodyTooLarge,
                         &format!(
-                            "TSP v2: request body ({} bytes) exceeds the page's \
+                            "TSP: request body ({} bytes) exceeds the page's \
                              `config.bodyLimit` ({} bytes)\n",
                             body.len(),
                             limit
@@ -1790,7 +1790,7 @@ fn handle_connection(
                 }
                 _ => std::collections::HashMap::new(),
             };
-            // `config.cache` (plan §55, FREEZE.md §11):
+            // `config.cache` (plan §55, contract.md §11):
             // a page may declare a default
             // `Cache-Control` header. Resolved
             // here so the inner dispatch arm
@@ -1799,7 +1799,7 @@ fn handle_connection(
             // page's `Response` did not set one
             // itself (the page is more specific
             // than the page-level default). The
-            // value is the FREEZE.md §11 literal
+            // value is the contract.md §11 literal
             // (`no-store` / `private` / `public`).
             // The detector in `page.rs` is
             // hand-rolled and tolerates single /
@@ -1811,7 +1811,7 @@ fn handle_connection(
                     .and_then(|p| p.config_cache.map(|c| c.header_value())),
                 _ => None,
             };
-            // `config.timeoutMs` (spec §7 v2.0
+            // `config.timeoutMs` (spec §7 current contract
             // core PageConfig): a page may
             // declare a per-page request timeout
             // (in milliseconds). The per-page
@@ -2034,7 +2034,7 @@ fn handle_connection(
                             outcome.headers.clone(),
                         )
                     };
-                    // `config.cache` (plan §55, FREEZE.md §11):
+                    // `config.cache` (plan §55, contract.md §11):
                     // inject the page-level default
                     // `Cache-Control` header into the
                     // response ONLY when the page's
@@ -2162,7 +2162,7 @@ fn handle_connection(
                     None,
                     format_error_body(
                         TspError::MalformedUrl,
-                        &format!("TSP v2 PoC 1 slice 16e: malformed URL path: {error}\n"),
+                        &format!("TSP PoC 1 slice 16e: malformed URL path: {error}\n"),
                     ),
                     Vec::new(),
                 ),
@@ -2173,7 +2173,7 @@ fn handle_connection(
                     format_error_body(
                         TspError::NoRouteMatches,
                         &format!(
-                            "TSP v2 PoC 1 slice 10b: no route matches path={path} (table has {} route(s))\n",
+                            "TSP PoC 1 slice 10b: no route matches path={path} (table has {} route(s))\n",
                             routes.len()
                         ),
                     ),
@@ -2371,14 +2371,14 @@ fn render_per_request(
                 Ok(body) => ("HTTP/1.1 200 OK", "text/html; charset=utf-8", None, body),
                 Err(e) => {
                     let msg = format!("{e}");
-                    eprintln!("TSPv2PoC1: build error on {}: {e}", route.source.display());
+                    eprintln!("TSP: build error on {}: {e}", route.source.display());
                     let (status, body) = build_failure_response(
                         &e,
                         diagnostic_detail(
                             &route.source,
                             &e,
                             format!(
-                                "TSP v2 PoC 1 slice 16d: build error on {}\n  {msg}\n",
+                                "TSP PoC 1 slice 16d: build error on {}\n  {msg}\n",
                                 route.source.display()
                             ),
                         ),
@@ -2392,7 +2392,7 @@ fn render_per_request(
             let body = format_error_body(
                 TspError::MethodNotAllowed,
                 &format!(
-                    "TSP v2 PoC 1 slice 16d: method {} not exported by {}\n",
+                    "TSP PoC 1 slice 16d: method {} not exported by {}\n",
                     requested.as_str(),
                     route.source.display()
                 ),
@@ -2410,7 +2410,7 @@ fn render_per_request(
             None,
             format_error_body(
                 TspError::PagePrepareError,
-                &format!("TSP v2 PoC 1 slice 16d: prepare error: {e}\n"),
+                &format!("TSP PoC 1 slice 16d: prepare error: {e}\n"),
             ),
         ),
     }
@@ -2457,7 +2457,7 @@ fn render_for_route(
         let body = format_error_body(
             TspError::MethodNotAllowed,
             &format!(
-                "TSP v2 PoC 1 slice 12: method {} not exported by {}\n",
+                "TSP PoC 1 slice 12: method {} not exported by {}\n",
                 requested.as_str(),
                 route.source.display()
             ),
@@ -2514,14 +2514,14 @@ fn render_for_route(
                         Err(e) => {
                             let msg = format!("{e}");
                             guard.fail(msg.clone());
-                            eprintln!("TSPv2PoC1: build error on {}: {e}", route.source.display());
+                            eprintln!("TSP: build error on {}: {e}", route.source.display());
                             let (status, body) = build_failure_response(
                                 &e,
                                 diagnostic_detail(
                                     &route.source,
                                     &e,
                                     format!(
-                                        "TSP v2 PoC 1 slice 12: build error on {}\n  {msg}\n",
+                                        "TSP PoC 1 slice 12: build error on {}\n  {msg}\n",
                                         route.source.display()
                                     ),
                                 ),
@@ -2540,7 +2540,7 @@ fn render_for_route(
                     // snapshot and begin_build (watcher race
                     // + us re-snapshot). Serve current.
                     eprintln!(
-                        "TSPv2PoC1: build race -- snapshot said Unloaded/Dirty, begin_build returned NotBuildable({other:?})"
+                        "TSP: build race -- snapshot said Unloaded/Dirty, begin_build returned NotBuildable({other:?})"
                     );
                     serve_current_pinned_or_500(registry, page_ref)
                 }
@@ -2550,7 +2550,7 @@ fn render_for_route(
                     None,
                     format_error_body(
                         TspError::UnknownPage,
-                        "TSP v2 PoC 1 slice 12: page not registered in PageRegistry\n",
+                        "TSP PoC 1 slice 12: page not registered in PageRegistry\n",
                     ),
                 ),
             }
@@ -2589,14 +2589,14 @@ fn handle_building(
         }
         InFlightState::Done(BuildOutcome::Failed(msg)) => {
             eprintln!(
-                "TSPv2PoC1: in-flight build for {} failed: {msg}",
+                "TSP: in-flight build for {} failed: {msg}",
                 route.source.display()
             );
             serve_lkg_pinned_or_500(registry, page_ref, route)
         }
         InFlightState::Abandoned => {
             eprintln!(
-                "TSPv2PoC1: in-flight build for {} abandoned (guard dropped)",
+                "TSP: in-flight build for {} abandoned (guard dropped)",
                 route.source.display()
             );
             serve_lkg_pinned_or_500(registry, page_ref, route)
@@ -2630,7 +2630,7 @@ fn serve_current_pinned_or_500(
             None,
             format_error_body(
                 TspError::CleanSlotMissingPayload,
-                "TSP v2 PoC 1 slice 12: Clean slot has no payload\n",
+                "TSP PoC 1 slice 12: Clean slot has no payload\n",
             ),
         ),
     }
@@ -2650,7 +2650,7 @@ fn serve_lkg_pinned_or_500(
             format_error_body(
                 TspError::PageNeverBuilt,
                 &format!(
-                    "TSP v2 PoC 1 slice 12: page {} never built successfully\n",
+                    "TSP PoC 1 slice 12: page {} never built successfully\n",
                     route.source.display()
                 ),
             ),
@@ -2680,7 +2680,7 @@ fn render_405_body(
             let body = format_error_body(
                 TspError::MethodNotAllowed,
                 &format!(
-                    "TSP v2 PoC 1 slice 10b: method {} not exported by {}\n",
+                    "TSP PoC 1 slice 10b: method {} not exported by {}\n",
                     requested.as_str(),
                     route.source.display()
                 ),
@@ -2691,7 +2691,7 @@ fn render_405_body(
             String::new(),
             format_error_body(
                 TspError::PagePrepareError,
-                &format!("TSP v2 PoC 1 slice 10b: prepare error: {e}\n"),
+                &format!("TSP PoC 1 slice 10b: prepare error: {e}\n"),
             ),
         ),
     }
@@ -3638,7 +3638,7 @@ mod tests {
         // when present.
         let body = format_error_body(
             TspError::NoRouteMatches,
-            "TSP v2 PoC 1 slice 10b: no route matches path=/ (table has 0 route(s))\n",
+            "TSP PoC 1 slice 10b: no route matches path=/ (table has 0 route(s))\n",
         );
         assert!(
             body.starts_with("[TSP2003] no route matches\n"),

@@ -192,7 +192,7 @@ impl SessionBackend for MemoryBackend {
                             row.data.insert(name.clone(), value.clone());
                         } else {
                             eprintln!(
-                                "TSPv2PoC1: session write to unknown sid dropped (key={name})"
+                                "TSP: session write to unknown sid dropped (key={name})"
                             );
                         }
                     }
@@ -510,14 +510,14 @@ impl SessionBackend for RedisBackend {
                 match Self::parse_view_json(s.as_ref()) {
                     Some(v) => Some(v),
                     None => {
-                        eprintln!("TSPv2PoC1: Redis session blob unparseable; treating as miss");
+                        eprintln!("TSP: Redis session blob unparseable; treating as miss");
                         None
                     }
                 }
             }
             Ok(None) => None,
             Err(e) => {
-                eprintln!("TSPv2PoC1: Redis lookup failed: {e}");
+                eprintln!("TSP: Redis lookup failed: {e}");
                 *self.conn.lock().unwrap() = None;
                 self.available.store(false, Ordering::Release);
                 None
@@ -538,7 +538,7 @@ impl SessionBackend for RedisBackend {
         match self.round_trip_simple(&cmd) {
             Ok(()) => view,
             Err(e) => {
-                eprintln!("TSPv2PoC1: Redis create failed: {e}");
+                eprintln!("TSP: Redis create failed: {e}");
                 *self.conn.lock().unwrap() = None;
                 self.available.store(false, Ordering::Release);
                 view
@@ -565,7 +565,7 @@ impl SessionBackend for RedisBackend {
                     let current = match self.lookup(current_sid) {
                         Some(v) => v,
                         None => {
-                            eprintln!("TSPv2PoC1: session Set on unknown sid dropped (key={name})");
+                            eprintln!("TSP: session Set on unknown sid dropped (key={name})");
                             continue;
                         }
                     };
@@ -574,7 +574,7 @@ impl SessionBackend for RedisBackend {
                     let blob = Self::serialize_view(&next);
                     let cmd = self.cmd_set(&next.id, &blob);
                     if let Err(e) = self.round_trip_simple(&cmd) {
-                        eprintln!("TSPv2PoC1: Redis Set write failed: {e}");
+                        eprintln!("TSP: Redis Set write failed: {e}");
                         *self.conn.lock().unwrap() = None;
                         self.available.store(false, Ordering::Release);
                     }
@@ -587,7 +587,7 @@ impl SessionBackend for RedisBackend {
                     let blob = Self::serialize_view(&current);
                     let cmd = self.cmd_set(&current.id, &blob);
                     if let Err(e) = self.round_trip_simple(&cmd) {
-                        eprintln!("TSPv2PoC1: Redis Delete write failed: {e}");
+                        eprintln!("TSP: Redis Delete write failed: {e}");
                         *self.conn.lock().unwrap() = None;
                         self.available.store(false, Ordering::Release);
                     }
@@ -601,7 +601,7 @@ impl SessionBackend for RedisBackend {
                     let blob = Self::serialize_view(&next);
                     let cmd = self.cmd_set(&next.id, &blob);
                     if let Err(e) = self.round_trip_simple(&cmd) {
-                        eprintln!("TSPv2PoC1: Redis Clear write failed: {e}");
+                        eprintln!("TSP: Redis Clear write failed: {e}");
                         *self.conn.lock().unwrap() = None;
                         self.available.store(false, Ordering::Release);
                     }
@@ -618,7 +618,7 @@ impl SessionBackend for RedisBackend {
                     let blob = Self::serialize_view(&next);
                     let cmd = self.cmd_set(&next.id, &blob);
                     if let Err(e) = self.round_trip_simple(&cmd) {
-                        eprintln!("TSPv2PoC1: Redis Regenerate write failed: {e}");
+                        eprintln!("TSP: Redis Regenerate write failed: {e}");
                         *self.conn.lock().unwrap() = None;
                         self.available.store(false, Ordering::Release);
                         return new_sid;
@@ -632,7 +632,7 @@ impl SessionBackend for RedisBackend {
                 }
                 SessionWrite::Destroy => {
                     if let Err(e) = self.round_trip_simple(&self.cmd_del(current_sid)) {
-                        eprintln!("TSPv2PoC1: Redis Destroy failed: {e}");
+                        eprintln!("TSP: Redis Destroy failed: {e}");
                         *self.conn.lock().unwrap() = None;
                         self.available.store(false, Ordering::Release);
                     }

@@ -1,4 +1,4 @@
-//! Safe native serving for the configured v2 `public/` directory.
+//! Safe native serving for the configured `public/` directory.
 
 use std::fs;
 use std::io;
@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn loads_index_and_decoded_file_without_escape() {
-        let root = std::env::temp_dir().join(format!("tsp-v2-public-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("tspserver-public-{}", std::process::id()));
         std::fs::create_dir_all(root.join("assets")).unwrap();
         std::fs::write(root.join("index.html"), "home").unwrap();
         std::fs::write(root.join("assets/hello world.txt"), "hello").unwrap();
@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn missing_public_file_falls_through() {
         let root =
-            std::env::temp_dir().join(format!("tsp-v2-public-missing-{}", std::process::id()));
+            std::env::temp_dir().join(format!("tspserver-public-missing-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         assert!(load(&root, "/missing.js").unwrap().is_none());
         let _ = std::fs::remove_dir_all(root);

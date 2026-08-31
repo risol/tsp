@@ -1,7 +1,7 @@
 services:
   tspserver:
-    image: tspserver-v2:latest
-    container_name: tspserver-v2
+    image: tspserver:latest
+    container_name: tspserver
     restart: unless-stopped
     environment:
       TSP_PORT: 9000
@@ -27,7 +27,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: tspserver-v2-redis
+    container_name: tspserver-redis
     restart: unless-stopped
     ports:
       - "6379:6379"

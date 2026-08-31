@@ -91,7 +91,7 @@ mod tests {
     #[test]
     fn workers_exchange_paths_without_sharing_runtime_state() {
         let path =
-            std::env::temp_dir().join(format!("tsp-v2-invalidation-{}.log", std::process::id()));
+            std::env::temp_dir().join(format!("tspserver-invalidation-{}.log", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let mut first = InvalidationBus::open(path.clone()).unwrap();
         let mut second = InvalidationBus::open(path.clone()).unwrap();

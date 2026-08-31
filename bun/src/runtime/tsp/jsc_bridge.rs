@@ -1,6 +1,6 @@
-//! JSC execution bridge for TSP v2 PoC 1 slice 6.
+//! JSC execution bridge for TSP PoC 1 slice 6.
 //!
-//! See `tsp-v2-plan.md` sect.25.3 ("JSC 是执行引擎"). Slice 6
+//! See `tsp-plan.md` sect.25.3 ("JSC 是执行引擎"). Slice 6
 //! intentionally does not pull in `bun_runtime` (cold compile 20-40
 //! min) nor wire `bun_jsc` directly (no standalone embeddable VM
 //! per slice 4's discovery). Instead, the host spawns the project's
@@ -24,8 +24,8 @@ use crate::worker::manager::ManagerError;
 use crate::worker::pool::{PoolError, WorkerPool};
 use crate::worker::protocol::ExecuteRequest;
 
-/// v2.4 self-spawn runtime handle. The master holds the pool; each pool
-/// slot owns a self-spawned `tspserver_v2[.exe]` worker process (see
+/// embedded-worker self-spawn runtime handle. The master holds the pool; each pool
+/// slot owns a self-spawned `tspserver[.exe]` worker process (see
 /// `worker/manager.rs` and `worker/pool.rs`). The `bin` field is the
 /// path the master itself was launched from — workers reuse the same
 /// executable and dispatch on `--tsp-worker`.
@@ -316,8 +316,8 @@ fn execute_inner(
     request_headers: Option<&[(String, String)]>,
     request_body: Option<&[u8]>,
 ) -> Result<String, JscError> {
-    // v2.4 self-spawn only: every request goes through the WorkerPool
-    // backed by self-spawned `tspserver_v2[.exe]` workers. There is no
+    // embedded-worker self-spawn only: every request goes through the WorkerPool
+    // backed by self-spawned `tspserver[.exe]` workers. There is no
     // `bun run tempfile` fallback - the wrapper runs inside the worker's
     // embedded Bun VM and returns through the master<->worker IPC channel
     // (see `worker/manager.rs::WorkerManager::spawn`).
@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn jsc_error_codes_are_stable() {
-        // Pin the v2.4 self-spawn-only error code table. A refactor must
+        // Pin the embedded-worker self-spawn-only error code table. A refactor must
         // not silently renumber the prefix (e.g. accidentally reusing
         // `TSP3009` for JSX).
         let pairs: &[(JscError, &str)] = &[

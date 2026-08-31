@@ -1,6 +1,6 @@
-//! Page source reader + static export detector for TSP v2 PoC 1 slice 5.
+//! Page source reader + static export detector for TSP PoC 1 slice 5.
 //!
-//! See `tsp-v2-plan.md` sect.4.2 (named HTTP method exports),
+//! See `tsp-plan.md` sect.4.2 (named HTTP method exports),
 //! sect.48 (export validation), and sect.20.2-20.3 (ModuleGraph +
 //! PageSlot, both landed in slice 7+). For slice 5 we only need the
 //! minimum to prove the host can:
@@ -32,8 +32,8 @@ pub struct PageSource {
     pub byte_len: usize,
     pub methods: Vec<HttpMethod>,
     /// `config.methods` if the page declared a
-    /// `PageConfig` (FREEZE.md §11). When `Some`,
-    /// the static check (`tspserver_v2 check`)
+    /// `PageConfig` (contract.md §11). When `Some`,
+    /// the static check (`tspserver check`)
     /// validates the declared set against the
     /// actual exports; a mismatch is reported
     /// as an error. The runtime does NOT enforce
@@ -42,7 +42,7 @@ pub struct PageSource {
     /// strictly a check-time validation.
     pub config_methods: Option<Vec<HttpMethod>>,
     /// `config.bodyLimit` if the page declared one
-    /// (FREEZE.md §11). The runtime applies this
+    /// (contract.md §11). The runtime applies this
     /// AFTER route matching: if the body is
     /// larger than this limit, the host returns
     /// 413. The per-page limit MUST be <= the
@@ -52,7 +52,7 @@ pub struct PageSource {
     /// runtime.
     pub config_body_limit: Option<usize>,
     /// `config.cache` if the page declared one
-    /// (plan §55, FREEZE.md §11). The runtime
+    /// (plan §55, contract.md §11). The runtime
     /// applies this AFTER route matching: the
     /// declared value is used as a default
     /// `Cache-Control` header on the response,
@@ -60,17 +60,17 @@ pub struct PageSource {
     /// of `Cache-Control` always wins (the page
     /// is more specific than the page-level
     /// default). The supported values are the
-    /// three FREEZE.md §11 literals:
+    /// three contract.md §11 literals:
     ///   "no-store" -> `Cache-Control: no-store`
     ///   "private"  -> `Cache-Control: private`
     ///   "public"   -> `Cache-Control: public`
     /// Anything else is unparseable (returns
-    /// `None` so `tspserver_v2 check` does not
+    /// `None` so `tspserver check` does not
     /// surface a wrong value as a successful
     /// parse).
     pub config_cache: Option<CachePolicy>,
     /// `config.timeoutMs` if the page declared
-    /// one (spec §7 "v2.0 core PageConfig").
+    /// one (spec §7 "current contract PageConfig").
     /// The runtime applies this AFTER route
     /// matching: the per-page timeout overrides
     /// the global `TSP_TIMEOUT_MS` for that
@@ -92,7 +92,7 @@ pub struct PageSource {
     /// (spec §46 "no unknown runtime exports",
     /// plan §48). An empty vector means the
     /// page has no unknown exports. The
-    /// `tspserver_v2 check` subcommand reports
+    /// `tspserver check` subcommand reports
     /// a non-empty vector as an ERROR (and
     /// exits 1) so the user gets a clear
     /// message at check time rather than at
@@ -371,7 +371,7 @@ pub fn detect_default_export(text: &str) -> bool {
     })
 }
 
-/// Detect `config.methods` in a .tsp file (FREEZE.md
+/// Detect `config.methods` in a .tsp file (contract.md
 /// §11). The page's `export const config = { ... }`
 /// is the only source of truth for the declared
 /// method set; if absent, this returns `None` (the
@@ -453,7 +453,7 @@ pub fn detect_config_methods(text: &str) -> Option<Vec<HttpMethod>> {
 }
 
 /// Detect `config.bodyLimit` in a .tsp file
-/// (FREEZE.md §11). The page's
+/// (contract.md §11). The page's
 /// `export const config = { bodyLimit: N }` is the
 /// single source of truth for the per-page body
 /// size cap (in bytes). Returns `None` when the
@@ -524,7 +524,7 @@ pub fn detect_config_body_limit(text: &str) -> Option<usize> {
 }
 
 /// Detect `config.timeoutMs` in a .tsp file
-/// (spec §7 "v2.0 core PageConfig"). The
+/// (spec §7 "current contract PageConfig"). The
 /// page's `export const config = { timeoutMs: N }`
 /// is the source of truth for the per-page
 /// request timeout (in milliseconds). Returns
@@ -577,15 +577,15 @@ pub fn detect_config_timeout_ms(text: &str) -> Option<u64> {
 }
 
 /// Detect `config.cache` in a .tsp file
-/// (FREEZE.md §11, plan §55). The page's
+/// (contract.md §11, plan §55). The page's
 /// `export const config = { cache: "..." }` is
 /// a single string literal; the runtime maps it
 /// to a `Cache-Control` header value used as a
 /// default when the page's `Response.headers`
 /// did not set one. Returns `None` when the
 /// page did not declare a value OR the value is
-/// not one of the three FREEZE.md §11 literals
-/// (so `tspserver_v2 check` does not surface a
+/// not one of the three contract.md §11 literals
+/// (so `tspserver check` does not surface a
 /// wrong value as a successful parse).
 ///
 /// The detector is hand-rolled (no regex dep)
@@ -735,7 +735,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // `config.methods` detection (FREEZE.md §11, slice 11 of plan)
+    // `config.methods` detection (contract.md §11, slice 11 of plan)
     //
     // The page's `export const config = { methods: [...] }` is the
     // single source of truth for the declared method set. The
@@ -829,7 +829,7 @@ export const config = {
     }
 
     // -----------------------------------------------------------------
-    // `config.bodyLimit` detection (FREEZE.md §11, slice 11 of plan)
+    // `config.bodyLimit` detection (contract.md §11, slice 11 of plan)
     //
     // Hand-rolled parser for `bodyLimit: N` (bytes).
     // Supports the common shapes (single int, single
@@ -1025,9 +1025,9 @@ export const config = {   "cache"   :     "no-store"   };
     fn detect_config_cache_rejects_unknown_value() {
         // "max-age=60" is a valid Cache-Control
         // directive but NOT one of the three
-        // FREEZE.md §11 cache policies. The
+        // contract.md §11 cache policies. The
         // detector surfaces it as None so
-        // `tspserver_v2 check` does not
+        // `tspserver check` does not
         // silently accept a value the runtime
         // cannot map to a default header.
         let src = r#"
@@ -1050,7 +1050,7 @@ export const config = { cache: no_store };
     #[test]
     fn cache_policy_header_value_maps_to_freeze_literals() {
         // The header value is exactly the
-        // FREEZE.md §11 literal so a user who
+        // contract.md §11 literal so a user who
         // reads the spec sees the same string
         // on the wire that they wrote in
         // `config`.

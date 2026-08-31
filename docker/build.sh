@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-IMAGE_NAME="${1:-tspserver-v2}"
+IMAGE_NAME="${1:-tspserver}"
 IMAGE_TAG="${2:-latest}"
 
 command -v docker >/dev/null 2>&1 || {
@@ -11,8 +11,8 @@ command -v docker >/dev/null 2>&1 || {
   exit 1
 }
 
-echo "Building the TSP v2 runtime package..."
-bash "$SCRIPT_DIR/build-linux.sh" "$PROJECT_ROOT/dist/tsp-v2"
+echo "Building the TSP runtime package..."
+bash "$SCRIPT_DIR/build-linux.sh" "$PROJECT_ROOT/dist/tspserver"
 
 echo "Building Docker image ${IMAGE_NAME}:${IMAGE_TAG}..."
 docker build -f "$SCRIPT_DIR/Dockerfile" \

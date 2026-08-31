@@ -1,4 +1,4 @@
-//! Synchronous build pipeline for TSP v2 slice 10b (plan sect.21).
+//! Synchronous build pipeline for TSP slice 10b (plan sect.21).
 //!
 //! Combines `page::prepare` (slice 5 source reader) and
 //! `jsc_bridge::execute` (slice 6 bun subprocess bridge) into

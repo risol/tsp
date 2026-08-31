@@ -1,7 +1,7 @@
 # AGENTS.md
 
-This repository contains TSP v2 only. The native runtime is implemented under
-`bun/src/runtime/tsp`; the root project contains route fixtures, v2 tooling,
+This repository contains TSP only. The native runtime is implemented under
+`bun/src/runtime/tsp`; the root project contains route fixtures, tooling,
 documentation, and packaging helpers.
 
 ## Language requirements
@@ -15,11 +15,11 @@ The request path is:
 
 ```text
 HTTP request -> Rust host -> route table -> generation registry -> Bun worker
-             -> v2 handler -> response envelope -> HTTP response
+             -> handler -> response envelope -> HTTP response
 ```
 
-TSP v2 is intentionally incompatible with the former v1 `Page()` wrapper,
-global dependency injection, React page runtime, and `src/main.ts` host.
+TSP uses explicit route handlers and does not use the former `Page()` wrapper,
+global dependency injection, React page runtime, or `src/main.ts` host.
 
 ## Route rules
 
@@ -29,7 +29,7 @@ global dependency injection, React page runtime, and `src/main.ts` host.
 - Use `tsp:html` for trusted HTML and escaping helpers.
 - Dynamic route segments use `[name]`, for example `routes/users/[id].tsp`.
 - Static assets belong in `public/` and must not be implemented as route handlers.
-- Do not import from the deleted v1 `src/` tree or use the v1 global types.
+- Do not import from the deleted legacy `src/` tree or use legacy global types.
 
 Example:
 
@@ -45,15 +45,15 @@ export function GET(ctx: Context) {
 
 ```bash
 ./tsp.sh build       # Build the single-file runtime and package it
-./tsp.sh dev         # Run v2 with route hot reload
-./tsp.sh start       # Run v2 using the same route contract
-./tsp.sh check       # cargo check for tspserver_v2
-./tsp.sh test        # Rust tests and v2 smoke test
+./tsp.sh dev         # Run with route hot reload
+./tsp.sh start       # Run using the route contract
+./tsp.sh check       # cargo check for tspserver
+./tsp.sh test        # Rust tests and smoke test
 ```
 
-The packaged `tspserver_v2` accepts configuration through `TSP_PORT`,
+The packaged `tspserver` accepts configuration through `TSP_PORT`,
 `TSP_ROUTES_DIR`, `TSP_PUBLIC_DIR`, `TSP_WORKER_COUNT`, and the other variables
-shown by `tspserver_v2 --help`. Worker processes are created by the same
+shown by `tspserver --help`. Worker processes are created by the same
 executable; no separate worker binary is required.
 
 ## Native runtime and allocator boundaries
@@ -125,19 +125,19 @@ Windows handle boundaries have a separate representation rule:
   methods shows up as one opaque outer marker pair with no internal
   boundary.
 
-See `docs/v2/adr/0002-cross-allocator-ownership.md`,
-`docs/v2/adr/0003-windows-fd-representation.md`,
-`docs/v2/adr/0004-process-relative-vm-roles.md`, and
-`docs/v2/adr/0005-embedded-vm-module-readiness.md` for the rationale and
-boundary rules. See `docs/v2/bugs/0002-mimalloc-operator-delete-sigsegv.md`
-and `docs/v2/bugs/0003-windows-ci-worker-sigsegv-invalid-handle.md` for the
+See `docs/reference/adr/0002-cross-allocator-ownership.md`,
+`docs/reference/adr/0003-windows-fd-representation.md`,
+`docs/reference/adr/0004-process-relative-vm-roles.md`, and
+`docs/reference/adr/0005-embedded-vm-module-readiness.md` for the rationale and
+boundary rules. See `docs/reference/bugs/0002-mimalloc-operator-delete-sigsegv.md`
+and `docs/reference/bugs/0003-windows-ci-worker-sigsegv-invalid-handle.md` for the
 verified regressions.
 
 ## Verification
 
 Before changing the native runtime, run the focused Rust tests and the smoke
 test. Changes to route discovery, generation, workers, or response handling
-must preserve the frozen contract in `docs/v2/FREEZE.md`.
+must preserve the contract in `docs/reference/contract.md`.
 
 When changing `bun/scripts/build/deps/webkit.ts`, treat the WebKit/JSC pin as
 native runtime code: verify the selected release contains the required upstream
@@ -162,4 +162,4 @@ WebKit fixes before adding TSP-specific event-loop or handle workarounds.
   is not an embedded-worker control channel; use the native worker protocol.
 
 Changes to path handling, FFI, allocators, or embedded workers must also run a
-Linux embedded-worker release build and the TSP v2 smoke test.
+Linux embedded-worker release build and the TSP smoke test.

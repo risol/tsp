@@ -231,12 +231,12 @@ impl ServiceRegistry {
                         forwarded += 1;
                     }
                     None => eprintln!(
-                        "TSPv2PoC1: service '{}' is not a log sink; dropping line",
+                        "TSP: service '{}' is not a log sink; dropping line",
                         line.service
                     ),
                 },
                 None => eprintln!(
-                    "TSPv2PoC1: log line for unknown service '{}' dropped",
+                    "TSP: log line for unknown service '{}' dropped",
                     line.service
                 ),
             }
@@ -1019,7 +1019,7 @@ impl Service for CounterService {
 // reads the snapshot via `ctx.services.<name>.entries.<key>`;
 // the page cannot mutate the map (the descriptor is frozen).
 // Mutations are config-driven: change the file, restart the
-// master, the new values ship. This is the v2 surface for
+// master, the new values ship. This is the current surface for
 // host-supplied configuration values a page needs to read
 // (rate limits, feature gates, support emails, internal
 // service URLs, etc.) without leaking the whole process
@@ -1073,7 +1073,7 @@ impl Service for KvService {
         // in `serde`. Keys are escaped via the existing
         // `json_string_field`; values are escaped the same
         // way (the plan does not constrain value types
-        // beyond "string"; the v2 prototype sticks to
+        // beyond "string"; the current implementation sticks to
         // string for the same reason `Bun.env` is a
         // string map).
         let mut out = String::with_capacity(64 + self.entries.len() * 32);

@@ -1,4 +1,4 @@
-// Shared datasource configuration for TSP v2 routes.
+// Shared datasource configuration for TSP routes.
 //
 // Plan §17.1: the host runtime does NOT own database credentials.
 // Data source info lives in the page source tree (this file),
@@ -16,7 +16,7 @@
 // return it. The connection's logical lifetime is per request;
 // the underlying TCP socket is reused by the pool (PHP-FPM
 // `pconnect` semantics), which is the only way the pool pays
-// for itself when v2's BUG-0001 fix re-evaluates the page
+// for itself when the BUG-0001 fix re-evaluates the page
 // module on every request.
 //
 // `__tspServer.sql` is bun's `Bun.SQL` factory function (slice
@@ -28,14 +28,14 @@
 export const main = {
   url:
     process.env.TSP_DB_MAIN_URL ||
-    "sqlite://" + (process.env.TSP_DB_MAIN_FILE || "/tmp/tsp-v2-main.db"),
+    "sqlite://" + (process.env.TSP_DB_MAIN_FILE || "/tmp/tspserver-main.db"),
   pool: 10,
 };
 
 export const orders = {
   url:
     process.env.TSP_DB_ORDERS_URL ||
-    "sqlite://" + (process.env.TSP_DB_ORDERS_FILE || "/tmp/tsp-v2-orders.db"),
+    "sqlite://" + (process.env.TSP_DB_ORDERS_FILE || "/tmp/tspserver-orders.db"),
   pool: 5,
 };
 
@@ -43,6 +43,6 @@ export const analytics = {
   url:
     process.env.TSP_DB_ANALYTICS_URL ||
     "sqlite://" +
-      (process.env.TSP_DB_ANALYTICS_FILE || "/tmp/tsp-v2-analytics.db"),
+      (process.env.TSP_DB_ANALYTICS_FILE || "/tmp/tspserver-analytics.db"),
   pool: 3,
 };

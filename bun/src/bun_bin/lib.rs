@@ -52,7 +52,7 @@ fn is_tspserver_executable() -> bool {
             path.file_stem()
                 .map(|stem| stem.to_string_lossy().into_owned())
         })
-        .is_some_and(|name| matches!(name.as_str(), "tspserver" | "tspserver_v2"))
+        .is_some_and(|name| name == "tspserver")
 }
 
 /// Unix TSP masters call this only in their freshly pre-forked child. Keeping
@@ -218,7 +218,7 @@ pub(crate) unsafe extern "C" fn main(argc: c_int, argv: *const *const c_char) ->
     }
 
     // The packaged TSP runtime is this same executable renamed to
-    // `tspserver_v2`. Master mode never initializes a Bun VM; it only creates
+    // `tspserver`. Master mode never initializes a Bun VM; it only creates
     // worker children. Worker mode above owns the VM initialization.
     if is_tspserver_executable() {
         return if bun_runtime_tsp::entry::run() == std::process::ExitCode::SUCCESS {

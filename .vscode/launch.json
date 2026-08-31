@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "TSP v2 smoke test",
+      "name": "TSP smoke test",
       "type": "node-terminal",
       "request": "launch",
       "command": "./tsp.sh test:smoke"

@@ -5,11 +5,11 @@ metered GitHub services.
 
 ## Workflows
 
-- `.github/workflows/ci.yml` runs native v2 tests and the embedded-worker smoke
+- `.github/workflows/ci.yml` runs native tests and the embedded-worker smoke
   test for Linux, Windows, and macOS on standard GitHub-hosted runners. It
   runs for pull requests and pushes to both `master` and `main`.
 - `.github/workflows/release.yml` runs only when a `v*` tag is pushed. It builds
-  and uploads the v2.4 embedded-worker package for the three desktop targets,
+  and uploads the embedded-worker package for the three desktop targets,
   then publishes the draft GitHub Release.
 
 ## Cost protection
@@ -24,7 +24,7 @@ metered GitHub services.
 - CI cancels obsolete runs for the same branch or pull request.
 - Release builds require an explicit version tag, so normal pushes do not
   start the release workflow.
-- The v2.4 release job builds the Bun fork and native v2 host on the same
+- The embedded-worker release job builds the Bun fork and native host on the same
   standard runners; it does not use a paid build service or persistent build
   machine.
 
@@ -41,12 +41,12 @@ git push origin v0.1.6
 ```
 
 The release workflow creates a draft, uploads the Linux, Windows, and macOS
-v2.4 embedded-worker packages, then publishes the release only after all builds
+embedded-worker packages, then publishes the release only after all builds
 and smoke tests succeed.
 
-## v2.4 local verification
+## Local verification
 
-Build and package the single-file v2 runtime:
+Build and package the single-file runtime:
 
 ```bash
 ./tsp.sh build
@@ -55,10 +55,10 @@ Build and package the single-file v2 runtime:
 Run the embedded-worker and hot-reload smoke test using the packaged executable:
 
 ```bash
-sh ./scripts/smoke-tspserver-v2.sh \
-  dist/tsp-v2/tspserver_v2
+sh ./scripts/smoke-tspserver.sh \
+  dist/tspserver/tspserver
 ```
 
-On Windows, use `scripts/smoke-tspserver-v2.ps1` with the `.exe` path. The
-package scripts emit a `tsp-v2-runtime.json` manifest containing one runtime
+On Windows, use `scripts/smoke-tspserver.ps1` with the `.exe` path. The
+package scripts emit a `tspserver-runtime.json` manifest containing one runtime
 executable; the Master creates worker children automatically.

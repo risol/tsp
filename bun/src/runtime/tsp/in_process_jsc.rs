@@ -1,6 +1,6 @@
 //! In-process JSC bridge -- **ADR-0001 reference code, NOT on hot path**.
 //!
-//! See `docs/v2/adr/0001-subprocess-as-production-jsc.md` (slice 13) for
+//! See `docs/reference/adr/0001-subprocess-as-production-jsc.md` (slice 13) for
 //! the decision. This module is documentation + a placeholder for the
 //! future in-process JSC bridge. It is **not** wired into the host's
 //! request flow. Production continues to use the slice 6 subprocess
@@ -8,7 +8,7 @@
 //!
 //! ## Why this module exists
 //!
-//! Plan `tsp-v2-plan.md` sect.25.3 recommends reusing Bun's in-process
+//! Plan `tsp-plan.md` sect.25.3 recommends reusing Bun's in-process
 //! runtime as the JSC execution engine. Slice 6 (PoC 1) shipped a
 //! subprocess bridge as a placeholder. Slice 7 added this module as a
 //! spike. Slice 13 promotes it to an ADR-anchored reference and

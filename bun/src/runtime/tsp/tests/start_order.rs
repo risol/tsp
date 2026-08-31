@@ -1,20 +1,20 @@
-//! Boot-order contract test for the v2.4 host.
+//! Boot-order contract test for the embedded-worker host.
 //!
-//! The TSP v2.4 design requires that the worker pool is started
+//! The TSP embedded-worker design requires that the worker pool is started
 //! before the HTTP listener accepts the first request. On Unix
 //! this is non-negotiable because the master uses `fork()` while
 //! only the boot thread exists, but the contract applies on every
 //! platform so the same startup ordering is consistent.
 //!
-//! This test exercises the real `tspserver_v2` binary rather than
+//! This test exercises the real `tspserver` binary rather than
 //! the `WorkerPool` API directly: the contract is about the order
-//! of side effects in `bin/tspserver_v2.rs`, not about the pool
+//! of side effects in `bin/tspserver.rs`, not about the pool
 //! itself. The host prints the relevant markers to stderr; the
 //! test boots the binary, sends SIGTERM, and asserts the markers
 //! appeared in the right relative order.
 //!
-//! The test is gated on the existence of a built `tspserver_v2`
-//! binary at `dist/tsp-v2/tspserver_v2[.exe]`. The CI job that
+//! The test is gated on the existence of a built `tspserver`
+//! binary at `dist/tspserver/tspserver[.exe]`. The CI job that
 //! already builds the runtime (`smoke-linux`, plus the
 //! `release.yml` matrix) is the right place to run this; running
 //! it without a prior build skips the assertions.
@@ -35,13 +35,13 @@ fn locate_master() -> Option<&'static PathBuf> {
 
 fn locate_master_inner() -> Option<PathBuf> {
     // Walk from the test target's working directory up to the
-    // workspace root looking for `dist/tsp-v2/tspserver_v2[.exe]`.
+    // workspace root looking for `dist/tspserver/tspserver[.exe]`.
     // The CI job that runs this test is responsible for
     // populating that directory before invoking cargo test.
     let candidates = if cfg!(windows) {
-        ["dist\\tsp-v2\\tspserver_v2.exe", "..\\..\\..\\..\\dist\\tsp-v2\\tspserver_v2.exe"]
+        ["dist\\tspserver\\tspserver.exe", "..\\..\\..\\..\\dist\\tspserver\\tspserver.exe"]
     } else {
-        ["dist/tsp-v2/tspserver_v2", "../../../../dist/tsp-v2/tspserver_v2"]
+        ["dist/tspserver/tspserver", "../../../../dist/tspserver/tspserver"]
     };
     for relative in candidates {
         let path = PathBuf::from(relative);
@@ -52,11 +52,11 @@ fn locate_master_inner() -> Option<PathBuf> {
     None
 }
 
-/// Markers emitted by `bin/tspserver_v2.rs` in stable order. The
+/// Markers emitted by `bin/tspserver.rs` in stable order. The
 /// strings are quoted from the source; if a future slice renames
 /// one of them the test fails with a clear error so the contract
 /// change is conscious.
-const MARKER_WORKER: &str = "v2.4 embedded worker enabled";
+const MARKER_WORKER: &str = "embedded worker enabled";
 const MARKER_WATCHER: &str = "watcher polling";
 const MARKER_LISTEN: &str = "listening on";
 
@@ -64,7 +64,7 @@ const MARKER_LISTEN: &str = "listening on";
 fn worker_pool_starts_before_watcher_and_listener() {
     let Some(master) = locate_master() else {
         eprintln!(
-            "skipping: tspserver_v2 binary not found under dist/tsp-v2/ \
+            "skipping: tspserver binary not found under dist/tspserver/ \
              (run ./tsp.sh build:host first)"
         );
         return;
@@ -222,7 +222,7 @@ const TIME_TSP: &str = "export function GET() {\
 fn multi_route_dispatch_does_not_alias_to_first_request() {
     let Some(master) = locate_master() else {
         eprintln!(
-            "skipping: tspserver_v2 binary not found under dist/tsp-v2/ \
+            "skipping: tspserver binary not found under dist/tspserver/ \
              (run ./tsp.sh build:host first)"
         );
         return;
@@ -392,7 +392,7 @@ fn http_get(port: u16, path: &str, deadline: Duration) -> String {
 // ---------------------------------------------------------------------------
 // nanoid runtime integration test (slice 17a)
 //
-// The TSP v2 wrap preamble inlines the nanoid 5.1.6 source via
+// The TSP wrap preamble inlines the nanoid 5.1.6 source via
 // `include_str!` and exposes `globalThis.nanoid()` (and
 // `customAlphabet`, `customRandom`, `random`) so pages can call
 // them without an import step. We assert this end-to-end by
@@ -449,7 +449,7 @@ const NANOID_URL_ALPHABET: &[u8] =
 fn nanoid_runtime_compiled_into_wrap_serves_distinct_ids() {
     let Some(master) = locate_master() else {
         eprintln!(
-            "skipping: tspserver_v2 binary not found under dist/tsp-v2/ \
+            "skipping: tspserver binary not found under dist/tspserver/ \
              (run ./tsp.sh build:host first)"
         );
         return;
@@ -568,7 +568,7 @@ fn http_post_json(port: u16, path: &str, body: &str, deadline: Duration) -> Stri
 // ---------------------------------------------------------------------------
 // zod runtime integration test (slice 17b)
 //
-// The TSP v2 wrap preamble inlines the pre-bundled zod 3.25.76
+// The TSP wrap preamble inlines the pre-bundled zod 3.25.76
 // CJS via `include_str!` and exposes `__tspServer.zod` so pages
 // can declare schemas / call `safeParse` without an import step.
 // We assert this end-to-end by spinning the real binary against
@@ -820,7 +820,7 @@ fn http_get_raw(
 fn zod_runtime_compiled_into_wrap_serves_validated_schemas() {
     let Some(master) = locate_master() else {
         eprintln!(
-            "skipping: tspserver_v2 binary not found under dist/tsp-v2/ \
+            "skipping: tspserver binary not found under dist/tspserver/ \
              (run ./tsp.sh build:host first)"
         );
         return;
@@ -928,7 +928,7 @@ fn zod_runtime_compiled_into_wrap_serves_validated_schemas() {
 // ---------------------------------------------------------------------------
 // password runtime integration test (slice 17c + slice 22 follow-up)
 //
-// The TSP v2 wrap preamble bridges bun's native `Bun.password`
+// The TSP wrap preamble bridges bun's native `Bun.password`
 // to the page through the `util` namespace
 // (`__tspServer.util.password` is the same `Bun.password`
 // object). The page reaches it via
@@ -1025,7 +1025,7 @@ export async function POST(ctx) {
 fn password_runtime_through_bun_password_serves_hashed_passwords() {
     let Some(master) = locate_master() else {
         eprintln!(
-            "skipping: tspserver_v2 binary not found under dist/tsp-v2/ \
+            "skipping: tspserver binary not found under dist/tspserver/ \
              (run ./tsp.sh build:host first)"
         );
         return;
@@ -1224,7 +1224,7 @@ export async function POST(ctx) {
 fn util_namespace_surfaces_bun_builtins_for_pages() {
     let Some(master) = locate_master() else {
         eprintln!(
-            "skipping: tspserver_v2 binary not found under dist/tsp-v2/ \
+            "skipping: tspserver binary not found under dist/tspserver/ \
              (run ./tsp.sh build:host first)"
         );
         return;
@@ -1322,7 +1322,7 @@ fn util_namespace_surfaces_bun_builtins_for_pages() {
 // ---------------------------------------------------------------------------
 // ctx.cookies integration test (slice 16f)
 //
-// The TSP v2 wrap preamble parses the request's `Cookie:`
+// The TSP wrap preamble parses the request's `Cookie:`
 // header into a `Map` and exposes `ctx.cookies` with read
 // (`get` / `has`) and write (`set` / `delete`) methods.
 // Writes are pushed into a buffer that the async IIFE
@@ -1400,7 +1400,7 @@ export function DELETE(ctx) {
 #[test]
 fn cookies_runtime_parses_request_and_emits_set_cookie_on_write() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -1548,7 +1548,7 @@ fn cookies_runtime_parses_request_and_emits_set_cookie_on_write() {
 // ---------------------------------------------------------------------------
 // ctx.session integration test (slice 16k + 16l)
 //
-// The TSP v2 wrap preamble hydrates `ctx.session` from
+// The TSP wrap preamble hydrates `ctx.session` from
 // the host's SessionView. Calls (`set` / `delete` /
 // `clear` / `regenerate` / `destroy`) buffer into
 // `__tspSessionWrites` which the envelope carries back
@@ -1607,7 +1607,7 @@ export async function POST(ctx) {
 #[test]
 fn session_runtime_mints_regenerates_and_destroys_session_id() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -1868,7 +1868,7 @@ export function GET(ctx) {
 #[test]
 fn dynamic_segments_and_catch_all_route_to_pages_with_params() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -1983,7 +1983,7 @@ fn dynamic_segments_and_catch_all_route_to_pages_with_params() {
 // ---------------------------------------------------------------------------
 // Multipart / form-data integration test (slice 16g)
 //
-// The TSP v2 wrap preamble decodes the request's `body_b64`
+// The TSP wrap preamble decodes the request's `body_b64`
 // into a Uint8Array and feeds it to Bun's native `Request`
 // constructor as a `Blob` (not a bare Uint8Array -- Bun's
 // multipart parser needs the Blob's duplex half to read the
@@ -2068,7 +2068,7 @@ fn multipart_form_data_round_trips_through_real_binary() {
     use std::net::TcpStream;
 
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -2284,7 +2284,7 @@ fn multipart_form_data_round_trips_through_real_binary() {
 #[test]
 fn config_driven_counter_service_increments_across_requests() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -2428,7 +2428,7 @@ export async function POST(ctx) {
 #[test]
 fn body_size_cap_rejects_oversized_requests_with_413() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -2611,7 +2611,7 @@ fn body_size_cap_rejects_oversized_requests_with_413() {
 #[test]
 fn config_driven_kv_and_feature_flag_kinds_are_readable_by_pages() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -2794,7 +2794,7 @@ fn config_driven_kv_and_feature_flag_kinds_are_readable_by_pages() {
 // ---------------------------------------------------------------------------
 // bun:sql runtime integration test (slice 17d)
 //
-// The TSP v2 wrap preamble surfaces bun's native SQL client
+// The TSP wrap preamble surfaces bun's native SQL client
 // (`require("bun").SQL`, exposed as `__tspServer.sql`) so pages
 // can take a connection from bun's per-worker pool via
 // `await sql\`url\``. The page wires the url from a sibling
@@ -2915,11 +2915,11 @@ const SQL_DEMO_DB_TS: &str = r#"
 // production `routes/_db.ts` shape (plan §17.1: page-local
 // datasource config; host never sees a credential).
 export const main = {
-  url: process.env.TSP_DB_MAIN_URL || "sqlite://" + (process.env.TSP_DB_MAIN_FILE || "/tmp/tsp-v2-main.db"),
+  url: process.env.TSP_DB_MAIN_URL || "sqlite://" + (process.env.TSP_DB_MAIN_FILE || "/tmp/tspserver-main.db"),
   pool: 10,
 };
 export const analytics = {
-  url: process.env.TSP_DB_ANALYTICS_URL || "sqlite://" + (process.env.TSP_DB_ANALYTICS_FILE || "/tmp/tsp-v2-analytics.db"),
+  url: process.env.TSP_DB_ANALYTICS_URL || "sqlite://" + (process.env.TSP_DB_ANALYTICS_FILE || "/tmp/tspserver-analytics.db"),
   pool: 3,
 };
 "#;
@@ -2928,7 +2928,7 @@ export const analytics = {
 fn sql_runtime_uses_bun_native_pool_for_page_local_datasource() {
     let Some(master) = locate_master() else {
         eprintln!(
-            "skipping: tspserver_v2 binary not found under dist/tsp-v2/ \
+            "skipping: tspserver binary not found under dist/tspserver/ \
              (run ./tsp.sh build:host first)"
         );
         return;
@@ -3099,7 +3099,7 @@ fn sql_runtime_uses_bun_native_pool_for_page_local_datasource() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 9 — Fragments (plan §14 / FREEZE item 7)
+// Phase 9 — Fragments (plan §14 / contract item 7)
 //
 // The `fragment()` helper exposes a page subtree as a
 // named export; the host returns the internal URL on
@@ -3153,7 +3153,7 @@ fn sql_runtime_uses_bun_native_pool_for_page_local_datasource() {
 //      POST -> the page has no POST export -> 405.
 //      (The host's method validation is the route
 //      table's, not a fragment-specific check. The
-//      FREEZE Amendment 4 narrows the v1 contract to
+//      contract Amendment 4 narrows the v1 contract to
 //      `fragment(handler)` with default GET, so this
 //      is acceptable; a follow-up slice can add a real
 //      fragment-method check when `{ method, handler }`
@@ -3163,7 +3163,7 @@ fn sql_runtime_uses_bun_native_pool_for_page_local_datasource() {
 #[test]
 fn fragment_runtime_exposes_opaque_url_and_renders_subtree() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -3396,7 +3396,7 @@ fn extract_token(url: &str) -> Option<String> {
 #[test]
 fn config_file_hot_reload_replaces_services_without_master_restart() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -3587,7 +3587,7 @@ fn config_file_hot_reload_replaces_services_without_master_restart() {
 }
 
 // ---------------------------------------------------------------------------
-// §32.1 dev error page (plan §32.1, FREEZE Amendment 7)
+// §32.1 dev error page (plan §32.1, contract Amendment 7)
 //
 // Pre-§32.1, a page that throws (other than
 // `HttpError`) caused the wrap to `console.error`
@@ -3622,7 +3622,7 @@ fn config_file_hot_reload_replaces_services_without_master_restart() {
 #[test]
 fn dev_error_page_renders_html_in_dev_mode_and_json_in_prod() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -3676,7 +3676,7 @@ fn dev_error_page_renders_html_in_dev_mode_and_json_in_prod() {
         "dev mode body must include the stack trace in a <pre> block; got: {b_plain:?}"
     );
     // §32.2: the stack currently shows the worker's
-    // temp file (`tsp-embedded-worker-<pid>-<id>.tsx`),
+    // temp file (`tsp-embedded-worker-<pid>.tsx`),
     // NOT the .tsp file. bun 1.4 honors
     // `//# sourceURL=...` for in-line eval'd scripts
     // but not for the file-loaded path the worker
@@ -3811,7 +3811,7 @@ fn dev_error_page_renders_html_in_dev_mode_and_json_in_prod() {
 #[test]
 fn config_driven_rate_limit_kind_gates_requests_with_a_fixed_window() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -3951,7 +3951,7 @@ fn config_driven_rate_limit_kind_gates_requests_with_a_fixed_window() {
 
 
 // ---------------------------------------------------------------------------
-// Phase 11 tooling (plan §11) -- `tspserver_v2 typings` subcommand
+// Phase 11 tooling (plan §11) -- `tspserver typings` subcommand
 //
 // The host ships a `typings` subcommand (plan §11
 // "IDE typings") that writes three TypeScript declaration
@@ -3962,7 +3962,7 @@ fn config_driven_rate_limit_kind_gates_requests_with_a_fixed_window() {
 // `import { ... } from "tsp:*"` declaration.
 //
 // The e2e runs the subcommand against the real
-// `dist/tsp-v2/tspserver_v2.exe` binary and pins:
+// `dist/tspserver/tspserver.exe` binary and pins:
 //
 //   1. The three files are written under the requested dir
 //      (default `.tsp-types`).
@@ -3988,9 +3988,9 @@ fn config_driven_rate_limit_kind_gates_requests_with_a_fixed_window() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn tspserver_v2_typings_emits_three_dts_files() {
+fn tspserver_typings_emits_three_dts_files() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -4164,7 +4164,7 @@ fn tspserver_v2_typings_emits_three_dts_files() {
     assert_eq!(help_output.status.code(), Some(0));
     let help = String::from_utf8_lossy(&help_output.stdout);
     assert!(
-        help.contains("tspserver_v2 typings"),
+        help.contains("tspserver typings"),
         "typings --help must show usage; got:\n{help}"
     );
 
@@ -4174,7 +4174,7 @@ fn tspserver_v2_typings_emits_three_dts_files() {
 // ---------------------------------------------------------------------------
 // `/__tsp/metrics` end-to-end (closure-hardening metrics surface)
 //
-// The native v2 host exposes a Prometheus-text-format metrics
+// The native host exposes a Prometheus-text-format metrics
 // endpoint at `GET /__tsp/metrics` (host.rs:1517-1532). The
 // `metrics::global()` static is process-lifetime, so a fresh
 // test-spawned master starts at zero and reflects only the
@@ -4229,7 +4229,7 @@ export function GET() {
 #[test]
 fn metrics_endpoint_serves_prometheus_text_after_priming_requests() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -4425,7 +4425,7 @@ fn metrics_endpoint_serves_prometheus_text_after_priming_requests() {
 }
 
 // ---------------------------------------------------------------------------
-// `tspserver_v2 check --tsc` (Phase 11 close: real tsc type-check)
+// `tspserver check --tsc` (Phase 11 close: real tsc type-check)
 //
 // The `check` subcommand historically did only the regex-based
 // static-export detection (slice 5) + the module-graph build
@@ -4442,7 +4442,7 @@ fn metrics_endpoint_serves_prometheus_text_after_priming_requests() {
 //     `node_modules/.bin/`, or on PATH;
 //   - runs `tsc --noEmit --project <tsconfig>` and forwards
 //     tsc's stdout/stderr to the user.
-// The check is opt-in (`tspserver_v2 check --tsc`); the
+// The check is opt-in (`tspserver check --tsc`); the
 // default `check` continues to do the original regex-based
 // scan. `--tsc` returns 1 if tsc reports any error.
 //
@@ -4498,7 +4498,7 @@ fn check_with_tsc_flag_catches_user_type_errors_and_passes_clean_routes() {
     // with a broken one). It does NOT boot the HTTP server
     // -- the check subcommand is a CLI introspection tool.
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -4694,7 +4694,7 @@ fn http_send_raw(port: u16, raw_request: &str) -> (u16, String) {
 #[test]
 fn head_on_metrics_endpoint_returns_200_with_empty_body() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -4773,7 +4773,7 @@ fn head_on_metrics_endpoint_returns_200_with_empty_body() {
 #[test]
 fn post_on_metrics_endpoint_returns_405_with_allow_header() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -4874,7 +4874,7 @@ export function POST() {
 #[test]
 fn head_on_regular_page_uses_get_export_and_drops_body() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -4978,7 +4978,7 @@ fn head_on_regular_page_uses_get_export_and_drops_body() {
 #[test]
 fn tsc_check_no_color_flag_strips_ansi_escapes_from_output() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -5077,7 +5077,7 @@ export function HEAD() {
 #[test]
 fn head_on_route_with_both_get_and_head_calls_head_handler() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -5153,7 +5153,7 @@ fn head_on_route_with_both_get_and_head_calls_head_handler() {
 #[test]
 fn options_on_regular_page_returns_204_with_allow_header() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -5278,7 +5278,7 @@ fn metrics_endpoint_includes_x_content_type_options_nosniff_header() {
     // would not be MIME-sniffed into a different
     // type by a permissive browser).
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -5329,7 +5329,7 @@ fn metrics_endpoint_includes_x_content_type_options_nosniff_header() {
 
 // ---------------------------------------------------------------------------
 // Batch-3: nosniff on regular page responses, and
-// `tspserver_v2 routes --json` for tooling integration.
+// `tspserver routes --json` for tooling integration.
 //
 // Two small surfaces that round out the host
 // hardening and CLI tooling: the nosniff header is
@@ -5342,7 +5342,7 @@ fn metrics_endpoint_includes_x_content_type_options_nosniff_header() {
 #[test]
 fn regular_page_response_includes_x_content_type_options_nosniff() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -5436,13 +5436,13 @@ export function GET() {
 
 #[test]
 fn routes_command_json_flag_emits_stable_json_array() {
-    // `tspserver_v2 routes --json` emits a JSON array
+    // `tspserver routes --json` emits a JSON array
     // suitable for tooling / CI consumption. The
     // human-readable tab-separated default is
     // preserved (not asserted here; covered by the
     // existing routes smoke).
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -5534,7 +5534,7 @@ export function DELETE() {
 
 #[test]
 fn graph_command_json_flag_emits_stable_json_array() {
-    // `tspserver_v2 graph --json` emits a JSON array
+    // `tspserver graph --json` emits a JSON array
     // describing the module graph. The hand-rolled
     // shape is:
     //   [{"path":".../page1.tsp","imports":[".../_db"]},
@@ -5542,7 +5542,7 @@ fn graph_command_json_flag_emits_stable_json_array() {
     // The human-readable tab-separated default is
     // preserved (covered by the existing graph smoke).
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -5629,8 +5629,8 @@ export function GET() {
 }
 
 // ---------------------------------------------------------------------------
-// `tspserver_v2 check` validates `config.methods`
-// (FREEZE.md §11, slice 11 of plan).
+// `tspserver check` validates `config.methods`
+// (contract.md §11, slice 11 of plan).
 //
 // When a page declares `export const config = {
 // methods: [...] }`, the static check now validates
@@ -5647,7 +5647,7 @@ export function GET() {
 #[test]
 fn check_validates_config_methods_against_actual_exports() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -5756,7 +5756,7 @@ export function GET() { return new Response("g"); }
 // DELETE / OPTIONS / HEAD) and the optional
 // `config` object. Any other `export function
 // NAME(...)` is an "unknown runtime export" and
-// should be surfaced by `tspserver_v2 check` as
+// should be surfaced by `tspserver check` as
 // a quality-of-experience warning (the page still
 // serves; the user gets a clear message at
 // check time). The full spec §46 treatment
@@ -5777,7 +5777,7 @@ export function GET() { return new Response("g"); }
 #[test]
 fn check_reports_unknown_runtime_exports() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -5892,7 +5892,7 @@ export function another_helper() { return 2; }
 #[test]
 fn check_reports_default_export_violation() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -5981,7 +5981,7 @@ export function GET() { return new Response("ok"); }
 }
 
 // ---------------------------------------------------------------------------
-// `config.bodyLimit` per-page cap (FREEZE.md §11, slice 11)
+// `config.bodyLimit` per-page cap (contract.md §11, slice 11)
 //
 // A page may declare `config.bodyLimit: N` (bytes).
 // Requests to that page whose body exceeds N get 413
@@ -6059,7 +6059,7 @@ export function GET() {
 #[test]
 fn config_body_limit_enforces_per_page_cap() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -6187,7 +6187,7 @@ fn config_body_limit_enforces_per_page_cap() {
 
 // ---------------------------------------------------------------------------
 // `config.cache` per-page default `Cache-Control` (plan §55,
-// FREEZE.md §11)
+// contract.md §11)
 //
 // A page may declare `config.cache: "no-store" | "private" |
 // "public"` on its `export const config = { ... } satisfies PageConfig`.
@@ -6196,7 +6196,7 @@ fn config_body_limit_enforces_per_page_cap() {
 // page's own `Response.headers` set of
 // `Cache-Control` always wins (the page is more
 // specific than the page-level default). The
-// supported values are the three FREEZE.md §11
+// supported values are the three contract.md §11
 // literals; anything else is unparseable (the
 // `detect_config_cache` parser returns `None` and
 // the host treats the page as having no default).
@@ -6293,7 +6293,7 @@ export function GET() {
 #[test]
 fn config_cache_sets_default_cache_control_header() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -6399,7 +6399,7 @@ fn config_cache_sets_default_cache_control_header() {
 }
 
 // ---------------------------------------------------------------------------
-// Spec §6.3 / FREEZE item 5 / plan §10.4:
+// Spec §6.3 / contract item 5 / plan §10.4:
 // `HandlerResult = HtmlNode | Response`. An invalid
 // handler return value (object / number / boolean /
 // undefined / null) is a contract violation and
@@ -6419,7 +6419,7 @@ fn config_cache_sets_default_cache_control_header() {
 const TSP3001_OBJECT_TSP: &str = r#"
 export function GET() {
   // `{ redirect: ... }` is the canonical
-  // example from FREEZE item 5.
+  // example from contract item 5.
   return { redirect: "/x" };
 }
 "#;
@@ -6445,7 +6445,7 @@ export function GET() {
 #[test]
 fn handler_returned_unsupported_value_surfaces_tsp3001() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 
@@ -6516,7 +6516,7 @@ fn handler_returned_unsupported_value_surfaces_tsp3001() {
 }
 
 // ---------------------------------------------------------------------------
-// `config.timeoutMs` per-page request timeout (spec §7 v2.0
+// `config.timeoutMs` per-page request timeout (spec §7 current contract
 // core PageConfig)
 
 const TIMEOUT_FAST_TSP: &str = r#"
@@ -6572,7 +6572,7 @@ export async function GET() {
 #[test]
 fn config_timeout_ms_overrides_global_request_timeout() {
     let Some(master) = locate_master() else {
-        eprintln!("skipping: tspserver_v2 binary not found under dist/tsp-v2/");
+        eprintln!("skipping: tspserver binary not found under dist/tspserver/");
         return;
     };
 

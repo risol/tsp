@@ -1,4 +1,4 @@
-//! Process-local metrics for the native TSP v2 host.
+//! Process-local metrics for the native TSP host.
 //!
 //! The counters are deliberately host-owned and generation-independent. A
 //! page reload must never reset operational visibility, and the bridge does

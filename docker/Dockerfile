@@ -1,4 +1,4 @@
-# Build the Linux v2 package first with `bash docker/build-linux.sh`.
+# Build the Linux package first with `bash docker/build-linux.sh`.
 FROM debian:bookworm-slim
 
 RUN apt-get update \
@@ -10,11 +10,11 @@ RUN groupadd --system tspserver \
 
 WORKDIR /app
 
-COPY dist/tsp-v2/tspserver_v2 /usr/local/bin/tspserver_v2
+COPY dist/tspserver/tspserver /usr/local/bin/tspserver
 COPY routes/ /app/routes/
 COPY public/ /app/public/
 
-RUN chmod +x /usr/local/bin/tspserver_v2 \
+RUN chmod +x /usr/local/bin/tspserver \
     && chown -R tspserver:tspserver /app
 
 ENV TSP_PORT=9000 \
@@ -29,4 +29,4 @@ EXPOSE 9000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl --fail http://127.0.0.1:9000/ || exit 1
 
-ENTRYPOINT ["/usr/local/bin/tspserver_v2"]
+ENTRYPOINT ["/usr/local/bin/tspserver"]

@@ -1,4 +1,4 @@
-//! Master-side Worker Manager for the v2.4 process boundary.
+//! Master-side Worker Manager for the embedded-worker process boundary.
 //!
 //! This manager starts a declared worker executable. It deliberately has no
 //! Bun path, Bun environment, or JSC dependency: only the worker executable
@@ -339,45 +339,85 @@ impl WorkerManager {
             return self.execute(request);
         }
         if self.worker.is_none() {
-                self.start_worker()?;
+            self.start_worker()?;
         }
-            let id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
-            let result = {
-                let handle = self.worker.as_mut().ok_or(ManagerError::WorkerExited)?;
-                handle.stream.set_read_timeout(Some(Duration::from_millis(timeout_ms)))?;
-                let result = (|| {
-                    Message::Execute { id, request }.write_to(&mut handle.stream)?;
-                    match Message::read_from(&mut handle.stream)? {
-                        Message::Response { id: response_id, response } if response_id == id => Ok(response),
-                        Message::Error { id: error_id, code, message } if error_id == id => {
-                            Err(ManagerError::Protocol(ProtocolError::RemoteError(
-                                format!("{code}: {message}"),
-                            )))
-                        }
-                        Message::Shutdown => Err(ManagerError::WorkerExited),
-                        _ => Err(ManagerError::Protocol(ProtocolError::InvalidField(
-                            "unexpected worker response",
-                        ))),
-                    }
-                })();
-                let _ = handle.stream.set_read_timeout(None);
-                result
-            };
-            if matches!(
-                &result,
-                Err(ManagerError::Protocol(ProtocolError::Io(error)))
-                    if matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock)
-            ) {
-                if let Some(handle) = self.worker.as_mut() {
-                    let _ = Message::Cancel { id }.write_to(&mut handle.stream);
-                }
-                std::thread::sleep(Duration::from_millis(100));
-                let _ = self.restart_worker();
+
+        // A protocol disconnect means the embedded worker died while handling
+        // this request. Restarting the worker without re-sending the request
+        // turns a recoverable worker crash into a user-visible 500 response.
+        // Keep one copy so the request can be retried against the replacement.
+        let can_retry = Self::can_retry_request(&request);
+        let retry_request = request.clone();
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        let result = self.execute_with_timeout_once(request, timeout_ms);
+        if result.is_ok() || matches!(&result, Err(ManagerError::WorkerTimeout)) {
+            return result;
+        }
+        if can_retry
+            && result.as_ref().is_err_and(|error| Self::should_restart(error))
+            && self.restart_worker().is_ok()
+        {
+            let remaining_timeout_ms = deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis() as u64;
+            if remaining_timeout_ms == 0 {
                 return Err(ManagerError::WorkerTimeout);
             }
-            if result.as_ref().is_err_and(|error| Self::should_restart(error)) {
+            let retry_result =
+                self.execute_with_timeout_once(retry_request, remaining_timeout_ms);
+            if retry_result
+                .as_ref()
+                .is_err_and(|error| Self::should_restart(error))
+            {
                 let _ = self.restart_worker();
             }
+            return retry_result;
+        }
+        result
+    }
+
+    fn execute_with_timeout_once(
+        &mut self,
+        request: ExecuteRequest,
+        timeout_ms: u64,
+    ) -> Result<ExecuteResponse, ManagerError> {
+        let id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+        let result = {
+            let handle = self.worker.as_mut().ok_or(ManagerError::WorkerExited)?;
+            handle.stream.set_read_timeout(Some(Duration::from_millis(timeout_ms)))?;
+            let result = (|| {
+                Message::Execute { id, request }.write_to(&mut handle.stream)?;
+                match Message::read_from(&mut handle.stream)? {
+                    Message::Response { id: response_id, response } if response_id == id => {
+                        handle.completed_requests = handle.completed_requests.saturating_add(1);
+                        Ok(response)
+                    }
+                    Message::Error { id: error_id, code, message } if error_id == id => {
+                        Err(ManagerError::Protocol(ProtocolError::RemoteError(
+                            format!("{code}: {message}"),
+                        )))
+                    }
+                    Message::Shutdown => Err(ManagerError::WorkerExited),
+                    _ => Err(ManagerError::Protocol(ProtocolError::InvalidField(
+                        "unexpected worker response",
+                    ))),
+                }
+            })();
+            let _ = handle.stream.set_read_timeout(None);
+            result
+        };
+        if matches!(
+            &result,
+            Err(ManagerError::Protocol(ProtocolError::Io(error)))
+                if matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock)
+        ) {
+            if let Some(handle) = self.worker.as_mut() {
+                let _ = Message::Cancel { id }.write_to(&mut handle.stream);
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            let _ = self.restart_worker();
+            return Err(ManagerError::WorkerTimeout);
+        }
         result
     }
 
@@ -457,6 +497,17 @@ impl WorkerManager {
             error,
             ManagerError::UnsupportedPlatform
                 | ManagerError::Protocol(ProtocolError::RemoteError(_))
+        )
+    }
+
+    // A disconnected response does not tell us whether the worker applied a
+    // request's side effects before it died. Only automatically retry methods
+    // whose HTTP semantics are safe when the caller did not provide an
+    // application-level idempotency key.
+    fn can_retry_request(request: &ExecuteRequest) -> bool {
+        matches!(
+            request.method.as_str(),
+            "GET" | "HEAD" | "OPTIONS" | "TRACE"
         )
     }
 

@@ -1,8 +1,8 @@
 //! TypeScript declaration files for the `tsp:*` builtin modules.
 //!
 //! Plan §11 ("Tooling") lists "IDE typings" as one of the
-//! five dev-workflow items the v2 contract should ship. The
-//! `tspserver_v2 typings` subcommand writes the three
+//! five dev-workflow items the contract should ship. The
+//! `tspserver typings` subcommand writes the three
 //! declaration files emitted by this module into a directory
 //! the user adds to their `tsconfig.json` `include` list
 //! (typically `.tsp-types/`).
@@ -12,7 +12,7 @@
 //! 16 + 17 + 18 + 22 + Amendment 1 + Amendment 2 + Amendment
 //! 4). If a future slice adds a new name to the wrap, this
 //! module MUST grow the matching declaration in the same
-//! commit -- the e2e (`tspserver_v2_typings_emits_three_dts_files`)
+//! commit -- the e2e (`tspserver_typings_emits_three_dts_files`)
 //! pins the exact strings below so a drift between the
 //! runtime and the typings surfaces as a hard test failure.
 //!
@@ -40,7 +40,7 @@
 /// Exposes the request/response surface (`Context`,
 /// `json` / `redirect` / `text` / `html` / `notFound` /
 /// `HttpError`), the fragment builtin (`fragment`, plan
-/// §14 / FREEZE item 7), the html-escape helper (`raw`),
+/// §14 / contract item 7), the html-escape helper (`raw`),
 /// the id-generation namespace (`nanoid` family, slice
 /// 17a), the validation library (`zod`, slice 17b), the
 /// database factory (`sql`, slice 17d), and the bun-builtin
