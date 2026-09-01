@@ -10,7 +10,7 @@ also accepts `--config, -c <PATH>` for the JSON service configuration file.
 | `TSP_PORT` | `3000` | HTTP listener port |
 | `TSP_ROUTES_DIR` | `pages` | `.tsp` route root |
 | `TSP_PUBLIC_DIR` | `public` | static asset root |
-| `TSP_CONFIG` | `tsp.config.json` | service configuration path |
+| `TSP_CONFIG` | `tsp.config.json` | runtime and service configuration path |
 | `TSP_APPLICATION_NAME` | `main` | application registry name |
 | `TSP_DEVELOPMENT` | `0` | expose detailed HTML errors when set to `1` |
 
@@ -62,19 +62,27 @@ startup.
 
 ## `tsp.config.json`
 
-The default file is valid JSON:
+The default file is valid JSON. `publicDir` is optional and configures the
+directory used for built-in static file serving:
 
 ```json
 {
+  "publicDir": "./static",
   "services": {}
 }
 ```
 
+`publicDir` is resolved relative to the process working directory. The
+precedence is `TSP_PUBLIC_DIR`, then `publicDir`, then `public`. The selected
+directory is read at server startup; restart the server after changing this
+setting. The `services` object may be omitted when no config-driven services
+are needed.
+
 Config-driven services are named entries under `services`. The current host
 supports the service kinds implemented by the runtime, including `counter`,
 `kv`, `feature_flag`, and `rate_limit`. Invalid service kinds fail fast during
-startup. Configuration changes are watched in development; a malformed new
-snapshot leaves the previous valid snapshot in place.
+startup. Service configuration changes are watched in development; a
+malformed new snapshot leaves the previous valid snapshot in place.
 
 ## Page configuration
 

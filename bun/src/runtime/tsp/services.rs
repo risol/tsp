@@ -34,6 +34,7 @@
 
 use std::any::Any;
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -1336,8 +1337,11 @@ pub fn load_config_services(
     text: &str,
 ) -> Result<Vec<Arc<dyn Service>>, String> {
     let mut services: Vec<Arc<dyn Service>> = Vec::new();
-    let services_start = find_top_level_object_for_key(text, "services")
-        .ok_or_else(|| "config: missing top-level `\"services\"` object".to_string())?;
+    let Some(services_start) = find_top_level_object_for_key(text, "services") else {
+        // `services` is optional when a configuration file only contains
+        // runtime settings such as `publicDir`.
+        return Ok(services);
+    };
     let services_obj = &text[services_start.0..services_start.1];
     let mut cursor = if services_obj.starts_with('{') { 1 } else { 0 };
     cursor = skip_ws(services_obj, cursor);
@@ -1408,6 +1412,19 @@ pub fn load_config_services(
         }
     }
     Ok(services)
+}
+
+/// Read the optional top-level public asset directory from the shared TSP
+/// configuration file. The environment variable `TSP_PUBLIC_DIR` is applied
+/// by the host after this value is read and takes precedence over it.
+pub fn load_config_public_dir(text: &str) -> Result<Option<PathBuf>, String> {
+    let Some(value) = find_top_level_string_field(text, "publicDir")? else {
+        return Ok(None);
+    };
+    if value.trim().is_empty() {
+        return Err("config: `publicDir` must not be empty".to_string());
+    }
+    Ok(Some(PathBuf::from(value)))
 }
 
 /// Parse `{ "k1": "v1", "k2": "v2" }` inside `obj` (the
@@ -1658,6 +1675,105 @@ fn find_top_level_object_for_key(text: &str, key: &str) -> Option<(usize, usize)
         return None;
     }
     read_balanced_object(text, p).map(|(_, end)| (p, end))
+}
+
+/// Locate a string-valued field on the root JSON object. This is intentionally
+/// a small parser matching the configuration parser above; it avoids treating
+/// a nested service field with the same name as the runtime setting.
+fn find_top_level_string_field(text: &str, key: &str) -> Result<Option<String>, String> {
+    let first_brace = text
+        .find('{')
+        .ok_or_else(|| "config: top-level value must be an object".to_string())?;
+    let (object, _) = read_balanced_object(text, first_brace)
+        .ok_or_else(|| "config: unbalanced top-level object".to_string())?;
+    let mut cursor = 1;
+    loop {
+        cursor = skip_ws(object, cursor);
+        if cursor >= object.len() || object.as_bytes()[cursor] == b'}' {
+            return Ok(None);
+        }
+        let (field, after_field) = parse_quoted_string(object, cursor)
+            .ok_or_else(|| "config: expected a quoted top-level field name".to_string())?;
+        let mut value_start = skip_ws(object, after_field);
+        if value_start >= object.len() || object.as_bytes()[value_start] != b':' {
+            return Err(format!("config: expected `:` after `{field}`"));
+        }
+        value_start = skip_ws(object, value_start + 1);
+
+        if field == key {
+            let Some((value, after_value)) = parse_quoted_string(object, value_start) else {
+                return Err(format!("config: `{key}` must be a JSON string"));
+            };
+            let after_value = skip_ws(object, after_value);
+            if after_value < object.len()
+                && object.as_bytes()[after_value] != b','
+                && object.as_bytes()[after_value] != b'}'
+            {
+                return Err(format!("config: unexpected data after `{key}`"));
+            }
+            return Ok(Some(value));
+        }
+
+        cursor = skip_json_value(object, value_start)
+            .ok_or_else(|| format!("config: invalid value for `{field}`"))?;
+        cursor = skip_ws(object, cursor);
+        if cursor < object.len() && object.as_bytes()[cursor] == b',' {
+            cursor += 1;
+        } else if cursor >= object.len() || object.as_bytes()[cursor] != b'}' {
+            return Err("config: expected `,` or `}` after field value".to_string());
+        }
+    }
+}
+
+/// Skip one JSON value while scanning root configuration fields. The full
+/// service parser validates the supported shapes separately; this helper only
+/// needs to keep nested objects, arrays, and strings balanced.
+fn skip_json_value(s: &str, start: usize) -> Option<usize> {
+    if start >= s.len() {
+        return None;
+    }
+    match s.as_bytes()[start] {
+        b'"' => parse_quoted_string(s, start).map(|(_, end)| end),
+        b'{' | b'[' => {
+            let opening = s.as_bytes()[start];
+            let closing = if opening == b'{' { b'}' } else { b']' };
+            let mut depth = 0usize;
+            let mut in_string = false;
+            let mut escaped = false;
+            for index in start..s.len() {
+                let byte = s.as_bytes()[index];
+                if in_string {
+                    if escaped {
+                        escaped = false;
+                    } else if byte == b'\\' {
+                        escaped = true;
+                    } else if byte == b'"' {
+                        in_string = false;
+                    }
+                    continue;
+                }
+                match byte {
+                    b'"' => in_string = true,
+                    value if value == opening => depth += 1,
+                    value if value == closing => {
+                        depth = depth.checked_sub(1)?;
+                        if depth == 0 {
+                            return Some(index + 1);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+        _ => {
+            let mut end = start;
+            while end < s.len() && !matches!(s.as_bytes()[end], b',' | b'}') {
+                end += 1;
+            }
+            (end > start).then_some(end)
+        }
+    }
 }
 
 fn find_string_field(obj: &str, key: &str) -> Option<String> {
@@ -2298,5 +2414,31 @@ mod tests {
             ),
             Ok(_) => panic!("missing limit must be a hard error"),
         }
+    }
+
+    #[test]
+    fn config_parser_reads_optional_public_dir() {
+        let text = r#"{
+          "publicDir": "./static",
+          "services": {}
+        }"#;
+        assert_eq!(
+            load_config_public_dir(text).expect("publicDir should parse"),
+            Some(PathBuf::from("./static"))
+        );
+
+        let text_without_services = r#"{ "publicDir": "assets" }"#;
+        assert_eq!(
+            load_config_services(text_without_services)
+                .expect("services should be optional")
+                .len(),
+            0
+        );
+        assert_eq!(
+            load_config_public_dir(r#"{ "services": {} }"#).expect("missing value is allowed"),
+            None
+        );
+        assert!(load_config_public_dir(r#"{ "publicDir": "" }"#).is_err());
+        assert!(load_config_public_dir(r#"{ "publicDir": 42 }"#).is_err());
     }
 }

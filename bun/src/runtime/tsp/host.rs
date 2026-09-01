@@ -1461,8 +1461,18 @@ pub fn serve_with_public_root(
 }
 
 fn resolve_public_root() -> Option<std::path::PathBuf> {
+    resolve_public_root_with_config(None)
+}
+
+/// Resolve the public directory with the documented precedence: the
+/// environment variable overrides `tsp.config.json`, which overrides the
+/// default `public` directory.
+pub fn resolve_public_root_with_config(
+    config_dir: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
     let configured = std::env::var_os("TSP_PUBLIC_DIR")
         .map(std::path::PathBuf::from)
+        .or(config_dir)
         .unwrap_or_else(|| std::path::PathBuf::from("public"));
     configured.is_dir().then_some(configured)
 }

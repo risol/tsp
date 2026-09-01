@@ -30,7 +30,7 @@ use bun_runtime_tsp::host;
 use bun_runtime_tsp::jsc_bridge::BunRuntime;
 use bun_runtime_tsp::module_graph::ModuleGraph;
 use bun_runtime_tsp::router::{HttpMethod, RouteTable};
-use bun_runtime_tsp::services::load_config_services;
+use bun_runtime_tsp::services::{load_config_public_dir, load_config_services};
 use bun_runtime_tsp::services::SESSION_STORE_CAP_DEFAULT;
 use bun_runtime_tsp::services::ServiceRegistry;
 use bun_runtime_tsp::session_backend::{MemoryBackend, RedisBackend, SessionBackend};
@@ -90,6 +90,26 @@ fn serve_main() -> ExitCode {
         Ok(p) => p,
         Err(e) => {
             eprintln!("TSP: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let config_text = if config_path.is_file() {
+        Some(
+            std::fs::read_to_string(&config_path)
+                .unwrap_or_else(|e| panic!("TSP: read {}: {e}", config_path.display())),
+        )
+    } else {
+        None
+    };
+    let config_public_dir = match config_text
+        .as_deref()
+        .map(load_config_public_dir)
+        .transpose()
+    {
+        Ok(value) => value.flatten(),
+        Err(error) => {
+            eprintln!("TSP: parse {}: {error}", config_path.display());
             return ExitCode::from(2);
         }
     };
@@ -237,10 +257,8 @@ fn serve_main() -> ExitCode {
     // acceptance).
     let mut registry_builder = ServiceRegistry::with_backends(session_backend);
     let mut custom_labels: Vec<String> = Vec::new();
-    if config_path.is_file() {
-        let text = std::fs::read_to_string(&config_path)
-            .unwrap_or_else(|e| panic!("TSP: read {}: {e}", config_path.display()));
-        let custom = load_config_services(&text)
+    if let Some(text) = config_text.as_deref() {
+        let custom = load_config_services(text)
             .unwrap_or_else(|e| panic!("TSP: parse {}: {e}", config_path.display()));
         // §22.3: route the config-declared services through
         // `apply_config_snapshot` so the registry's
@@ -353,7 +371,22 @@ fn serve_main() -> ExitCode {
         );
     }
 
-    if let Err(e) = host::serve("0.0.0.0", port, routes, registry, bun, services) {
+    let public_root = host::resolve_public_root_with_config(config_public_dir);
+    eprintln!(
+        "TSP: public directory = {}",
+        public_root
+            .as_deref()
+            .map_or_else(|| "(disabled)".to_string(), |path| path.display().to_string())
+    );
+    if let Err(e) = host::serve_with_public_root(
+        "0.0.0.0",
+        port,
+        routes,
+        registry,
+        bun,
+        services,
+        public_root,
+    ) {
         // serve returns only on a fatal listener error; dropping
         // watcher_handle here stops + joins the watcher thread.
         drop(watcher_handle);

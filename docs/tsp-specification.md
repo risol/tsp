@@ -37,11 +37,13 @@ The conventional layout is:
 app/
 ├── pages/                 # .tsp route modules and local imports
 ├── public/                # static files, never executable routes
-├── tsp.config.json        # optional config-driven services
+├── tsp.config.json        # optional runtime and service configuration
 └── .tsp-types/            # generated declarations from tspserver typings
 ```
 
 `TSP_ROUTES_DIR` and `TSP_PUBLIC_DIR` can change the first two roots.
+`tsp.config.json` may set `publicDir` when the environment variable is not
+provided.
 
 ## 3. Page modules
 
@@ -294,6 +296,18 @@ generations and therefore survive reloads.
 
 Files under `public/` are static assets. They are not parsed as route modules
 and MUST NOT be placed in `pages/` as a substitute for static hosting.
+
+The native host serves a matching public file for `GET` and `HEAD` requests;
+the query string is ignored when resolving the file. `/` and directory URLs
+ending in `/` serve `index.html` when present. The response includes a
+content type inferred from the file extension, a byte-accurate
+`Content-Length`, `X-Content-Type-Options: nosniff`, and
+`Cache-Control: public, max-age=3600`. A missing public file falls through to
+normal page routing, so an application route may handle that URL.
+
+Public paths are URL-decoded before lookup, and traversal segments, NUL bytes,
+Windows separators, and symlinks escaping the configured public root MUST NOT
+be served. Static files take precedence over a page route with the same URL.
 
 The host MUST prevent path traversal, reject ambiguous routes, enforce request
 body limits before worker execution, and keep internal fragment capabilities

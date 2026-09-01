@@ -14,32 +14,63 @@ pub struct StaticFile {
 /// Resolve a URL path below `root`. Missing files return `None` so the page
 /// router can handle the request. Existing files are canonicalized and must
 /// remain below the public root, which blocks traversal and symlink escape.
+/// A URL ending in `/` (including `/`) serves its `index.html` when present.
 pub fn load(root: &Path, request_path: &str) -> io::Result<Option<StaticFile>> {
     let Some(relative) = decode_path(request_path) else {
         return Ok(None);
     };
-    let canonical_root = crate::path::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+
+    // Canonicalize the root first. Apart from making the containment check
+    // reliable for relative configuration, this also means a missing or
+    // unreadable public directory simply behaves like an empty one.
+    let Ok(canonical_root) = crate::path::canonicalize(root) else {
+        return Ok(None);
+    };
+    if !canonical_root.is_dir() {
+        return Ok(None);
+    }
+
     let mut candidate = canonical_root.clone();
     for segment in relative.split('/') {
         if segment.is_empty() || segment == "." {
             continue;
         }
-        if segment == ".." || segment.contains('\0') {
+        // Reject both separators. `/` is handled by the split above; `\\`
+        // must also be rejected because it is a path separator on Windows
+        // even though it is not a URL separator. This keeps the same URL
+        // safe on every supported platform, including encoded backslashes.
+        if segment == ".." || segment.contains(['\\', '\0']) {
             return Ok(None);
         }
         candidate.push(segment);
     }
-    if candidate.is_dir() && relative == "/" {
+
+    if candidate.is_dir() && (relative == "/" || relative.ends_with('/')) {
         candidate.push("index.html");
     }
-    if !candidate.is_file() {
-        return Ok(None);
-    }
-    let canonical = crate::path::canonicalize(&candidate)?;
+
+    let canonical = match crate::path::canonicalize(&candidate) {
+        Ok(path) => path,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
     if !canonical.starts_with(&canonical_root) {
         return Ok(None);
     }
-    let body = fs::read(&canonical)?;
+    let metadata = match fs::metadata(&canonical) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if !metadata.is_file() {
+        return Ok(None);
+    }
+
+    let body = match fs::read(&canonical) {
+        Ok(body) => body,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
     let content_type = mime_type(&canonical);
     Ok(Some(StaticFile {
         body,
@@ -100,8 +131,19 @@ fn mime_type(path: &Path) -> &'static str {
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
         "webp" => "image/webp",
+        "avif" => "image/avif",
         "ico" => "image/x-icon",
+        "bmp" => "image/bmp",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        "eot" => "application/vnd.ms-fontobject",
         "wasm" => "application/wasm",
+        "webmanifest" => "application/manifest+json",
+        "map" => "application/json; charset=utf-8",
+        "mp3" => "audio/mpeg",
+        "mp4" => "video/mp4",
         "pdf" => "application/pdf",
         _ => "application/octet-stream",
     }
@@ -113,7 +155,7 @@ mod tests {
 
     #[test]
     fn loads_index_and_decoded_file_without_escape() {
-        let root = std::env::temp_dir().join(format!("tspserver-public-{}", std::process::id()));
+        let root = test_root("basic");
         std::fs::create_dir_all(root.join("assets")).unwrap();
         std::fs::write(root.join("index.html"), "home").unwrap();
         std::fs::write(root.join("assets/hello world.txt"), "hello").unwrap();
@@ -127,11 +169,59 @@ mod tests {
     }
 
     #[test]
+    fn directory_index_and_common_content_types_are_supported() {
+        let root = test_root("directory-index");
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::write(root.join("docs/index.html"), "docs").unwrap();
+        std::fs::write(root.join("app.woff2"), b"font").unwrap();
+        std::fs::write(root.join("site.webmanifest"), b"{}").unwrap();
+
+        let directory = load(&root, "/docs/").unwrap().unwrap();
+        assert_eq!(directory.body, b"docs");
+        assert_eq!(directory.content_type, "text/html; charset=utf-8");
+        assert_eq!(
+            load(&root, "/app.woff2").unwrap().unwrap().content_type,
+            "font/woff2"
+        );
+        assert_eq!(
+            load(&root, "/site.webmanifest")
+                .unwrap()
+                .unwrap()
+                .content_type,
+            "application/manifest+json"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_posix_and_windows_traversal() {
+        let root = test_root("traversal");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("secret.txt"), "secret").unwrap();
+
+        assert!(load(&root, "/../secret.txt").unwrap().is_none());
+        assert!(load(&root, "/%2e%2e/secret.txt").unwrap().is_none());
+        assert!(load(&root, "/..%5csecret.txt").unwrap().is_none());
+        assert!(load(&root, "/%2e%2e%5csecret.txt").unwrap().is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn missing_public_file_falls_through() {
-        let root =
-            std::env::temp_dir().join(format!("tspserver-public-missing-{}", std::process::id()));
+        let root = test_root("missing");
         std::fs::create_dir_all(&root).unwrap();
         assert!(load(&root, "/missing.js").unwrap().is_none());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn test_root(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "tspserver-public-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
     }
 }
