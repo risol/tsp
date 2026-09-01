@@ -203,6 +203,18 @@ pub(crate) unsafe extern "C" fn main(argc: c_int, argv: *const *const c_char) ->
     // 2/3. Allocator is static above; argv was captured at step 0; start_time
     //      is lazy in `bun_core::start_time()`.
 
+    // TSP workers inherit stderr for native diagnostics but deliberately
+    // redirect stdout to null. Keep them out of Bun's process-wide stdio
+    // output-sink initialization: that path is only needed by the CLI/master
+    // and can touch native output state before the embedded VM starts.
+    // `--tsp-worker` is the authoritative mode switch for the same binary.
+    if bun_runtime::tsp_worker::requested() {
+        // Per-thread stack-limit cache for the JS recursion guard.
+        StackCheck::configure_thread();
+        bun_io::ParentDeathWatchdog::install();
+        return bun_runtime::tsp_worker::run();
+    }
+
     // 4. Stdio + Output sink. `bun_core::OutputSink[Sys]` is link-time provided
     //    by `bun_sys`; `stdio::init()` calls C's `bun_initialize_process()` and
     //    wires stdout/stderr `Source`s.
@@ -212,10 +224,6 @@ pub(crate) unsafe extern "C" fn main(argc: c_int, argv: *const *const c_char) ->
     // 5. Per-thread stack-limit cache for the JS recursion guard.
     StackCheck::configure_thread();
     bun_io::ParentDeathWatchdog::install();
-
-    if bun_runtime::tsp_worker::requested() {
-        return bun_runtime::tsp_worker::run();
-    }
 
     // The packaged TSP runtime is this same executable renamed to
     // `tspserver`. Master mode never initializes a Bun VM; it only creates

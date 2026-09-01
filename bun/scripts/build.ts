@@ -457,6 +457,7 @@ function parseArgs(argv: string[]): CliArgs {
     "arch",
     "abi",
     "buildType",
+    "cargoProfile",
     "mode",
     "webkit",
     "localDeps",
@@ -581,7 +582,7 @@ Usage: bun scripts/build.ts [options] [exec-args...]
 Options:
   --profile=<name>        Build profile (default: debug)
                           Profiles: debug, debug-local, debug-no-asan,
-                                    release, release-local, release-asan,
+                                    release, release-dev, release-local, release-asan,
                                     release-assertions, ci-*,
                                     windows-{x64,arm64}[-release] (cross-compile
                                     from a non-Windows host)
@@ -591,6 +592,7 @@ Options:
                                   canary, valgrind, webkit (prebuilt|local),
                                   local-deps (name=path[,name=path] — build a
                                   vendored dep from a local checkout),
+                                  cargoProfile (dev|release|release-dev),
                                   buildDir, mode (full|cpp-only|link-only),
                                   unifiedSources, timeTrace, os, arch, abi,
                                   winsysroot (Windows cross-compile SDK root)

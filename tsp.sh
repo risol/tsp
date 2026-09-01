@@ -36,6 +36,11 @@ resolve_runtime_binary() {
     die "single-file TSP runtime not found; run './tsp.sh build:worker'"
 }
 
+resolve_fast_runtime_binary() {
+  resolve_file "$ROOT_DIR/bun/build/release-dev/bun.exe" "$ROOT_DIR/bun/build/release-dev/bun" ||
+    die "fast TSP runtime not found; run './tsp.sh build:worker:fast'"
+}
+
 resolve_host() {
   resolve_file "$ROOT_DIR/dist/tspserver/tspserver.exe" "$ROOT_DIR/dist/tspserver/tspserver" ||
     die "host not found; run './tsp.sh build:host'"
@@ -48,9 +53,15 @@ build_worker() {
   (cd "$ROOT_DIR/bun" && "$bun_bin" run build:release)
 }
 
-build_host() {
-  local binary
-  binary="$(resolve_runtime_binary)"
+build_worker_fast() {
+  local bun_bin
+  bun_bin="$(resolve_bun)"
+  echo "Building the fast optimized TSP runtime..."
+  (cd "$ROOT_DIR/bun" && "$bun_bin" run build:release:dev)
+}
+
+copy_runtime_binary() {
+  local binary="$1"
   mkdir -p "$ROOT_DIR/dist/tspserver"
   if [[ "$binary" == *.exe ]]; then
     cp "$binary" "$ROOT_DIR/dist/tspserver/tspserver.exe"
@@ -60,6 +71,18 @@ build_host() {
   echo "Built single-file TSP runtime in $ROOT_DIR/dist/tspserver"
 }
 
+build_host() {
+  local binary
+  binary="$(resolve_runtime_binary)"
+  copy_runtime_binary "$binary"
+}
+
+build_host_fast() {
+  local binary
+  binary="$(resolve_fast_runtime_binary)"
+  copy_runtime_binary "$binary"
+}
+
 package_runtime() {
   local host
   host="$(resolve_host)"
@@ -67,6 +90,7 @@ package_runtime() {
 }
 
 build_runtime() { build_worker; build_host; package_runtime; }
+build_runtime_fast() { build_worker_fast; build_host_fast; package_runtime; }
 
 run_host() {
   local host
@@ -123,8 +147,10 @@ run_typings() {
 
 case "${1:-help}" in
   build|build:tspserver|build:tspserver:rel) build_runtime ;;
+  build:fast) build_runtime_fast ;;
   build:host) build_host ;;
   build:worker) build_worker ;;
+  build:worker:fast) build_worker_fast ;;
   start|dev) shift; run_host "$@" ;;
   test) run_tests; run_smoke ;;
   test:rust) run_tests ;;
@@ -141,8 +167,10 @@ case "${1:-help}" in
 Usage: ./tsp.sh <command>
 
   build                  Build the single-file runtime and package
+  build:fast             Build and package the fast optimized runtime
   build:host             Copy the built runtime into dist/tspserver
   build:worker           Build the single-file runtime
+  build:worker:fast      Build the fast optimized runtime
   start                  Run the server with self-created workers
   dev                    Run the server (route hot reload is always enabled)
   test                   Run Rust tests and the embedded-worker smoke test

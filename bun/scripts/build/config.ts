@@ -114,6 +114,8 @@ export interface Config {
 
   // ─── Build configuration ───
   buildType: BuildType;
+  /** Cargo profile used for the Rust staticlib. */
+  cargoProfile: "dev" | "release" | "release-dev";
   debug: boolean;
   release: boolean;
   mode: BuildMode;
@@ -337,6 +339,8 @@ export interface PartialConfig {
   arch?: Arch;
   abi?: Abi;
   buildType?: BuildType;
+  /** Cargo profile used for the Rust staticlib (for example, release-dev). */
+  cargoProfile?: "dev" | "release" | "release-dev";
   mode?: BuildMode;
   lto?: boolean;
   pgoGenerate?: string;
@@ -758,6 +762,10 @@ export function resolveConfig(partial: PartialConfig, toolchain: Toolchain): Con
   const debug = buildType === "Debug";
   const release = buildType === "Release" || buildType === "RelWithDebInfo" || buildType === "MinSizeRel";
   const smol = buildType === "MinSizeRel";
+  const cargoProfile = partial.cargoProfile ?? (debug ? "dev" : "release");
+  if ((debug && cargoProfile !== "dev") || (release && cargoProfile === "dev")) {
+    throw new BuildError(`Cargo profile ${cargoProfile} is incompatible with build type ${buildType}`);
+  }
 
   // ─── Environment ───
   // Explicit (not auto-detected from env) — matches CMake's optionx(CI DEFAULT OFF).
@@ -1189,6 +1197,7 @@ export function resolveConfig(partial: PartialConfig, toolchain: Toolchain): Con
     libPrefix,
     libSuffix,
     buildType,
+    cargoProfile,
     debug,
     release,
     mode: partial.mode ?? "full",

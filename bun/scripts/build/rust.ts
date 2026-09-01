@@ -73,7 +73,9 @@ export function rustTriple(os: OS, arch: Arch, abi: Abi | undefined): string {
  * default), and we don't ship a `MinSizeRel` Rust path yet.
  */
 export function cargoProfile(cfg: Config): { name: string; subdir: string } {
-  return cfg.buildType === "Debug" ? { name: "dev", subdir: "debug" } : { name: "release", subdir: "release" };
+  return cfg.cargoProfile === "dev"
+    ? { name: "dev", subdir: "debug" }
+    : { name: cfg.cargoProfile, subdir: cfg.cargoProfile };
 }
 
 /**

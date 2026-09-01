@@ -133,6 +133,15 @@ export const profiles = {
     lto: false,
   },
 
+  /** Fast optimized local build: thin Rust LTO and parallel code generation. */
+  "release-dev": {
+    buildType: "Release",
+    cargoProfile: "release-dev",
+    webkit: "prebuilt",
+    lto: false,
+    buildDir: "build/release-dev",
+  },
+
   /**
    * Bench-till-green profile. Mirrors the codegen the CI release build
    * actually ships (`ci-release` resolves `lto: true` for ci+release+linux),
