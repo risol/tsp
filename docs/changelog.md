@@ -11,6 +11,27 @@ All notable changes to TSP will be documented in this file.
 - Added getting-started, configuration, architecture, troubleshooting, and
   reference index pages; removed the obsolete progress-log link.
 
+## [0.3.7] - 2026-09-01
+
+### Fixed
+- `publicDir` in `tsp.config.json` is now resolved relative to the config
+  file's parent directory (the application root), not the binary's CWD.
+  A relative path like `./www/static` next to `tsp.config.json` therefore
+  points at `<app-root>/www/static` regardless of where the binary was
+  launched from. The previous CWD-relative resolution silently broke
+  static file serving whenever the binary was started outside the
+  application root -- the host fell back to `./public` (which does not
+  exist in the standard layout), 404'd every asset, and the browser
+  reported a CSS MIME-type error from the 404 body.
+- `resolve_public_root_with_config` now takes a `config_root` parameter
+  and uses it to anchor relative `config_dir` paths. The
+  `TSP_PUBLIC_DIR` environment variable and the default `public`
+  directory stay CWD-relative to preserve the existing shell
+  convention; absolute `publicDir` paths are honored verbatim.
+- `bin/tspserver.rs` now passes `config_path.parent()` so scpm's
+  `publicDir: "./www/static"` resolves to `<scpm>/www/static`
+  regardless of CWD.
+
 ## [0.3.1] - 2026-08-31
 
 ### Fixed
