@@ -371,7 +371,10 @@ fn serve_main() -> ExitCode {
         );
     }
 
-    let public_root = host::resolve_public_root_with_config(config_public_dir);
+    let public_root = host::resolve_public_root_with_config(
+        config_public_dir,
+        config_path.parent(),
+    );
     eprintln!(
         "TSP: public directory = {}",
         public_root

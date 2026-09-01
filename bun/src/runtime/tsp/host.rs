@@ -1461,18 +1461,33 @@ pub fn serve_with_public_root(
 }
 
 fn resolve_public_root() -> Option<std::path::PathBuf> {
-    resolve_public_root_with_config(None)
+    resolve_public_root_with_config(None, None)
 }
 
 /// Resolve the public directory with the documented precedence: the
 /// environment variable overrides `tsp.config.json`, which overrides the
-/// default `public` directory.
+/// default `public` directory. A relative `publicDir` from the config file
+/// is resolved against the config file's parent directory (`config_root`)
+/// so the same config string works regardless of the binary's CWD; an
+/// absolute path is left untouched. `TSP_PUBLIC_DIR` and the default
+/// `public` remain CWD-relative to match the existing shell convention.
 pub fn resolve_public_root_with_config(
     config_dir: Option<std::path::PathBuf>,
+    config_root: Option<&std::path::Path>,
 ) -> Option<std::path::PathBuf> {
     let configured = std::env::var_os("TSP_PUBLIC_DIR")
         .map(std::path::PathBuf::from)
-        .or(config_dir)
+        .or_else(|| {
+            config_dir.map(|path| {
+                if path.is_absolute() {
+                    path
+                } else {
+                    config_root
+                        .map(|root| root.join(&path))
+                        .unwrap_or(path)
+                }
+            })
+        })
         .unwrap_or_else(|| std::path::PathBuf::from("public"));
     configured.is_dir().then_some(configured)
 }
@@ -4005,5 +4020,91 @@ mod tests {
             out.headers
                 .contains(&("x-ok".to_string(), "yes".to_string()))
         );
+    }
+
+    #[test]
+    fn resolve_public_root_resolves_relative_config_dir_against_config_root() {
+        // A `publicDir` written as `./www/static` next to the
+        // config file (typical TSP application layout) must be
+        // resolved against the config file's parent directory,
+        // not the binary's CWD. The CWD-relative fallback is
+        // only used when the caller has no config_root to
+        // anchor on (e.g. `serve()` without a config file).
+        let temp = std::env::temp_dir().join(format!(
+            "tspserver-publicroot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let app_root = temp.join("app");
+        let public = app_root.join("www").join("static");
+        std::fs::create_dir_all(&public).unwrap();
+        let config_root = Some(app_root.as_path());
+        let resolved = resolve_public_root_with_config(
+            Some(std::path::PathBuf::from("./www/static")),
+            config_root,
+        );
+        assert_eq!(resolved.as_deref(), Some(public.as_path()));
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn resolve_public_root_leaves_absolute_config_dir_untouched() {
+        // An absolute `publicDir` is honored verbatim,
+        // independent of the config_root. This matches the
+        // documented contract that an absolute path overrides
+        // every convention.
+        let temp = std::env::temp_dir().join(format!(
+            "tspserver-publicroot-abs-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let public = temp.join("assets");
+        std::fs::create_dir_all(&public).unwrap();
+        let resolved = resolve_public_root_with_config(
+            Some(public.clone()),
+            Some(std::path::Path::new("/some/other/place")),
+        );
+        assert_eq!(resolved.as_deref(), Some(public.as_path()));
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn resolve_public_root_falls_back_to_cwd_relative_when_no_config_root() {
+        // Without a config_root (the `serve()` entry point,
+        // which has no config file) a relative `publicDir`
+        // falls back to CWD-relative, preserving the existing
+        // shell convention. The function does not canonicalize
+        // the path; it returns the input verbatim and lets
+        // `is_dir()` resolve it against the caller's CWD. The
+        // test exercises the round-trip by asserting that a
+        // valid CWD-relative path is accepted (i.e. the
+        // returned path matches the input).
+        let temp = std::env::temp_dir().join(format!(
+            "tspserver-publicroot-cwd-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        let previous_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&temp).unwrap();
+        let resolved =
+            resolve_public_root_with_config(Some(std::path::PathBuf::from(".")), None);
+        std::env::set_current_dir(&previous_cwd).unwrap();
+        // The returned path equals the input (no canonicalize
+        // step), but `is_dir()` was true so the option is
+        // `Some`. The assertion below pins the documented
+        // contract: relative input is left verbatim when the
+        // caller has no config_root.
+        assert_eq!(resolved.as_deref(), Some(std::path::Path::new(".")));
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }
