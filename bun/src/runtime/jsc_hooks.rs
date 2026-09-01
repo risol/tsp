@@ -4514,6 +4514,126 @@ fn intern_transpile_path(value: &[u8]) -> &'static [u8] {
 /// Modules that must always transpile on-thread (see [`transpile_file`]).
 const ALWAYS_SYNC_MODULES: &[&[u8]] = &[b"reflect-metadata"];
 
+const TSP_SERVER_BRIDGE: &str = "globalThis[Symbol.for('tsp.server.bridge')]";
+
+/// Rewrite `tsp:server` imports in application modules loaded through Bun's
+/// CommonJS path. Route entry points are transformed by the TSP host before
+/// they reach Bun, but a local `.ts` helper is loaded later by `require()` and
+/// would otherwise be resolved as an ordinary package import. Keep this
+/// compatibility rewrite in the file loader so it applies recursively to
+/// every local dependency without modifying the user's source file.
+///
+/// The result is intentionally a plain CommonJS expression. The request
+/// wrapper installs the non-enumerable symbol bridge before it requires the
+/// route, and the bridge keeps optional Bun properties lazy through the
+/// original `__tspServer` namespace.
+fn rewrite_tsp_server_helper_imports(source: &str) -> Option<Vec<u8>> {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut out = String::with_capacity(source.len());
+    let mut changed = false;
+    let mut i = 0;
+
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        if !trimmed.starts_with("import") {
+            out.push_str(lines[i]);
+            out.push('\n');
+            i += 1;
+            continue;
+        }
+
+        let mut statement = lines[i].to_string();
+        let mut end = i;
+        let has_tsp_source = |text: &str| {
+            text.contains("from \"tsp:server\"")
+                || text.contains("from 'tsp:server'")
+                || text.contains("from \"tsp:html\"")
+                || text.contains("from 'tsp:html'")
+        };
+        while !has_tsp_source(&statement)
+            && !statement.contains(" from ")
+            && !statement.contains("from ")
+            && end + 1 < lines.len()
+        {
+            end += 1;
+            statement.push_str(lines[end].trim());
+        }
+
+        if !has_tsp_source(&statement) {
+            out.push_str(lines[i]);
+            out.push('\n');
+            i += 1;
+            continue;
+        }
+
+        let is_html_source = statement.contains("tsp:html");
+        let Some(open) = statement.find('{') else {
+            return None;
+        };
+        let Some(close) = statement.rfind('}') else {
+            return None;
+        };
+        let mut bindings = Vec::new();
+        for raw in statement[open + 1..close].split(',') {
+            let item = raw.trim();
+            if item.is_empty() || item.starts_with("type ") {
+                continue;
+            }
+            let mut parts = item.splitn(2, " as ");
+            let imported = parts.next().unwrap_or_default().trim();
+            let local = parts.next().unwrap_or(imported).trim();
+            let allowed = if is_html_source {
+                imported == "raw"
+            } else {
+                matches!(
+                    imported,
+                    "json"
+                        | "redirect"
+                        | "text"
+                        | "html"
+                        | "notFound"
+                        | "HttpError"
+                        | "fragment"
+                        | "nanoid"
+                        | "customAlphabet"
+                        | "customRandom"
+                        | "random"
+                        | "zod"
+                        | "sql"
+                        | "util"
+                )
+            };
+            if !allowed || imported.is_empty() || local.is_empty() {
+                return None;
+            }
+            if imported == local {
+                bindings.push(imported.to_string());
+            } else {
+                bindings.push(format!("{imported}: {local}"));
+            }
+        }
+
+        if !bindings.is_empty() {
+            out.push_str("const { ");
+            out.push_str(&bindings.join(", "));
+            out.push_str(" } = ");
+            out.push_str(TSP_SERVER_BRIDGE);
+            out.push_str(";\n");
+            changed = true;
+        }
+        i = end + 1;
+    }
+
+    changed.then(|| out.into_bytes())
+}
+
+fn is_javascript_like_extension(extension: &[u8]) -> bool {
+    matches!(
+        extension,
+        b".js" | b".jsx" | b".ts" | b".tsx" | b".cjs" | b".cts"
+    )
+}
+
 /// `Bun__transpileFile` body — concurrent-transpiler entry. Returns the
 /// in-flight `JSInternalPromise*` when `allow_promise && async`, else null
 /// (result is in `*ret`).
@@ -4598,6 +4718,34 @@ unsafe fn transpile_file(
             return ptr::null_mut();
         }
     };
+
+    // Route entry points are already transformed by the TSP host. Local
+    // dependencies arrive here later through `require()`, so give those
+    // files the same `tsp:server` compatibility treatment before the Bun
+    // parser resolves their imports. Force this path through the synchronous
+    // parser below because the concurrent transpiler store reads the file
+    // again and has no virtual-source slot for the rewritten contents.
+    let tsp_helper_source = if lr.virtual_source.is_none()
+        && is_javascript_like_extension(lr.path.name().ext)
+        && let Ok(path) = std::str::from_utf8(lr.path.text)
+        && let Ok(source) = std::fs::read(path)
+        && let Ok(source) = String::from_utf8(source)
+        && let Some(rewritten) = rewrite_tsp_server_helper_imports(&source)
+    {
+        let path_text = intern_transpile_path(lr.path.text);
+        Some(bun_ast::Source {
+            path: bun_paths::fs::Path::init(path_text),
+            contents: std::borrow::Cow::Owned(rewritten),
+            ..Default::default()
+        })
+    } else {
+        None
+    };
+    let tsp_helper_rewritten = tsp_helper_source.is_some();
+    if tsp_helper_rewritten {
+        lr.virtual_source = tsp_helper_source.as_ref();
+    }
+
     // Deinit the blob (if any) on scope exit.
     // Note: reshaped for borrowck — capture the `is_some()` flag *before*
     // moving the option into the scopeguard so the `transpile_async` predicate
@@ -4701,6 +4849,7 @@ unsafe fn transpile_file(
             // TODO: allow running concurrently when no onLoad handlers match a plugin.
             && plugin_runner_is_none
             && store_enabled
+            && !tsp_helper_rewritten
             // With the Node compile cache enabled, transpile on-thread so the
             // fetch hook sees every module.
             && !bun_jsc::node_compile_cache::is_enabled()

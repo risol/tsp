@@ -309,6 +309,67 @@ fn multi_route_dispatch_does_not_alias_to_first_request() {
     let _ = std::fs::remove_dir_all(&temp_root);
 }
 
+const NESTED_TSP_SERVER_HELPER: &str = r#"
+import { sql } from "tsp:server";
+
+export const sqlType = typeof sql;
+"#;
+
+const NESTED_TSP_SERVER_ROUTE: &str = r#"
+import { sqlType } from "./lib/v32/db";
+
+export function GET() {
+  return new Response(sqlType, {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
+}
+"#;
+
+#[test]
+fn embedded_worker_resolves_tsp_server_from_nested_ts_helper() {
+    let Some(master) = locate_master() else {
+        eprintln!("skipping nested helper test: packaged master binary not found");
+        return;
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tsp-nested-server-helper-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock is before the Unix epoch")
+            .as_nanos()
+    ));
+    let routes_dir = temp_root.join("pages");
+    let helper_dir = routes_dir.join("lib").join("v32");
+    std::fs::create_dir_all(&helper_dir).expect("create nested helper directory");
+    std::fs::write(routes_dir.join("index.tsp"), NESTED_TSP_SERVER_ROUTE)
+        .expect("write nested helper route");
+    std::fs::write(helper_dir.join("db.ts"), NESTED_TSP_SERVER_HELPER)
+        .expect("write nested tsp:server helper");
+
+    let port = 58_000 + (std::process::id() % 500) as u16;
+    let mut child = std::process::Command::new(master)
+        .env("TSP_PORT", port.to_string())
+        .env("TSP_ROUTES_DIR", &routes_dir)
+        .env("TSP_EMBEDDED_WORKER", "1")
+        .env("TSP_WORKER_COUNT", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("master should spawn");
+
+    wait_for_marker(&mut child, "listening on", Duration::from_secs(10));
+    let body = http_get(port, "/", Duration::from_secs(5));
+
+    let _ = terminate(child.id());
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&temp_root);
+
+    assert_eq!(body.trim(), "function");
+}
+
 /// Spawn the real binary, then read its stderr until `marker` shows
 /// up or the deadline elapses. Returns silently on hit; the caller
 /// proceeds to fire HTTP probes.

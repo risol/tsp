@@ -919,7 +919,12 @@ fn wrap_for_bun_cli_inner(
           const __tspServer = {};\n\
           Object.assign(__tspServer, {json: __tspJson__, redirect: __tspRedirect__, text: __tspText__, html: __tspHtml__, notFound: __tspNotFound__, HttpError: __tspHttpError__, fragment: __tspFragment__, raw: __tspRaw__, nanoid: __tspNanoid, customAlphabet: __tspNanoidCustomAlphabet, customRandom: __tspNanoidCustomRandom, random: __tspNanoidRandom, zod: __tspZodNs__, util: __tspUtilNs__});\n\
           Object.defineProperty(__tspServer, 'sql', { enumerable: true, get: () => require(\"bun\").SQL });\n\
-          Object.freeze(__tspServer);\n"
+          Object.freeze(__tspServer);\n\
+          // Local CommonJS dependencies are evaluated in their own module\n\
+          // scope. The Bun loader rewrites their `tsp:server` imports to\n\
+          // this non-enumerable symbol bridge, so expose the current request\n\
+          // namespace before the route's dependencies are required.\n\
+          Object.defineProperty(globalThis, Symbol.for('tsp.server.bridge'), { configurable: true, value: __tspServer });\n"
     );
     out.push_str(
         "function __tspEscape__(__value__) {\n\
@@ -1410,6 +1415,20 @@ mod tests {
         );
         assert!(wrapped.contains("__tspHttpError__"), "got: {wrapped}");
         assert!(wrapped.contains("Promise.resolve().then"), "got: {wrapped}");
+    }
+
+    #[test]
+    fn wrap_exposes_hidden_tsp_server_bridge_for_local_dependencies() {
+        let wrapped = wrap_for_bun_cli(
+            "function GET() { return new Response('ok'); }\n",
+            "GET",
+            None,
+        );
+        assert!(wrapped.contains("Symbol.for('tsp.server.bridge')"));
+        assert!(wrapped.contains(
+            "Object.defineProperty(globalThis, Symbol.for('tsp.server.bridge'), { configurable: true, value: __tspServer })"
+        ));
+        assert!(!wrapped.contains("globalThis.sql ="));
     }
 
     /// §32.1 dev error page: a non-HttpError throw inside
