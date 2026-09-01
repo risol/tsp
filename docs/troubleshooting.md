@@ -27,8 +27,9 @@ the route table from being accepted.
 
 ## The route returns 405
 
-The page does not export the requested method. Export one of `GET`, `POST`,
-`PUT`, `PATCH`, or `DELETE`, or make `config.methods` match the exported set.
+The page does not export the requested method and has no `ANY` handler. Export
+one of `GET`, `POST`, `PUT`, `PATCH`, or `DELETE`, add `ANY` for a wildcard
+handler, or make `config.methods` match the exported set.
 `HEAD` and `OPTIONS` have host-provided behavior described in the
 [specification](./tsp-specification.html).
 

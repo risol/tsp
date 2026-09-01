@@ -32,7 +32,12 @@ export function POST(ctx: Context) {}
 export function PUT(ctx: Context) {}
 export function PATCH(ctx: Context) {}
 export function DELETE(ctx: Context) {}
+export function ANY(ctx: Context) {}
 ```
+
+`ANY` is a wildcard handler. It receives valid HTTP methods not matched by a
+more specific export, and the original method is available as the uppercase
+string `ctx.method`.
 
 Use `config.methods` when the page wants an explicit method declaration:
 
@@ -42,10 +47,11 @@ export const config = {
 };
 ```
 
-The list must exactly match the exported handlers. `HEAD` and `OPTIONS` have
-host behavior and are not normally exported. A default export is not a page
-handler. `tspserver check` reports default exports and unknown exported
-functions so typos do not become silent routes.
+The list must exactly match the exported handlers. `HEAD` and `OPTIONS` may be
+exported explicitly; when they are absent, the host supplies their standard
+fallback behavior. A default export is not a page handler. `tspserver check`
+reports default exports and unknown exported functions so typos do not become
+silent routes.
 
 ## Handler results
 

@@ -17,7 +17,9 @@ This page contains current behavior only; roadmap ideas belong in
 ## `.tsp` modules
 
 - `.tsp` files are standard TypeScript/TSX.
-- Supported page handlers are named `GET`, `POST`, `PUT`, `PATCH`, and `DELETE`.
+- Supported page handlers are named `GET`, `POST`, `PUT`, `PATCH`, `DELETE`,
+  `HEAD`, `OPTIONS`, and `ANY` (the wildcard handler).
+- `ANY` handles valid extension methods that have no more specific handler.
 - `HEAD` is synthesized from `GET` when no separate handler is used.
 - `OPTIONS` reports the route's allowed methods when no page handler is used.
 - A `.tsp` file must not import another `.tsp` file.
@@ -61,7 +63,9 @@ cookies, session, services, signal, fragment()
 ```
 
 The request body is single-consumption. Dynamic parameters are strings.
-Context values must not be retained after the handler returns.
+`ctx.method` is an uppercase `string`, not a TypeScript enum or closed union;
+this preserves extension methods for `ANY`. Context values must not be retained
+after the handler returns.
 
 ## Page configuration
 

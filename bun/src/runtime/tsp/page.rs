@@ -88,7 +88,7 @@ pub struct PageSource {
     pub config_timeout_ms: Option<u64>,
     /// Names of `export function NAME(` calls
     /// in the file where `NAME` is NOT one of
-    /// the standard HTTP method handlers
+    /// the recognised HTTP handlers
     /// (spec §46 "no unknown runtime exports",
     /// plan §48). An empty vector means the
     /// page has no unknown exports. The
@@ -224,11 +224,11 @@ pub fn prepare(route: &Route) -> Result<PageSource, PrepareError> {
 }
 
 /// Static, line-based scan for `export function GET(ctx) { ... }` (and
-/// the other five standard methods). See module docs for the slice-5
+/// the other recognised handlers, including `ANY`). See module docs for the slice-5
 /// limitations vs. a real AST detector.
 pub fn detect_methods(text: &str) -> Vec<HttpMethod> {
     let mut found = Vec::new();
-    for method in &HttpMethod::ALL {
+    for method in &HttpMethod::HANDLERS {
         if exports_method(text, *method) {
             found.push(*method);
         }
@@ -254,8 +254,8 @@ fn exports_method(text: &str, method: HttpMethod) -> bool {
 }
 
 /// All `export function NAME(` names in `text`
-/// where `NAME` is NOT one of the standard
-/// HTTP method handlers (spec §46: "no unknown
+/// where `NAME` is NOT one of the recognised
+/// HTTP handlers (spec §46: "no unknown
 /// runtime exports"). Used by
 /// `detect_unknown_exports` to build the
 /// canonical list of names. The detector
@@ -299,8 +299,8 @@ fn all_exported_function_names(text: &str) -> Vec<String> {
 
 /// Detect `export function NAME(` calls in a
 /// `.tsp` file where `NAME` is NOT one of the
-/// standard HTTP method handlers (spec §46
-/// "no unknown runtime exports"). The returned
+/// recognised HTTP handlers (spec §46 "no
+/// unknown runtime exports"). The returned
 /// `Vec<String>` lists the names in source
 /// order. An empty vector means the file has
 /// no unknown runtime exports (all `export
@@ -318,7 +318,7 @@ fn all_exported_function_names(text: &str) -> Vec<String> {
 /// missed by `detect_methods`); the AST-based
 /// detector that catches this is deferred.
 pub fn detect_unknown_exports(text: &str) -> Vec<String> {
-    let known: Vec<&'static str> = HttpMethod::ALL.iter().map(|m| m.as_str()).collect();
+    let known: Vec<&'static str> = HttpMethod::HANDLERS.iter().map(|m| m.as_str()).collect();
     let mut out: Vec<String> = Vec::new();
     for name in all_exported_function_names(text) {
         if !known.iter().any(|k| *k == name) {
@@ -445,6 +445,7 @@ pub fn detect_config_methods(text: &str) -> Option<Vec<HttpMethod>> {
             "DELETE" => HttpMethod::Delete,
             "HEAD" => HttpMethod::Head,
             "OPTIONS" => HttpMethod::Options,
+            "ANY" => HttpMethod::Any,
             _ => return None,
         };
         out.push(method);
@@ -675,6 +676,13 @@ mod tests {
         ";
         let methods = detect_methods(src);
         assert_eq!(methods, vec![HttpMethod::Get]);
+    }
+
+    #[test]
+    fn detects_any_handler() {
+        let src = "export function ANY(ctx) { return ctx.method; }";
+        assert_eq!(detect_methods(src), vec![HttpMethod::Any]);
+        assert!(detect_unknown_exports(src).is_empty());
     }
 
     #[test]

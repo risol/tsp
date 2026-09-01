@@ -22,9 +22,11 @@ interface Context {
 }
 ```
 
-`ctx.params` values are always strings. `ctx.query` is the URL's
-`URLSearchParams`. `ctx.signal` is the request cancellation signal. Do not
-retain `ctx` or its request-scoped values after the handler returns.
+`ctx.method` is an uppercase `string`, not a TypeScript enum or closed union;
+extension methods are preserved for `ANY`. `ctx.params` values are always
+strings. `ctx.query` is the URL's `URLSearchParams`. `ctx.signal` is the request
+cancellation signal. Do not retain `ctx` or its request-scoped values after the
+handler returns.
 
 ## Request body
 

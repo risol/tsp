@@ -220,8 +220,9 @@ pub fn format_error_body_raw(code: &str, description: &str, detail: &str) -> Str
 /// `session` are Phase 8.
 #[derive(Debug, Clone)]
 pub struct Context {
-    /// HTTP method the request came in with (uppercase).
-    pub method: HttpMethod,
+    /// HTTP method the request came in with (uppercase). This is a string,
+    /// not an enum, so wildcard handlers can observe extension methods too.
+    pub method: String,
     /// URL path the route matched (e.g. `/`, `/about`).
     pub path: String,
     /// Raw query string without the leading `?`, or empty
@@ -275,8 +276,7 @@ impl Context {
     /// authors.
     pub fn to_json(&self) -> String {
         // Hand-rolled to avoid pulling in a JSON crate. The
-        // method comes from `HttpMethod::as_str` (one of
-        // GET / POST / ...) so it is always ASCII without
+        // method is an uppercase HTTP token, so it is ASCII without
         // escaping; the path and query are read straight
         // from the HTTP request line so they may contain
         // percent-encoded bytes that we surface verbatim.
@@ -288,7 +288,7 @@ impl Context {
         let mut out =
             String::with_capacity(64 + self.path.len() + self.query.len() + self.body.len());
         out.push_str("{\"method\":");
-        json_string(&mut out, self.method.as_str());
+        json_string(&mut out, &self.method);
         out.push_str(",\"path\":");
         json_string(&mut out, &self.path);
         out.push_str(",\"query\":");
@@ -435,8 +435,8 @@ enum EnvelopeKind {
 
 #[derive(Debug)]
 #[allow(dead_code)] // kind / status_line: used by the dev-
-// inspector slice; parse_envelope produces
-// them for the request path.
+                    // inspector slice; parse_envelope produces
+                    // them for the request path.
 struct EnvelopeOutcome {
     kind: EnvelopeKind,
     content_type: String,
@@ -1690,6 +1690,7 @@ fn handle_connection(
         // `Set-Cookie: tsp_sid=...` line for them.
         ParsedRequest::Known {
             method,
+            method_name,
             path,
             query,
             headers,
@@ -1712,7 +1713,7 @@ fn handle_connection(
             // below.
             let (dispatch_path, fragment_name, dispatch_query) = fragment_target(&path, &query)
                 .unwrap_or_else(|| (path.clone(), None, query.clone()));
-            let matched = routes.lookup(&dispatch_path, method);
+            let matched = routes.lookup_named(&dispatch_path, method, &method_name);
             // contract.md §11 / `config.bodyLimit`: a page
             // may declare a per-page body cap. If the
             // request body is larger than the page's
@@ -1750,6 +1751,7 @@ fn handle_connection(
                         | HttpMethod::Put
                         | HttpMethod::Patch
                         | HttpMethod::Delete
+                        | HttpMethod::Any
                 ) && body.len() > limit
                 {
                     metrics::global()
@@ -1807,7 +1809,7 @@ fn handle_connection(
             let default_cache_control: Option<&'static str> = match &matched {
                 MatchResult::Found { route, .. }
                 | MatchResult::FoundHeadOverGet { route } => crate::page::prepare(route)
-                    .ok()
+                        .ok()
                     .and_then(|p| p.config_cache.map(|c| c.header_value())),
                 _ => None,
             };
@@ -1828,8 +1830,8 @@ fn handle_connection(
             let effective_timeout_ms: u64 = match &matched {
                 MatchResult::Found { route, .. }
                 | MatchResult::FoundHeadOverGet { route } => crate::page::prepare(route)
-                    .ok()
-                    .and_then(|p| p.config_timeout_ms)
+                        .ok()
+                        .and_then(|p| p.config_timeout_ms)
                     .unwrap_or(timeout_ms),
                 _ => timeout_ms,
             };
@@ -1840,14 +1842,14 @@ fn handle_connection(
             // fresh (spec 16.4 makes the destroyed session
             // no longer usable).
             let session_resolve = services.read().unwrap().get(BUILTIN_SESSION).and_then(|svc_arc| {
-                svc_arc
-                    .as_any()
-                    .downcast_ref::<SessionService>()
-                    .map(|svc| {
-                        let cookie_sid = read_session_cookie(&headers);
-                        resolve_session_view(svc, cookie_sid.as_deref())
-                    })
-            });
+                        svc_arc
+                            .as_any()
+                            .downcast_ref::<SessionService>()
+                            .map(|svc| {
+                                let cookie_sid = read_session_cookie(&headers);
+                                resolve_session_view(svc, cookie_sid.as_deref())
+                            })
+                    });
             // Track the cookie that came in so the
             // post-render Set-Cookie decision compares
             // against the request, not against the
@@ -1856,7 +1858,7 @@ fn handle_connection(
                 .as_ref()
                 .and_then(|r| r.original_sid.clone());
             let ctx = Context {
-                method,
+                method: method_name,
                 path: dispatch_path.clone(),
                 query: dispatch_query,
                 params,
@@ -2066,7 +2068,7 @@ fn handle_connection(
                     // still reports the would-be body
                     // size. For non-HEAD the override
                     // stays 0 and `body.len()` is used.
-                    if req_method == HttpMethod::Head {
+                    if page_method == HttpMethod::Head {
                         content_length_override = body.len();
                     }
                     (
@@ -2125,7 +2127,11 @@ fn handle_connection(
                         Vec::new(),
                     )
                 }
-                MatchResult::MethodNotAllowed { route, requested } => {
+                MatchResult::MethodNotAllowed {
+                    route,
+                    requested,
+                    requested_name,
+                } => {
                     // Spec sect.6.6: OPTIONS with no explicit OPTIONS
                     // export -> automatic 204 with Allow. Only applies
                     // when the route exports other methods (so the
@@ -2146,7 +2152,7 @@ fn handle_connection(
                         // Slice-5 path: 405 with real Allow header from
                         // the static method detector (no registry needed).
                         let prepared = crate::page::prepare(&route);
-                        let (allow, body) = render_405_body(&route, requested, prepared);
+                        let (allow, body) = render_405_body(&route, &requested_name, prepared);
                         (
                             "HTTP/1.1 405 Method Not Allowed",
                             "text/plain; charset=utf-8".to_string(),
@@ -2393,7 +2399,7 @@ fn render_per_request(
                 TspError::MethodNotAllowed,
                 &format!(
                     "TSP PoC 1 slice 16d: method {} not exported by {}\n",
-                    requested.as_str(),
+                    ctx.method,
                     route.source.display()
                 ),
             );
@@ -2671,7 +2677,7 @@ fn serve_lkg_pinned_or_500(
 
 fn render_405_body(
     route: &crate::router::Route,
-    requested: HttpMethod,
+    requested: &str,
     prepared: Result<crate::page::PageSource, crate::page::PrepareError>,
 ) -> (String, String) {
     match prepared {
@@ -2681,7 +2687,7 @@ fn render_405_body(
                 TspError::MethodNotAllowed,
                 &format!(
                     "TSP PoC 1 slice 10b: method {} not exported by {}\n",
-                    requested.as_str(),
+                    requested,
                     route.source.display()
                 ),
             );
@@ -2701,6 +2707,7 @@ fn render_405_body(
 enum ParsedRequest {
     Known {
         method: HttpMethod,
+        method_name: String,
         path: String,
         /// Raw query string without the leading `?`, or
         /// empty when the request had no query.
@@ -2787,9 +2794,11 @@ fn parse_request(head: &str) -> ParsedRequest {
     let Some(path) = parts.next() else {
         return ParsedRequest::Unknown;
     };
-    let Some(method) = HttpMethod::from_request_line(method_str) else {
+    if !is_valid_method_token(method_str) {
         return ParsedRequest::Unknown;
-    };
+    }
+    let method_name = method_str.to_ascii_uppercase();
+    let method = HttpMethod::from_request_line(&method_name).unwrap_or(HttpMethod::Any);
     let qpos = path.find('?');
     let end = qpos.unwrap_or(path.len());
     let query = if let Some(q) = qpos {
@@ -2799,10 +2808,38 @@ fn parse_request(head: &str) -> ParsedRequest {
     };
     ParsedRequest::Known {
         method,
+        method_name,
         path: path[..end].to_string(),
         query,
         headers: parse_headers(head),
     }
+}
+
+/// HTTP method names are RFC token values. Standard methods are mapped to
+/// their specialised enum values; valid extension methods use `Any` so an
+/// exported `ANY` handler can receive them.
+fn is_valid_method_token(method: &str) -> bool {
+    !method.is_empty()
+        && method.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
 }
 
 /// Split a raw request into (head, body). Reads the header
@@ -2991,7 +3028,7 @@ mod tests {
     #[test]
     fn context_to_json_basic() {
         let ctx = Context {
-            method: HttpMethod::Get,
+            method: "GET".to_string(),
             path: "/".to_string(),
             query: "".to_string(),
             params: std::collections::HashMap::new(),
@@ -3015,7 +3052,7 @@ mod tests {
     #[test]
     fn context_to_json_can_select_internal_fragment() {
         let ctx = Context {
-            method: HttpMethod::Get,
+            method: "GET".to_string(),
             path: "/users".to_string(),
             query: String::new(),
             params: std::collections::HashMap::new(),
@@ -3063,7 +3100,7 @@ mod tests {
         );
         data.insert("n".to_string(), SessionValue::Number(7.0));
         let ctx = Context {
-            method: HttpMethod::Get,
+            method: "GET".to_string(),
             path: "/".to_string(),
             query: String::new(),
             params: std::collections::HashMap::new(),
@@ -3085,7 +3122,7 @@ mod tests {
     #[test]
     fn context_to_json_serialises_no_session_as_null() {
         let ctx = Context {
-            method: HttpMethod::Get,
+            method: "GET".to_string(),
             path: "/".to_string(),
             query: String::new(),
             params: std::collections::HashMap::new(),
@@ -3245,7 +3282,7 @@ mod tests {
     #[test]
     fn context_to_json_with_query() {
         let ctx = Context {
-            method: HttpMethod::Get,
+            method: "GET".to_string(),
             path: "/search".to_string(),
             query: "q=hello&page=2".to_string(),
             params: std::collections::HashMap::new(),
@@ -3263,7 +3300,7 @@ mod tests {
         let mut params = std::collections::HashMap::new();
         params.insert("id".to_string(), "42".to_string());
         let ctx = Context {
-            method: HttpMethod::Get,
+            method: "GET".to_string(),
             path: "/users/42".to_string(),
             query: String::new(),
             params,
@@ -3279,7 +3316,7 @@ mod tests {
     #[test]
     fn context_to_json_serialises_body_and_headers() {
         let ctx = Context {
-            method: HttpMethod::Post,
+            method: "POST".to_string(),
             path: "/".to_string(),
             query: String::new(),
             params: std::collections::HashMap::new(),
@@ -3313,7 +3350,7 @@ mod tests {
         // and the wrap preamble's `new TextDecoder().decode`
         // would have read the corrupted body.
         let ctx = Context {
-            method: HttpMethod::Post,
+            method: "POST".to_string(),
             path: "/".to_string(),
             query: String::new(),
             params: std::collections::HashMap::new(),
@@ -3339,6 +3376,7 @@ mod tests {
                 path,
                 query,
                 headers,
+                ..
             } => {
                 assert_eq!(method, HttpMethod::Post);
                 assert_eq!(path, "/submit");
@@ -3350,6 +3388,22 @@ mod tests {
                 assert!(headers.contains(&("x-multi".to_string(), "a, b".to_string())));
             }
             ParsedRequest::Unknown => panic!("expected Known"),
+        }
+    }
+
+    #[test]
+    fn parse_request_accepts_extension_method_for_any_handler() {
+        let request = "BREW /coffee HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        match parse_request(request) {
+            ParsedRequest::Known {
+                method,
+                method_name,
+                ..
+            } => {
+                assert_eq!(method, HttpMethod::Any);
+                assert_eq!(method_name, "BREW");
+            }
+            ParsedRequest::Unknown => panic!("expected extension method to be accepted"),
         }
     }
 

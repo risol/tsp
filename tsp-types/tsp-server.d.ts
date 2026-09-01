@@ -31,9 +31,8 @@ declare module "tsp:server" {
   // Request / response surface (plan §13 / §10)
   // -------------------------------------------------------------
 
-  /** Standard HTTP methods. The host uppercases the request
-   * method before handing it to the page. */
-  export type HttpMethod =
+  /** Known HTTP methods. */
+  export type StandardHttpMethod =
     | "GET"
     | "POST"
     | "PUT"
@@ -41,6 +40,11 @@ declare module "tsp:server" {
     | "DELETE"
     | "HEAD"
     | "OPTIONS";
+
+  /** The method from the request line, uppercased by the host. This is a
+   * string rather than an enum/closed union because HTTP permits extension
+   * methods; an `ANY` handler can receive those methods. */
+  export type HttpMethod = string;
 
   /** Per-request cookie options (plan §15). The host's
    * Set-Cookie serializer handles the same option set;

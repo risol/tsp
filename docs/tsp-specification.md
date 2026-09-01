@@ -58,9 +58,12 @@ export function GET(ctx: Context) {
 }
 ```
 
-The supported handler names are `GET`, `POST`, `PUT`, `PATCH`, and `DELETE`.
-`HEAD` is synthesized from `GET` when needed. `OPTIONS` returns the route's
-allowed methods when no page handler is provided.
+The supported handler names are `GET`, `POST`, `PUT`, `PATCH`, `DELETE`,
+`HEAD`, `OPTIONS`, and the wildcard handler `ANY`. `ANY` receives every valid
+HTTP method that has no more specific handler, including extension methods such
+as `TRACE` or `BREW`. `HEAD` is synthesized from `GET` when needed. `OPTIONS`
+returns the route's allowed methods when no page handler is provided. A
+specific method handler takes precedence over `ANY`.
 
 The host ignores a default export for dispatch, and `tspserver check` reports
 it as a contract violation. Unknown exported functions are also rejected by

@@ -22,8 +22,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-/// Standard HTTP methods the TSP page protocol recognises (plan sect.4.2,
-/// spec sect.6.1/6.5/6.6).
+/// HTTP method handler names recognised by the TSP page protocol (plan
+/// sect.4.2, spec sect.6.1/6.5/6.6).
 ///
 /// `HEAD` is the synthetic-fallback case: when a page exports `GET` but
 /// no explicit `HEAD`, the runtime synthesises a body-less HEAD from
@@ -42,12 +42,15 @@ pub enum HttpMethod {
     Delete,
     Options,
     Head,
+    /// Internal wildcard handler. It is not a wire method; an `ANY` export
+    /// handles every valid wire method that has no more specific export.
+    Any,
 }
 
 impl HttpMethod {
-    /// Parse the verb out of an HTTP/1.1 request line. Returns `None` for
-    /// unknown verbs (e.g. `BREW`, `PURGE`) so the caller can 501 or 405
-    /// with a clean error rather than crashing the listener.
+    /// Parse a known verb out of an HTTP/1.1 request line. Extension verbs
+    /// return `None` here and are represented by `Any` at the page-dispatch
+    /// boundary after the request token has been validated.
     pub fn from_request_line(s: &str) -> Option<Self> {
         match s {
             "GET" => Some(Self::Get),
@@ -71,6 +74,7 @@ impl HttpMethod {
             Self::Delete => "DELETE",
             Self::Options => "OPTIONS",
             Self::Head => "HEAD",
+            Self::Any => "ANY",
         }
     }
 
@@ -98,6 +102,23 @@ impl HttpMethod {
     /// corresponding real method is present (HEAD -> GET,
     /// OPTIONS -> auto-Allow response).
     pub const REAL: [Self; 5] = [Self::Get, Self::Post, Self::Put, Self::Patch, Self::Delete];
+
+    /// All handler exports that can be declared directly by a page.
+    pub const HANDLERS: [Self; 8] = [
+        Self::Get,
+        Self::Post,
+        Self::Put,
+        Self::Patch,
+        Self::Delete,
+        Self::Options,
+        Self::Head,
+        Self::Any,
+    ];
+
+    /// Whether this value represents the wildcard page handler.
+    pub fn is_any(self) -> bool {
+        self == Self::Any
+    }
 }
 
 /// One segment of a route pattern. The URL template uses
@@ -202,6 +223,9 @@ pub enum MatchResult {
     MethodNotAllowed {
         route: Route,
         requested: HttpMethod,
+        /// The original wire spelling. This is different from `requested`
+        /// when an arbitrary method was mapped to the internal `Any` value.
+        requested_name: String,
     },
     /// The request path contained an invalid percent escape or invalid
     /// UTF-8 after decoding. The host returns a typed 400 response.
@@ -516,6 +540,13 @@ impl RouteTable {
     /// `/foo/` both match the same route, except for the root
     /// `/` which is its own canonical form.
     pub fn lookup(&self, path: &str, method: HttpMethod) -> MatchResult {
+        self.lookup_named(path, method, method.as_str())
+    }
+
+    /// Look up a request while preserving its original wire method name.
+    /// Unknown-but-valid methods are represented by `HttpMethod::Any` for
+    /// dispatch, but the original name must remain available for diagnostics.
+    pub fn lookup_named(&self, path: &str, method: HttpMethod, method_name: &str) -> MatchResult {
         let normalized = if path == "/" {
             "/".to_string()
         } else {
@@ -555,6 +586,11 @@ impl RouteTable {
         };
         if route.methods.contains(&method) {
             MatchResult::Found { route, method }
+        } else if route.methods.contains(&HttpMethod::Any) {
+            MatchResult::Found {
+                route,
+                method: HttpMethod::Any,
+            }
         } else if method == HttpMethod::Head && route.methods.contains(&HttpMethod::Get) {
             // Spec sect.6.5: HEAD with no explicit HEAD export -> use
             // GET, drop the body. We do not look at a separate "head
@@ -565,6 +601,7 @@ impl RouteTable {
             MatchResult::MethodNotAllowed {
                 route,
                 requested: method,
+                requested_name: method_name.to_string(),
             }
         }
     }
@@ -998,6 +1035,15 @@ mod tests {
     }
 
     #[test]
+    fn lookup_uses_any_for_extension_methods() {
+        let table = table_with(vec![rt("/", vec![], vec![HttpMethod::Any])]);
+        match table.lookup_named("/", HttpMethod::Any, "BREW") {
+            MatchResult::Found { method, .. } => assert_eq!(method, HttpMethod::Any),
+            other => panic!("expected ANY handler, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn lookup_dynamic_segment_binds_params() {
         let table = table_with(vec![rt(
             "/users/:id",
@@ -1332,7 +1378,9 @@ mod tests {
 
         // /time POST -> MethodNotAllowed on the time route (not Found)
         match table.lookup("/time", HttpMethod::Post) {
-            MatchResult::MethodNotAllowed { route, requested } => {
+            MatchResult::MethodNotAllowed {
+                route, requested, ..
+            } => {
                 assert_eq!(route.path, "/time");
                 assert_eq!(requested, HttpMethod::Post);
             }

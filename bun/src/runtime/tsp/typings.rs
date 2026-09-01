@@ -147,6 +147,10 @@ mod tests {
     #[test]
     fn tsp_server_declares_context_shape_per_freeze_item_6() {
         let server = tsp_server_dts();
+        assert!(
+            server.contains("export type HttpMethod = string;"),
+            "Context.method must remain an open string type"
+        );
         for field in &[
             "method",
             "url",
