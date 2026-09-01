@@ -40,6 +40,8 @@ Static routes take precedence over dynamic routes, and dynamic routes take
 precedence over catch-all routes. Ambiguous routes fail discovery. Static files
 belong under `public/`; `GET` and `HEAD` requests serve matching files (with
 `index.html` for `/` and directory URLs ending in `/`) before page routing.
+When `server.publicPrefix` is configured, only requests below that URL prefix
+are checked and the prefix is removed before lookup in `publicDir`.
 Missing files fall through to page routing. Public paths are traversal-safe and
 cannot escape the configured `TSP_PUBLIC_DIR`, including through symlinks.
 

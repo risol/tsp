@@ -104,6 +104,8 @@ jobs:
 
       - name: Build single-file TSP runtime
         working-directory: bun
+        env:
+          TSP_VERSION: ${{ github.ref_name }}
         run: bun run build:release
 
       - name: Package release asset
@@ -117,7 +119,13 @@ jobs:
             pages \
             public \
             tsp.config.json
-          test -f "$package_dir/tsp.config.json"
+          test -s "$package_dir/tsp.config.json"
+          grep -q '"port": 3000' "$package_dir/tsp.config.json"
+          grep -q '"publicDir": "./public"' "$package_dir/tsp.config.json"
+          grep -q '"publicPrefix": "/static"' "$package_dir/tsp.config.json"
+          grep -q '"count": 1' "$package_dir/tsp.config.json"
+          grep -q '"name": "main"' "$package_dir/tsp.config.json"
+          grep -q '"services": {}' "$package_dir/tsp.config.json"
 
       - name: Run native process-model + start-order tests (Linux/Windows)
         if: matrix.os != 'macos-latest'

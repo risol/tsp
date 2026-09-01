@@ -1,7 +1,8 @@
 # Configuration reference
 
-TSP reads runtime settings from environment variables. The packaged binary
-also accepts `--config, -c <PATH>` for the JSON service configuration file.
+TSP reads runtime settings from environment variables and `tsp.config.json`.
+The packaged binary also accepts `--config, -c <PATH>` for the JSON
+configuration file.
 
 ## Paths and server
 
@@ -62,27 +63,56 @@ startup.
 
 ## `tsp.config.json`
 
-The default file is valid JSON. `publicDir` is optional and configures the
-directory used for built-in static file serving:
+The packaged default file is valid JSON and includes every server setting with
+its default value. `services` is an empty custom-service registry by default;
+the built-in `logger`, `session`, and `time` services are registered by the
+host separately:
 
 ```json
 {
-  "publicDir": "./static",
+  "server": {
+    "host": "0.0.0.0",
+    "port": 3000,
+    "routesDir": "./pages",
+    "publicDir": "./public",
+    "publicPrefix": "/static",
+    "timeoutMs": 30000,
+    "maxBodyBytes": 1048576,
+    "development": false
+  },
+  "worker": {
+    "count": 1,
+    "maxInFlight": 2,
+    "maxRequests": 0,
+    "maxAgeMs": 0,
+    "maxMemoryBytes": 0
+  },
+  "application": {
+    "name": "main"
+  },
+  "session": {
+    "redisUrl": null
+  },
   "services": {}
 }
 ```
 
-`publicDir` is resolved relative to the process working directory. The
-precedence is `TSP_PUBLIC_DIR`, then `publicDir`, then `public`. The selected
-directory is read at server startup; restart the server after changing this
-setting. The `services` object may be omitted when no config-driven services
-are needed.
+Relative `server.routesDir` and `server.publicDir` paths are resolved relative
+to the configuration file. `server.publicPrefix` controls the URL path where
+the public directory is mounted. For example, with `publicDir: "./www/static"`
+and `publicPrefix: "/static"`, the file `./www/static/app.css` is served at
+`/static/app.css`. The prefix must be an absolute, plain URL path and is
+matched on segment boundaries. A missing prefix mounts the directory at `/`.
+Environment variables override their corresponding configuration values. The
+`services` object may be omitted when no config-driven services are needed.
 
 Config-driven services are named entries under `services`. The current host
 supports the service kinds implemented by the runtime, including `counter`,
 `kv`, `feature_flag`, and `rate_limit`. Invalid service kinds fail fast during
 startup. Service configuration changes are watched in development; a
 malformed new snapshot leaves the previous valid snapshot in place.
+Server and worker settings are read at startup; restart the server after
+changing those settings.
 
 ## Page configuration
 
@@ -109,9 +139,14 @@ For the JSON service configuration path:
 --config / -c -> TSP_CONFIG -> ./tsp.config.json
 ```
 
-For the server's route, public, and port settings, the environment variables
-are read by the host. Use `tspserver --help` as the final authority for the
-binary shipped in a release.
+For server settings, the precedence is:
+
+```text
+environment variable -> tsp.config.json -> built-in default
+```
+
+Use `tspserver --help` as the final authority for the binary shipped in a
+release.
 
 ## Generated typings
 

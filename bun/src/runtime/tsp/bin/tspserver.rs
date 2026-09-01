@@ -30,7 +30,7 @@ use bun_runtime_tsp::host;
 use bun_runtime_tsp::jsc_bridge::BunRuntime;
 use bun_runtime_tsp::module_graph::ModuleGraph;
 use bun_runtime_tsp::router::{HttpMethod, RouteTable};
-use bun_runtime_tsp::services::{load_config_public_dir, load_config_services};
+use bun_runtime_tsp::services::{load_config_services, load_runtime_config, RuntimeConfig};
 use bun_runtime_tsp::services::SESSION_STORE_CAP_DEFAULT;
 use bun_runtime_tsp::services::ServiceRegistry;
 use bun_runtime_tsp::session_backend::{MemoryBackend, RedisBackend, SessionBackend};
@@ -41,17 +41,12 @@ use bun_runtime_tsp::worker::lifecycle::RecyclePolicy;
 use bun_runtime_tsp::worker::sandbox::ResourceLimits;
 use bun_runtime_tsp::worker::application::{Application, ApplicationRegistry, WorkerGroup};
 
-/// Version string baked into the binary. The
-/// `bun-profile --revision` step in the build
-/// pipeline (see `package-tspserver.sh`) writes
-/// the runtime's git revision into the binary, but
-/// the host binary itself doesn't read it -- so we
-/// keep a hand-written version string in sync with
-/// the repo. The slice 11b PoC 1 contract is
-/// "the host binary prints its version and exits";
-/// a future slice will lift this from `Cargo.toml`
-/// or wire it to the bun revision at build time.
-const VERSION: &str = "tspserver 0.3.1";
+/// Version string baked into the binary by `build.rs`.
+/// Release builds derive it from the current `v*` Git tag;
+/// `TSP_VERSION` can override that value in CI or source archives.
+/// The slice 11b PoC 1 contract is "the host binary prints its
+/// version and exits".
+const VERSION: &str = concat!("tspserver ", env!("TSP_VERSION"));
 
 pub fn run() -> ExitCode {
     match std::env::args().nth(1).as_deref() {
@@ -86,14 +81,6 @@ fn serve_main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let port = match host::resolve_port() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("TSP: {e}");
-            return ExitCode::from(2);
-        }
-    };
-
     let config_text = if config_path.is_file() {
         Some(
             std::fs::read_to_string(&config_path)
@@ -102,19 +89,26 @@ fn serve_main() -> ExitCode {
     } else {
         None
     };
-    let config_public_dir = match config_text
-        .as_deref()
-        .map(load_config_public_dir)
-        .transpose()
-    {
-        Ok(value) => value.flatten(),
+    let file_config = match config_text.as_deref().map(load_runtime_config).transpose() {
+        Ok(value) => value.unwrap_or_default(),
         Err(error) => {
             eprintln!("TSP: parse {}: {error}", config_path.display());
             return ExitCode::from(2);
         }
     };
 
-    let routes_dir = resolve_routes_dir();
+    let port = match std::env::var("TSP_PORT") {
+        Ok(value) => match value.parse::<u16>() {
+            Ok(port) => port,
+            Err(_) => {
+                eprintln!("TSP: TSP_PORT is not a u16: {value:?}");
+                return ExitCode::from(2);
+            }
+        },
+        Err(_) => file_config.port,
+    };
+
+    let routes_dir = resolve_routes_dir_for_config(&file_config, &config_path);
     eprintln!("TSP: scanning pages from {}", routes_dir.display());
     // Slice 15a: the RouteTable is now Arc<Mutex<...>> under
     // the hood so the watcher can add/remove routes while
@@ -161,20 +155,21 @@ fn serve_main() -> ExitCode {
         eprintln!("TSP: cannot create worker socket directory: {error}");
         return ExitCode::from(2);
     }
-    let worker_count = std::env::var("TSP_WORKER_COUNT")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(1)
+    let worker_count = env_usize("TSP_WORKER_COUNT")
+        .unwrap_or(file_config.worker_count)
         .max(1);
     let max_in_flight = std::env::var("TSP_WORKER_MAX_IN_FLIGHT")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(worker_count * 2)
+        .unwrap_or(file_config.worker_max_in_flight)
         .max(worker_count);
     let recycle_policy = RecyclePolicy {
-        max_requests: env_u64("TSP_WORKER_MAX_REQUESTS"),
-        max_age: env_u64("TSP_WORKER_MAX_AGE_MS").map(std::time::Duration::from_millis),
-        max_memory_bytes: env_u64("TSP_WORKER_MAX_MEMORY_BYTES"),
+        max_requests: env_u64("TSP_WORKER_MAX_REQUESTS").or(file_config.worker_max_requests),
+        max_age: env_u64("TSP_WORKER_MAX_AGE_MS")
+            .or(file_config.worker_max_age_ms)
+            .map(std::time::Duration::from_millis),
+        max_memory_bytes: env_u64("TSP_WORKER_MAX_MEMORY_BYTES")
+            .or(file_config.worker_max_memory_bytes),
     };
     let resource_limits = ResourceLimits {
         cgroup_root: std::env::var_os("TSP_CGROUP_ROOT").map(PathBuf::from),
@@ -186,7 +181,8 @@ fn serve_main() -> ExitCode {
         .with_recycle_policy(recycle_policy)
         .with_resource_limits(resource_limits);
     let pool = Arc::new(pool);
-    let application_name = std::env::var("TSP_APPLICATION_NAME").unwrap_or_else(|_| "main".into());
+    let application_name = std::env::var("TSP_APPLICATION_NAME")
+        .unwrap_or_else(|_| file_config.application_name.clone());
     ApplicationRegistry::global().register(Application::new(
         application_name,
         WorkerGroup::new(Arc::clone(&pool)),
@@ -221,8 +217,11 @@ fn serve_main() -> ExitCode {
     // stays false, every `lookup` returns `None` (so the
     // host mints a fresh session), and the next command
     // self-heals once Redis is reachable again.
-    let session_backend: Arc<dyn SessionBackend> = match std::env::var("TSP_REDIS_URL") {
-        Ok(url) if !url.is_empty() => match RedisBackend::with_default_ttl(&url) {
+    let session_backend: Arc<dyn SessionBackend> = match std::env::var("TSP_REDIS_URL")
+        .ok()
+        .or(file_config.redis_url.clone())
+    {
+        Some(url) if !url.is_empty() => match RedisBackend::with_default_ttl(&url) {
             Ok(backend) => {
                 let available = backend.is_available();
                 let arc: Arc<dyn SessionBackend> = Arc::new(backend);
@@ -371,24 +370,33 @@ fn serve_main() -> ExitCode {
         );
     }
 
-    let public_root = host::resolve_public_root_with_config(
-        config_public_dir,
-        config_path.parent(),
-    );
+    let public_root =
+        host::resolve_public_root_with_config(file_config.public_dir, config_path.parent());
+    let public_prefix = file_config.public_prefix.clone();
     eprintln!(
-        "TSP: public directory = {}",
+        "TSP: public directory = {} (prefix = {})",
         public_root
             .as_deref()
-            .map_or_else(|| "(disabled)".to_string(), |path| path.display().to_string())
+            .map_or_else(|| "(disabled)".to_string(), |path| path.display().to_string()),
+        public_prefix.as_deref().unwrap_or("/")
     );
-    if let Err(e) = host::serve_with_public_root(
-        "0.0.0.0",
+    let request_settings = host::RequestSettings {
+        max_body_bytes: env_usize("TSP_MAX_BODY_BYTES").unwrap_or(file_config.max_body_bytes),
+        timeout_ms: env_u64("TSP_TIMEOUT_MS").unwrap_or(file_config.timeout_ms),
+        development: std::env::var("TSP_DEVELOPMENT")
+            .map(|value| value == "1")
+            .unwrap_or(file_config.development),
+    };
+    if let Err(e) = host::serve_with_public_root_and_settings_and_prefix(
+        &file_config.host,
         port,
         routes,
         registry,
         bun,
         services,
+        request_settings,
         public_root,
+        public_prefix,
     ) {
         // serve returns only on a fatal listener error; dropping
         // watcher_handle here stops + joins the watcher thread.
@@ -399,11 +407,25 @@ fn serve_main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn resolve_routes_dir() -> PathBuf {
-    match std::env::var("TSP_ROUTES_DIR") {
-        Ok(s) => PathBuf::from(s),
-        Err(_) => PathBuf::from("pages"),
+fn resolve_routes_dir_for_config(config: &RuntimeConfig, config_path: &PathBuf) -> PathBuf {
+    let path = std::env::var_os("TSP_ROUTES_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| config.routes_dir.clone());
+    if path.is_absolute() {
+        path
+    } else {
+        config_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(|parent| parent.join(&path))
+            .unwrap_or(path)
     }
+}
+
+fn resolve_routes_dir() -> PathBuf {
+    std::env::var_os("TSP_ROUTES_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("pages"))
 }
 
 fn resolve_config_path() -> Result<PathBuf, String> {
@@ -462,6 +484,14 @@ fn env_u64(name: &str) -> Option<u64> {
     std::env::var(name)
         .ok()?
         .parse::<u64>()
+        .ok()
+        .filter(|value| *value > 0)
+}
+
+fn env_usize(name: &str) -> Option<usize> {
+    std::env::var(name)
+        .ok()?
+        .parse::<usize>()
         .ok()
         .filter(|value| *value > 0)
 }

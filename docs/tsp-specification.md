@@ -42,8 +42,11 @@ app/
 ```
 
 `TSP_ROUTES_DIR` and `TSP_PUBLIC_DIR` can change the first two roots.
-`tsp.config.json` may set `publicDir` when the environment variable is not
-provided.
+`tsp.config.json` contains the default `server`, `worker`, `application`,
+`session`, and `services` sections. Relative `server.routesDir` and
+`server.publicDir` paths are resolved relative to the configuration file;
+`server.publicPrefix` optionally mounts the public directory below a URL path;
+environment variables take precedence over the file.
 
 ## 3. Page modules
 
@@ -297,10 +300,12 @@ generations and therefore survive reloads.
 Files under `public/` are static assets. They are not parsed as route modules
 and MUST NOT be placed in `pages/` as a substitute for static hosting.
 
-The native host serves a matching public file for `GET` and `HEAD` requests;
-the query string is ignored when resolving the file. `/` and directory URLs
-ending in `/` serve `index.html` when present. The response includes a
-content type inferred from the file extension, a byte-accurate
+The native host serves a matching public file for `GET` and `HEAD` requests.
+When `server.publicPrefix` is configured, only requests below that URL prefix
+are eligible for public-file lookup and the prefix is removed before resolving
+the file below `publicDir`. The query string is ignored when resolving the
+file. `/` and directory URLs ending in `/` serve `index.html` when present.
+The response includes a content type inferred from the file extension, a byte-accurate
 `Content-Length`, `X-Content-Type-Options: nosniff`, and
 `Cache-Control: public, max-age=3600`. A missing public file falls through to
 normal page routing, so an application route may handle that URL.

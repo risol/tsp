@@ -4,6 +4,14 @@ All notable changes to TSP will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Added `server.publicPrefix` for mounting `publicDir` below a URL prefix.
+  This supports layouts such as `publicDir: "./www/static"` with
+  `publicPrefix: "/static"`, serving `./www/static/app.css` at
+  `/static/app.css` while keeping the public directory itself as the path
+  traversal boundary.
+
 ### Documentation
 
 - Reorganized the documentation around one current runtime specification,

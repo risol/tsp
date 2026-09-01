@@ -1203,40 +1203,47 @@ const DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
 /// `0` disables the timeout watchdog (slice 16i).
 const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 30_000;
 
-fn resolve_max_body_bytes() -> usize {
-    match std::env::var("TSP_MAX_BODY_BYTES") {
-        Ok(s) => s.parse::<usize>().unwrap_or(DEFAULT_MAX_BODY_BYTES),
-        Err(_) => DEFAULT_MAX_BODY_BYTES,
+/// Request-level settings resolved once at server startup from the config
+/// file and environment. Keeping them in the host context avoids rereading
+/// environment variables for every request.
+#[derive(Clone, Copy, Debug)]
+pub struct RequestSettings {
+    pub max_body_bytes: usize,
+    pub timeout_ms: u64,
+    pub development: bool,
+}
+
+impl Default for RequestSettings {
+    fn default() -> Self {
+        Self {
+            max_body_bytes: DEFAULT_MAX_BODY_BYTES,
+            timeout_ms: DEFAULT_REQUEST_TIMEOUT_MS,
+            development: false,
+        }
     }
 }
 
-/// Resolve the per-request timeout (spec sect.13.7).
-/// `0` means "no timeout" (the abort signal is still
-/// created and wired but the watchdog never fires).
-fn resolve_request_timeout() -> u64 {
-    match std::env::var("TSP_TIMEOUT_MS") {
-        Ok(s) => s.parse::<u64>().unwrap_or(DEFAULT_REQUEST_TIMEOUT_MS),
-        Err(_) => DEFAULT_REQUEST_TIMEOUT_MS,
+impl RequestSettings {
+    pub fn from_environment() -> Self {
+        Self {
+            max_body_bytes: std::env::var("TSP_MAX_BODY_BYTES")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(DEFAULT_MAX_BODY_BYTES),
+            timeout_ms: std::env::var("TSP_TIMEOUT_MS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(DEFAULT_REQUEST_TIMEOUT_MS),
+            development: matches!(
+                std::env::var("TSP_DEVELOPMENT").as_deref(),
+                Ok("1")
+            ),
+        }
     }
-}
-
-/// §32.1: dev-mode flag. `TSP_DEVELOPMENT=1` switches the
-/// host from prod to dev: a 500 page-level error
-/// surfaces as a self-contained HTML error page
-/// (name, message, stack) instead of a JSON body. The
-/// page-level contract is unchanged -- the wire 500
-/// response is the same; only the rendered body
-/// changes between dev and prod. The flag is read on
-/// every request so a process restart is not required
-/// to flip modes (and so a single test can boot a
-/// master with `TSP_DEVELOPMENT=1` and a second with
-/// the default prod behavior).
-fn dev_mode() -> bool {
-    matches!(std::env::var("TSP_DEVELOPMENT").as_deref(), Ok("1"))
 }
 
 /// §32.1: render the self-contained HTML error page for
-/// `dev_mode()` requests. The input is the wrap's
+/// development-mode requests. The input is the wrap's
 /// error envelope body (a JSON object with `kind`,
 /// `error`, `message`, `stack` fields) and the wire
 /// status line. The output is the page body and its
@@ -1424,6 +1431,55 @@ pub fn serve_with_public_root(
     services: &'static RwLock<ServiceRegistry>,
     public_root: Option<std::path::PathBuf>,
 ) -> Result<(), HostError> {
+    serve_with_public_root_and_settings(
+        host,
+        port,
+        routes,
+        registry,
+        bun,
+        services,
+        RequestSettings::from_environment(),
+        public_root,
+    )
+}
+
+/// Bind and serve with explicit request settings and public asset root.
+pub fn serve_with_public_root_and_settings(
+    host: &str,
+    port: u16,
+    routes: Arc<RouteTable>,
+    registry: &'static PageRegistry,
+    bun: &'static BunRuntime,
+    services: &'static RwLock<ServiceRegistry>,
+    settings: RequestSettings,
+    public_root: Option<std::path::PathBuf>,
+) -> Result<(), HostError> {
+    serve_with_public_root_and_settings_and_prefix(
+        host,
+        port,
+        routes,
+        registry,
+        bun,
+        services,
+        settings,
+        public_root,
+        None,
+    )
+}
+
+/// Bind and serve with explicit request settings, public asset root, and URL
+/// prefix. The prefix is already normalized by the configuration loader.
+pub fn serve_with_public_root_and_settings_and_prefix(
+    host: &str,
+    port: u16,
+    routes: Arc<RouteTable>,
+    registry: &'static PageRegistry,
+    bun: &'static BunRuntime,
+    services: &'static RwLock<ServiceRegistry>,
+    settings: RequestSettings,
+    public_root: Option<std::path::PathBuf>,
+    public_prefix: Option<String>,
+) -> Result<(), HostError> {
     let addr = format!("{host}:{port}");
     let listener = TcpListener::bind(&addr).map_err(HostError::Bind)?;
     eprintln!(
@@ -1444,6 +1500,7 @@ pub fn serve_with_public_root(
         eprintln!("TSP: accepted {peer}");
         let routes_for_thread = Arc::clone(&routes);
         let public_root_for_thread = public_root.clone();
+        let public_prefix_for_thread = public_prefix.clone();
         thread::spawn(move || {
             if let Err(e) = handle_connection(
                 stream,
@@ -1451,7 +1508,9 @@ pub fn serve_with_public_root(
                 registry,
                 bun,
                 services,
+                settings,
                 public_root_for_thread.as_deref(),
+                public_prefix_for_thread.as_deref(),
             ) {
                 eprintln!("TSP: {e}");
             }
@@ -1498,19 +1557,21 @@ fn handle_connection(
     registry: &PageRegistry,
     bun: &BunRuntime,
     services: &RwLock<ServiceRegistry>,
+    settings: RequestSettings,
     public_root: Option<&std::path::Path>,
+    public_prefix: Option<&str>,
 ) -> Result<(), HostError> {
     // Slice 16d: read the full request (header block up to
     // CRLFCRLF + exactly Content-Length body bytes). Body
     // over the configured limit (TSP_MAX_BODY_BYTES,
     // default 1 MiB) is rejected with 413 before the page
     // sees it (spec sect.14.2).
-    let max_body = resolve_max_body_bytes();
+    let max_body = settings.max_body_bytes;
     // Slice 16i: per-request timeout (spec sect.13.7).
     // `0` means "no timeout" -- the abort signal is still
     // created and wired in the wrap preamble, but the
     // watchdog never fires.
-    let timeout_ms = resolve_request_timeout();
+    let timeout_ms = settings.timeout_ms;
     let (head, body) = match read_request(&mut stream, max_body)? {
         ReadOutcome::Complete { head, body } => (head, body),
         ReadOutcome::BodyTooLarge { limit } => {
@@ -1717,9 +1778,11 @@ fn handle_connection(
             }
         }
         if matches!(*method, HttpMethod::Get | HttpMethod::Head) {
-            if let Some(root) = public_root {
-                if let Some(asset) =
-                    crate::static_files::load(root, path).map_err(HostError::Connection)?
+            if let (Some(root), Some(asset_path)) =
+                (public_root, strip_public_prefix(public_prefix, path))
+            {
+                if let Some(asset) = crate::static_files::load(root, asset_path)
+                    .map_err(HostError::Connection)?
                 {
                     let head = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nX-Content-Type-Options: nosniff\r\nCache-Control: public, max-age=3600\r\nConnection: close\r\n\r\n",
@@ -1819,7 +1882,7 @@ fn handle_connection(
                 | MatchResult::FoundHeadOverGet { route } => {
                     match crate::page::prepare(route) {
                         Ok(page) => {
-                            let global = resolve_max_body_bytes();
+                            let global = settings.max_body_bytes;
                             page.config_body_limit
                                 .map(|n| n.min(global))
                         }
@@ -2095,7 +2158,7 @@ fn handle_connection(
                             .iter()
                             .any(|(k, v)| k.eq_ignore_ascii_case("x-tsp-error") && v == "page")
                     {
-                        if dev_mode() {
+                        if settings.development {
                             let (html_body, html_ct) =
                                 render_dev_error_page(&outcome.body, &outcome.status_line);
                             (html_body, html_ct, Vec::new())
@@ -2357,6 +2420,25 @@ fn handle_connection(
     }
     let _ = stream.shutdown(Shutdown::Both);
     Ok(())
+}
+
+/// Return the path that should be resolved below `public_root`. A configured
+/// prefix is a URL boundary: `/static/app.js` matches `/static`, while
+/// `/static-app.js` does not. The original request path remains unchanged for
+/// page routing when the prefix does not match or the asset is missing.
+pub fn strip_public_prefix<'a>(prefix: Option<&str>, request_path: &'a str) -> Option<&'a str> {
+    let Some(prefix) = prefix else {
+        return Some(request_path);
+    };
+    if prefix == "/" {
+        return Some(request_path);
+    }
+    if request_path == prefix {
+        return Some("/");
+    }
+    request_path
+        .strip_prefix(prefix)
+        .filter(|remainder| remainder.starts_with('/'))
 }
 
 /// Slice 16d: build a page for a request whose output depends
@@ -4106,5 +4188,61 @@ mod tests {
         // caller has no config_root.
         assert_eq!(resolved.as_deref(), Some(std::path::Path::new(".")));
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn public_prefix_matches_a_url_segment_boundary() {
+        assert_eq!(
+            strip_public_prefix(Some("/static"), "/static/app.css"),
+            Some("/app.css")
+        );
+        assert_eq!(
+            strip_public_prefix(Some("/static"), "/static/"),
+            Some("/")
+        );
+        assert_eq!(
+            strip_public_prefix(Some("/static"), "/static"),
+            Some("/")
+        );
+        assert_eq!(
+            strip_public_prefix(Some("/static"), "/static-app.css"),
+            None
+        );
+        assert_eq!(
+            strip_public_prefix(Some("/static"), "/assets/app.css"),
+            None
+        );
+        assert_eq!(
+            strip_public_prefix(None, "/assets/app.css"),
+            Some("/assets/app.css")
+        );
+        assert_eq!(
+            strip_public_prefix(Some("/"), "/assets/app.css"),
+            Some("/assets/app.css")
+        );
+    }
+
+    #[test]
+    fn public_prefix_maps_a_static_asset_to_the_public_root() {
+        let root = std::env::temp_dir().join(format!(
+            "tspserver-public-prefix-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("app.css"), "body { color: red; }").unwrap();
+
+        let asset_path = strip_public_prefix(Some("/static"), "/static/app.css")
+            .expect("the configured prefix should match");
+        let asset = crate::static_files::load(&root, asset_path)
+            .unwrap()
+            .expect("the stripped path should resolve below publicDir");
+        assert_eq!(asset.body, b"body { color: red; }");
+        assert_eq!(asset.content_type, "text/css; charset=utf-8");
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

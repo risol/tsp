@@ -61,6 +61,49 @@ pub const BUILTIN_TIME: &str = "time";
 /// this cap.
 pub const SESSION_STORE_CAP_DEFAULT: usize = 10_000;
 
+/// Server settings loaded from `tsp.config.json`. Environment variables are
+/// applied by the binary after this structure is loaded and take precedence.
+#[derive(Clone, Debug)]
+pub struct RuntimeConfig {
+    pub host: String,
+    pub port: u16,
+    pub routes_dir: PathBuf,
+    pub public_dir: Option<PathBuf>,
+    pub public_prefix: Option<String>,
+    pub timeout_ms: u64,
+    pub max_body_bytes: usize,
+    pub development: bool,
+    pub worker_count: usize,
+    pub worker_max_in_flight: usize,
+    pub worker_max_requests: Option<u64>,
+    pub worker_max_age_ms: Option<u64>,
+    pub worker_max_memory_bytes: Option<u64>,
+    pub application_name: String,
+    pub redis_url: Option<String>,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            host: "0.0.0.0".to_string(),
+            port: 3000,
+            routes_dir: PathBuf::from("pages"),
+            public_dir: None,
+            public_prefix: None,
+            timeout_ms: 30_000,
+            max_body_bytes: 1024 * 1024,
+            development: false,
+            worker_count: 1,
+            worker_max_in_flight: 2,
+            worker_max_requests: None,
+            worker_max_age_ms: None,
+            worker_max_memory_bytes: None,
+            application_name: "main".to_string(),
+            redis_url: None,
+        }
+    }
+}
+
 /// Where a service lives, per spec sect.17.1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceScope {
@@ -1301,6 +1344,86 @@ impl Service for RateLimitService {
     }
 }
 
+/// Load the server and worker defaults from the application configuration.
+/// The parser intentionally accepts only the fields that the native host can
+/// apply. Unknown fields remain forward-compatible and are ignored.
+pub fn load_runtime_config(text: &str) -> Result<RuntimeConfig, String> {
+    let mut config = RuntimeConfig::default();
+    let server = find_top_level_object_for_key(text, "server")
+        .map(|(start, end)| &text[start..end]);
+    let worker = find_top_level_object_for_key(text, "worker")
+        .map(|(start, end)| &text[start..end]);
+    let application = find_top_level_object_for_key(text, "application")
+        .map(|(start, end)| &text[start..end]);
+    let session = find_top_level_object_for_key(text, "session")
+        .map(|(start, end)| &text[start..end]);
+    let server = server.as_deref().unwrap_or("");
+    let worker = worker.as_deref().unwrap_or("");
+    let application = application.as_deref().unwrap_or("");
+    let session = session.as_deref().unwrap_or("");
+
+    if let Some(value) = find_string_field(server, "host") {
+        if value.trim().is_empty() {
+            return Err("config: `server.host` must not be empty".to_string());
+        }
+        config.host = value;
+    }
+    if let Some(value) = find_number_field(server, "port") {
+        config.port = u16::try_from(value)
+            .map_err(|_| "config: `server.port` must be a valid u16".to_string())?;
+    }
+    if let Some(value) = find_string_field(server, "routesDir") {
+        if value.trim().is_empty() {
+            return Err("config: `server.routesDir` must not be empty".to_string());
+        }
+        config.routes_dir = PathBuf::from(value);
+    }
+    if let Some(value) = find_string_field(server, "publicDir") {
+        if value.trim().is_empty() {
+            return Err("config: `server.publicDir` must not be empty".to_string());
+        }
+        config.public_dir = Some(PathBuf::from(value));
+    }
+    if let Some(value) = find_string_field(server, "publicPrefix") {
+        config.public_prefix = Some(normalize_public_prefix(&value, "server.publicPrefix")?);
+    }
+    if let Some(value) = find_number_field(server, "timeoutMs") {
+        config.timeout_ms = value;
+    }
+    if let Some(value) = find_number_field(server, "maxBodyBytes") {
+        config.max_body_bytes = usize::try_from(value)
+            .map_err(|_| "config: `server.maxBodyBytes` is too large".to_string())?;
+    }
+    if let Some(value) = find_bool_field(server, "development") {
+        config.development = value;
+    }
+    if let Some(value) = find_number_field(worker, "count") {
+        config.worker_count = usize::try_from(value)
+            .map_err(|_| "config: `worker.count` is too large".to_string())?
+            .max(1);
+    }
+    if let Some(value) = find_number_field(worker, "maxInFlight") {
+        config.worker_max_in_flight = usize::try_from(value)
+            .map_err(|_| "config: `worker.maxInFlight` is too large".to_string())?
+            .max(config.worker_count);
+    } else {
+        config.worker_max_in_flight = config.worker_count.saturating_mul(2);
+    }
+    config.worker_max_requests = find_number_field(worker, "maxRequests");
+    config.worker_max_age_ms = find_number_field(worker, "maxAgeMs");
+    config.worker_max_memory_bytes = find_number_field(worker, "maxMemoryBytes");
+    if let Some(value) = find_string_field(application, "name") {
+        if value.trim().is_empty() {
+            return Err("config: `application.name` must not be empty".to_string());
+        }
+        config.application_name = value;
+    }
+    if let Some(value) = find_string_field(session, "redisUrl") {
+        config.redis_url = Some(value);
+    }
+    Ok(config)
+}
+
 /// Hand-rolled config loader for the host-side services
 /// registry. Reads a small JSON file with the shape
 ///
@@ -1414,17 +1537,54 @@ pub fn load_config_services(
     Ok(services)
 }
 
-/// Read the optional top-level public asset directory from the shared TSP
+/// Read the optional server public asset directory from the shared TSP
 /// configuration file. The environment variable `TSP_PUBLIC_DIR` is applied
 /// by the host after this value is read and takes precedence over it.
 pub fn load_config_public_dir(text: &str) -> Result<Option<PathBuf>, String> {
-    let Some(value) = find_top_level_string_field(text, "publicDir")? else {
-        return Ok(None);
-    };
-    if value.trim().is_empty() {
-        return Err("config: `publicDir` must not be empty".to_string());
+    Ok(load_runtime_config(text)?.public_dir)
+}
+
+/// Read the optional URL prefix for the public asset directory from the
+/// runtime configuration. The value is normalized before it reaches the
+/// request path, so callers receive the canonical form.
+pub fn load_config_public_prefix(text: &str) -> Result<Option<String>, String> {
+    Ok(load_runtime_config(text)?.public_prefix)
+}
+
+/// Normalize a URL path prefix used to expose the configured public directory.
+/// The returned value never has a trailing slash, except for the root prefix
+/// `/`. Prefixes are matched against the raw request path before file decoding,
+/// so encoded and ambiguous path forms are rejected at configuration time.
+pub fn normalize_public_prefix(value: &str, field: &str) -> Result<String, String> {
+    if value.is_empty() {
+        return Err(format!("config: `{field}` must not be empty"));
     }
-    Ok(Some(PathBuf::from(value)))
+    if value.trim() != value {
+        return Err(format!(
+            "config: `{field}` must not contain leading or trailing whitespace"
+        ));
+    }
+    if !value.starts_with('/') {
+        return Err(format!("config: `{field}` must start with `/`"));
+    }
+    if value.contains(['\\', '\0', '?', '#', '%']) {
+        return Err(format!(
+            "config: `{field}` must be a plain URL path prefix"
+        ));
+    }
+
+    let normalized = value.trim_end_matches('/');
+    if normalized.is_empty() {
+        return Ok("/".to_string());
+    }
+    if normalized.split('/').skip(1).any(|segment| {
+        segment.is_empty() || segment == "." || segment == ".."
+    }) {
+        return Err(format!(
+            "config: `{field}` contains an empty or traversal path segment"
+        ));
+    }
+    Ok(normalized.to_string())
 }
 
 /// Parse `{ "k1": "v1", "k2": "v2" }` inside `obj` (the
@@ -1677,105 +1837,6 @@ fn find_top_level_object_for_key(text: &str, key: &str) -> Option<(usize, usize)
     read_balanced_object(text, p).map(|(_, end)| (p, end))
 }
 
-/// Locate a string-valued field on the root JSON object. This is intentionally
-/// a small parser matching the configuration parser above; it avoids treating
-/// a nested service field with the same name as the runtime setting.
-fn find_top_level_string_field(text: &str, key: &str) -> Result<Option<String>, String> {
-    let first_brace = text
-        .find('{')
-        .ok_or_else(|| "config: top-level value must be an object".to_string())?;
-    let (object, _) = read_balanced_object(text, first_brace)
-        .ok_or_else(|| "config: unbalanced top-level object".to_string())?;
-    let mut cursor = 1;
-    loop {
-        cursor = skip_ws(object, cursor);
-        if cursor >= object.len() || object.as_bytes()[cursor] == b'}' {
-            return Ok(None);
-        }
-        let (field, after_field) = parse_quoted_string(object, cursor)
-            .ok_or_else(|| "config: expected a quoted top-level field name".to_string())?;
-        let mut value_start = skip_ws(object, after_field);
-        if value_start >= object.len() || object.as_bytes()[value_start] != b':' {
-            return Err(format!("config: expected `:` after `{field}`"));
-        }
-        value_start = skip_ws(object, value_start + 1);
-
-        if field == key {
-            let Some((value, after_value)) = parse_quoted_string(object, value_start) else {
-                return Err(format!("config: `{key}` must be a JSON string"));
-            };
-            let after_value = skip_ws(object, after_value);
-            if after_value < object.len()
-                && object.as_bytes()[after_value] != b','
-                && object.as_bytes()[after_value] != b'}'
-            {
-                return Err(format!("config: unexpected data after `{key}`"));
-            }
-            return Ok(Some(value));
-        }
-
-        cursor = skip_json_value(object, value_start)
-            .ok_or_else(|| format!("config: invalid value for `{field}`"))?;
-        cursor = skip_ws(object, cursor);
-        if cursor < object.len() && object.as_bytes()[cursor] == b',' {
-            cursor += 1;
-        } else if cursor >= object.len() || object.as_bytes()[cursor] != b'}' {
-            return Err("config: expected `,` or `}` after field value".to_string());
-        }
-    }
-}
-
-/// Skip one JSON value while scanning root configuration fields. The full
-/// service parser validates the supported shapes separately; this helper only
-/// needs to keep nested objects, arrays, and strings balanced.
-fn skip_json_value(s: &str, start: usize) -> Option<usize> {
-    if start >= s.len() {
-        return None;
-    }
-    match s.as_bytes()[start] {
-        b'"' => parse_quoted_string(s, start).map(|(_, end)| end),
-        b'{' | b'[' => {
-            let opening = s.as_bytes()[start];
-            let closing = if opening == b'{' { b'}' } else { b']' };
-            let mut depth = 0usize;
-            let mut in_string = false;
-            let mut escaped = false;
-            for index in start..s.len() {
-                let byte = s.as_bytes()[index];
-                if in_string {
-                    if escaped {
-                        escaped = false;
-                    } else if byte == b'\\' {
-                        escaped = true;
-                    } else if byte == b'"' {
-                        in_string = false;
-                    }
-                    continue;
-                }
-                match byte {
-                    b'"' => in_string = true,
-                    value if value == opening => depth += 1,
-                    value if value == closing => {
-                        depth = depth.checked_sub(1)?;
-                        if depth == 0 {
-                            return Some(index + 1);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            None
-        }
-        _ => {
-            let mut end = start;
-            while end < s.len() && !matches!(s.as_bytes()[end], b',' | b'}') {
-                end += 1;
-            }
-            (end > start).then_some(end)
-        }
-    }
-}
-
 fn find_string_field(obj: &str, key: &str) -> Option<String> {
     let needle = format!("\"{}\"", key);
     let idx = obj.find(&needle)?;
@@ -1806,6 +1867,24 @@ fn find_number_field(obj: &str, key: &str) -> Option<u64> {
         return None;
     }
     obj[start..p].parse::<u64>().ok()
+}
+
+fn find_bool_field(obj: &str, key: &str) -> Option<bool> {
+    let needle = format!("\"{}\"", key);
+    let idx = obj.find(&needle)?;
+    let after = idx + needle.len();
+    let mut p = skip_ws(obj, after);
+    if p >= obj.len() || obj.as_bytes()[p] != b':' {
+        return None;
+    }
+    p = skip_ws(obj, p + 1);
+    if obj[p..].starts_with("true") {
+        Some(true)
+    } else if obj[p..].starts_with("false") {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 fn json_string_field(s: &str) -> String {
@@ -2419,15 +2498,28 @@ mod tests {
     #[test]
     fn config_parser_reads_optional_public_dir() {
         let text = r#"{
-          "publicDir": "./static",
+          "server": {
+            "publicDir": "./static",
+            "publicPrefix": "/static/"
+          },
           "services": {}
         }"#;
         assert_eq!(
             load_config_public_dir(text).expect("publicDir should parse"),
             Some(PathBuf::from("./static"))
         );
+        assert_eq!(
+            load_runtime_config(text)
+                .expect("publicPrefix should parse")
+                .public_prefix,
+            Some("/static".to_string())
+        );
+        assert_eq!(
+            load_config_public_prefix(text).expect("publicPrefix should parse"),
+            Some("/static".to_string())
+        );
 
-        let text_without_services = r#"{ "publicDir": "assets" }"#;
+        let text_without_services = r#"{ "server": { "publicDir": "assets" } }"#;
         assert_eq!(
             load_config_services(text_without_services)
                 .expect("services should be optional")
@@ -2438,7 +2530,68 @@ mod tests {
             load_config_public_dir(r#"{ "services": {} }"#).expect("missing value is allowed"),
             None
         );
-        assert!(load_config_public_dir(r#"{ "publicDir": "" }"#).is_err());
-        assert!(load_config_public_dir(r#"{ "publicDir": 42 }"#).is_err());
+        assert!(load_config_public_dir(r#"{ "server": { "publicDir": "" } }"#).is_err());
+        assert_eq!(
+            load_config_public_dir(r#"{ "server": { "publicDir": 42 } }"#)
+                .expect("non-string server publicDir is ignored"),
+            None
+        );
+        assert!(
+            load_runtime_config(r#"{ "server": { "publicPrefix": "static" } }"#).is_err()
+        );
+        assert!(load_runtime_config(r#"{ "server": { "publicPrefix": "" } }"#).is_err());
+        assert!(
+            load_runtime_config(r#"{ "server": { "publicPrefix": "/static/../x" } }"#)
+                .is_err()
+        );
+
+        let legacy = load_runtime_config(
+            r#"{ "publicDir": "./static", "publicPrefix": "/static" }"#,
+        )
+        .expect("legacy top-level fields are ignored as unknown fields");
+        assert_eq!(legacy.public_dir, None);
+        assert_eq!(legacy.public_prefix, None);
+    }
+
+    #[test]
+    fn runtime_config_reads_server_worker_and_application_defaults() {
+        let text = r#"{
+          "server": {
+            "host": "127.0.0.1",
+            "port": 9100,
+            "routesDir": "./routes",
+            "publicDir": "./assets",
+            "publicPrefix": "/static",
+            "timeoutMs": 1200,
+            "maxBodyBytes": 2048,
+            "development": true
+          },
+          "worker": {
+            "count": 3,
+            "maxInFlight": 7,
+            "maxRequests": 100,
+            "maxAgeMs": 5000,
+            "maxMemoryBytes": 4096
+          },
+          "application": { "name": "demo" },
+          "session": { "redisUrl": "redis://127.0.0.1:6379" },
+          "services": {}
+        }"#;
+        let config = load_runtime_config(text).expect("runtime config should parse");
+        assert_eq!(config.host, "127.0.0.1");
+        assert_eq!(config.port, 9100);
+        assert_eq!(config.routes_dir, PathBuf::from("./routes"));
+        assert_eq!(config.public_dir, Some(PathBuf::from("./assets")));
+        assert_eq!(config.public_prefix, Some("/static".to_string()));
+        assert_eq!(config.timeout_ms, 1200);
+        assert_eq!(config.max_body_bytes, 2048);
+        assert!(config.development);
+        assert_eq!(config.worker_count, 3);
+        assert_eq!(config.worker_max_in_flight, 7);
+        assert_eq!(config.worker_max_requests, Some(100));
+        assert_eq!(config.worker_max_age_ms, Some(5000));
+        assert_eq!(config.worker_max_memory_bytes, Some(4096));
+        assert_eq!(config.application_name, "demo");
+        assert_eq!(config.redis_url.as_deref(), Some("redis://127.0.0.1:6379"));
     }
 }

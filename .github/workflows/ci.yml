@@ -175,7 +175,14 @@ jobs:
         run: bash scripts/package-tspserver.sh bun/build/release/bun dist/tspserver routes public tsp.config.json
 
       - name: Verify default config is packaged
-        run: test -f dist/tspserver/tsp.config.json
+        run: |
+          test -s dist/tspserver/tsp.config.json
+          grep -q '"port": 3000' dist/tspserver/tsp.config.json
+          grep -q '"publicDir": "./public"' dist/tspserver/tsp.config.json
+          grep -q '"publicPrefix": "/static"' dist/tspserver/tsp.config.json
+          grep -q '"count": 1' dist/tspserver/tsp.config.json
+          grep -q '"name": "main"' dist/tspserver/tsp.config.json
+          grep -q '"services": {}' dist/tspserver/tsp.config.json
 
       - name: Run smoke test
         run: bash scripts/smoke-tspserver.sh dist/tspserver/tspserver
@@ -225,7 +232,16 @@ jobs:
 
       - name: Verify default config is packaged
         shell: pwsh
-        run: if (!(Test-Path -LiteralPath 'dist/tspserver/tsp.config.json')) { throw 'Default config was not packaged' }
+        run: |
+          $config = 'dist/tspserver/tsp.config.json'
+          if (!(Test-Path -LiteralPath $config -PathType Leaf)) { throw 'Default config was not packaged' }
+          $text = Get-Content -Raw -LiteralPath $config
+          if ($text -notmatch '"port"\s*:\s*3000') { throw 'Packaged config is missing port default' }
+          if ($text -notmatch '"publicDir"\s*:\s*"\.\/public"') { throw 'Packaged config is missing publicDir default' }
+          if ($text -notmatch '"publicPrefix"\s*:\s*"\/static"') { throw 'Packaged config is missing publicPrefix default' }
+          if ($text -notmatch '"count"\s*:\s*1') { throw 'Packaged config is missing worker count default' }
+          if ($text -notmatch '"name"\s*:\s*"main"') { throw 'Packaged config is missing application name default' }
+          if ($text -notmatch '"services"\s*:\s*\{\s*\}') { throw 'Packaged config is missing services default' }
 
       - name: Run smoke test (Windows)
         shell: pwsh
@@ -269,7 +285,14 @@ jobs:
         run: bash scripts/package-tspserver.sh bun/build/release/bun dist/tspserver routes public tsp.config.json
 
       - name: Verify default config is packaged
-        run: test -f dist/tspserver/tsp.config.json
+        run: |
+          test -s dist/tspserver/tsp.config.json
+          grep -q '"port": 3000' dist/tspserver/tsp.config.json
+          grep -q '"publicDir": "./public"' dist/tspserver/tsp.config.json
+          grep -q '"publicPrefix": "/static"' dist/tspserver/tsp.config.json
+          grep -q '"count": 1' dist/tspserver/tsp.config.json
+          grep -q '"name": "main"' dist/tspserver/tsp.config.json
+          grep -q '"services": {}' dist/tspserver/tsp.config.json
 
       - name: Run smoke test
         run: bash scripts/smoke-tspserver.sh dist/tspserver/tspserver
