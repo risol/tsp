@@ -43,6 +43,8 @@ use crate::services::{
 use std::sync::Arc;
 use std::sync::RwLock;
 
+const CLIENT_RUNTIME_SOURCE: &str = include_str!("client_runtime.js");
+
 /// Stable error codes for development diagnostics
 /// (spec sect.6.3 / sect.37). The full set lives in
 /// `docs/reference/progress.md` slice 16h; the contract is:
@@ -1544,7 +1546,64 @@ fn handle_connection(
         ParsedRequest::Known { method, .. } => *method,
         ParsedRequest::Unknown => HttpMethod::Get, // best-effort default for malformed
     };
+    let request_path = match &parsed {
+        ParsedRequest::Known { path, .. } => path.clone(),
+        ParsedRequest::Unknown => String::new(),
+    };
     if let ParsedRequest::Known { method, path, .. } = &parsed {
+        if path == "/__tsp/runtime.js" {
+            match *method {
+                HttpMethod::Get | HttpMethod::Head => {
+                    let body = CLIENT_RUNTIME_SOURCE.as_bytes();
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\n\
+                         Content-Type: text/javascript; charset=utf-8\r\n\
+                         Content-Length: {}\r\n\
+                         X-Content-Type-Options: nosniff\r\n\
+                         Cache-Control: public, max-age=3600\r\n\
+                         Connection: close\r\n\r\n",
+                        body.len()
+                    );
+                    stream
+                        .write_all(head.as_bytes())
+                        .map_err(HostError::Connection)?;
+                    if *method == HttpMethod::Get {
+                        stream
+                            .write_all(body)
+                            .map_err(HostError::Connection)?;
+                    }
+                    metrics::global().record_response("HTTP/1.1 200 OK");
+                    metrics::global().record_duration(
+                        request_started.elapsed().as_millis() as u64,
+                    );
+                    let _ = stream.shutdown(Shutdown::Both);
+                    return Ok(());
+                }
+                _ => {
+                    let body = b"405 Method Not Allowed: /__tsp/runtime.js only accepts GET and HEAD\r\n";
+                    let head = format!(
+                        "HTTP/1.1 405 Method Not Allowed\r\n\
+                         Allow: GET, HEAD\r\n\
+                         Content-Type: text/plain; charset=utf-8\r\n\
+                         Content-Length: {}\r\n\
+                         Connection: close\r\n\r\n",
+                        body.len()
+                    );
+                    stream
+                        .write_all(head.as_bytes())
+                        .map_err(HostError::Connection)?;
+                    stream
+                        .write_all(body)
+                        .map_err(HostError::Connection)?;
+                    metrics::global().record_response("HTTP/1.1 405 Method Not Allowed");
+                    metrics::global().record_duration(
+                        request_started.elapsed().as_millis() as u64,
+                    );
+                    let _ = stream.shutdown(Shutdown::Both);
+                    return Ok(());
+                }
+            }
+        }
         if path == "/__tsp/metrics" {
             match *method {
                 HttpMethod::Get => {
@@ -2195,6 +2254,12 @@ fn handle_connection(
         }
     };
 
+    let body = if page_method == HttpMethod::Head {
+        body
+    } else {
+        inject_client_runtime(body, content_type.as_str(), &request_path, status_line)
+    };
+
     // Slice 16c: emit the page's extra headers before
     // Content-Type. Content-Type / Content-Length are
     // computed by the host (from the envelope and the body
@@ -2752,6 +2817,41 @@ fn fragment_hex_value(byte: u8) -> Option<u8> {
     }
 }
 
+const CLIENT_RUNTIME_TAG: &str =
+    r#"<script src="/__tsp/runtime.js" defer></script>"#;
+
+/// Add the embedded client runtime only to complete HTML documents that opt
+/// into TSP or HTMX-style request attributes. Fragment responses stay clean
+/// so a client can insert their returned markup without nested scripts.
+fn inject_client_runtime(
+    mut body: String,
+    content_type: &str,
+    request_path: &str,
+    status_line: &str,
+) -> String {
+    if request_path == "/__tsp/fragment"
+        || !content_type
+            .split(';')
+            .next()
+            .is_some_and(|value| value.eq_ignore_ascii_case("text/html"))
+        || !status_line.starts_with("HTTP/1.1 2")
+        || (!body.contains("data-tsp-") && !body.contains("hx-"))
+        || body.contains("/__tsp/runtime.js")
+    {
+        return body;
+    }
+
+    let lowercase = body.to_ascii_lowercase();
+    if let Some(index) = lowercase.rfind("</body>") {
+        body.insert_str(index, CLIENT_RUNTIME_TAG);
+    } else if let Some(index) = lowercase.rfind("</html>") {
+        body.insert_str(index, CLIENT_RUNTIME_TAG);
+    } else {
+        body.push_str(CLIENT_RUNTIME_TAG);
+    }
+    body
+}
+
 /// Resolve `/__tsp/fragment?route=...&name=...` into the originating route
 /// and the private handler selector. The remaining query fields are passed
 /// to the fragment as its normal `ctx.query`.
@@ -3023,6 +3123,43 @@ fn _generation_anchor(_g: &generation::GenerationId) {}
 mod tests {
     use super::*;
     use crate::router::HttpMethod;
+
+    #[test]
+    fn client_runtime_is_injected_for_interactive_html_only() {
+        let page = "<html><body><button data-tsp-get=\"/items\" data-tsp-target=\"#items\"></button></body></html>";
+        let rendered = inject_client_runtime(
+            page.to_string(),
+            "text/html; charset=utf-8",
+            "/",
+            "HTTP/1.1 200 OK",
+        );
+        assert_eq!(rendered.matches("/__tsp/runtime.js").count(), 1);
+        assert!(rendered.contains("</script></body>"));
+
+        let fragment = inject_client_runtime(
+            page.to_string(),
+            "text/html; charset=utf-8",
+            "/__tsp/fragment",
+            "HTTP/1.1 200 OK",
+        );
+        assert!(!fragment.contains("/__tsp/runtime.js"));
+
+        let plain = inject_client_runtime(
+            "<h1>Static</h1>".to_string(),
+            "text/html; charset=utf-8",
+            "/",
+            "HTTP/1.1 200 OK",
+        );
+        assert!(!plain.contains("/__tsp/runtime.js"));
+    }
+
+    #[test]
+    fn embedded_client_runtime_contains_request_and_swap_support() {
+        assert!(CLIENT_RUNTIME_SOURCE.contains("data-tsp-get"));
+        assert!(CLIENT_RUNTIME_SOURCE.contains("data-tsp-target"));
+        assert!(CLIENT_RUNTIME_SOURCE.contains("innerHTML"));
+        assert!(CLIENT_RUNTIME_SOURCE.contains("fetch("));
+    }
     use std::collections::BTreeMap;
 
     #[test]

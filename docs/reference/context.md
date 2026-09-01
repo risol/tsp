@@ -111,6 +111,8 @@ export function GET(ctx: Context) {
 
 `ctx.fragment()` returns an opaque, capability-protected URL. Do not construct
 the internal path manually. The current `fragment(handler)` form uses `GET`.
+For browser-side partial updates, use the built-in [client runtime](./client-runtime.html)
+with the URL returned by `ctx.fragment()`.
 
 ## Services
 

@@ -144,6 +144,13 @@ Handlers may return JSX, strings, or standard `Response` values created with
 helpers such as `json`, `html`, `text`, `redirect`, and `notFound`. Static
 assets belong in `public/` and are served independently from route modules.
 
+### Built-in fragment updates
+
+TSP includes a small dependency-free browser runtime. When a page uses
+`data-tsp-get` and `data-tsp-target` (or the compatible `hx-*` attributes), the
+server automatically loads the runtime and replaces the target element with
+the fragment response. See the [client runtime reference](./docs/reference/client-runtime.md).
+
 ## Configuration
 
 The runtime is configured through environment variables. In addition to the

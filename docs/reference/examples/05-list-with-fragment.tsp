@@ -4,7 +4,8 @@
 //
 // Demonstrates: freeze 7 (fragment() helper, ctx.fragment(name)
 // returns the URL), freeze 4 (page GET export + named fragment
-// export), freeze 6 (fragment handler receives a Context too).
+// export), freeze 6 (fragment handler receives a Context too), and
+// the built-in TSP client runtime for DOM updates.
 
 import {
   type Context,
@@ -24,9 +25,8 @@ export function GET(ctx: Context) {
       <body>
         <h1>Users</h1>
         <button
-          hx-get={ctx.fragment("list")}
-          hx-target="#user-list"
-          hx-trigger="click"
+          data-tsp-get={ctx.fragment("list")}
+          data-tsp-target="#user-list"
         >
           Refresh
         </button>

@@ -100,7 +100,9 @@ Generate the exact declaration surface with `tspserver typings --out .tsp-types`
 - Function-valued and object-valued attributes are rejected.
 - `raw` is an explicit trust boundary; callers must sanitize its input.
 - Client interaction is expressed through forms, requests, and fragment URLs,
-  not server-side event handlers.
+  not server-side event handlers. Successful HTML pages that use `data-tsp-*`
+  or `hx-*` request attributes automatically receive TSP's small client
+  runtime for DOM updates. See [the client runtime reference](./client-runtime.html).
 
 ## Sessions and services
 
@@ -116,4 +118,5 @@ are loaded from `tsp.config.json`.
 
 The current contract does not include client hydration, React hooks, framework
 globals, middleware chains, streaming responses, or page-owned durable native
-services.
+services. The built-in client runtime is limited to request-and-swap DOM
+updates; it is not a general client component or state runtime.
