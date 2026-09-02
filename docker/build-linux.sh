@@ -44,6 +44,12 @@ test -x "$OUTPUT_DIR/tspserver" || {
   exit 1
 }
 
+cp "$PROJECT_ROOT/docs/AGENTS.md" "$OUTPUT_DIR/AGENTS.md"
+test -s "$OUTPUT_DIR/AGENTS.md" || {
+  echo "Error: Linux package is missing $OUTPUT_DIR/AGENTS.md" >&2
+  exit 1
+}
+
 echo "Built Linux tspserver: $OUTPUT_DIR/tspserver"
 if command -v file >/dev/null 2>&1; then
   file "$OUTPUT_DIR/tspserver"

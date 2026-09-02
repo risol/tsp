@@ -120,6 +120,8 @@ jobs:
             public \
             tsp.config.json
           test -s "$package_dir/tsp.config.json"
+          test -s "$package_dir/AGENTS.md"
+          grep -q 'TSP User Guide for AI Assistants' "$package_dir/AGENTS.md"
           grep -q '"port": 3000' "$package_dir/tsp.config.json"
           grep -q '"publicDir": "./public"' "$package_dir/tsp.config.json"
           grep -q '"publicPrefix": "/static"' "$package_dir/tsp.config.json"
@@ -164,12 +166,27 @@ jobs:
       - name: Archive release asset (Linux/macOS)
         if: matrix.os != 'windows-latest'
         shell: bash
-        run: tar -czf "tspserver-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz" -C release "tspserver-${{ matrix.target }}"
+        run: |
+          archive="tspserver-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
+          package_dir="tspserver-${{ matrix.target }}"
+          tar -czf "$archive" -C release "$package_dir"
+          tar -tzf "$archive" | grep -Eq "(^|/)${package_dir}/AGENTS\\.md$"
 
       - name: Archive release asset (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
-        run: Compress-Archive -Path "release/tspserver-${{ matrix.target }}" -DestinationPath "tspserver-${{ github.ref_name }}-${{ matrix.target }}.zip" -Force
+        run: |
+          $archive = "tspserver-${{ github.ref_name }}-${{ matrix.target }}.zip"
+          $packageDir = "tspserver-${{ matrix.target }}"
+          Compress-Archive -Path "release/$packageDir" -DestinationPath $archive -Force
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $archive).Path)
+          try {
+            $entry = $zip.Entries | Where-Object { $_.FullName -eq "$packageDir/AGENTS.md" }
+            if ($null -eq $entry) { throw "$archive does not contain $packageDir/AGENTS.md" }
+          } finally {
+            $zip.Dispose()
+          }
 
       - name: Upload release asset
         env:

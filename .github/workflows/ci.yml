@@ -177,6 +177,8 @@ jobs:
       - name: Verify default config is packaged
         run: |
           test -s dist/tspserver/tsp.config.json
+          test -s dist/tspserver/AGENTS.md
+          grep -q 'TSP User Guide for AI Assistants' dist/tspserver/AGENTS.md
           grep -q '"port": 3000' dist/tspserver/tsp.config.json
           grep -q '"publicDir": "./public"' dist/tspserver/tsp.config.json
           grep -q '"publicPrefix": "/static"' dist/tspserver/tsp.config.json
@@ -234,6 +236,9 @@ jobs:
         shell: pwsh
         run: |
           $config = 'dist/tspserver/tsp.config.json'
+          $agents = 'dist/tspserver/AGENTS.md'
+          if (!(Test-Path -LiteralPath $agents -PathType Leaf)) { throw 'AGENTS.md was not packaged' }
+          if ((Get-Content -Raw -LiteralPath $agents) -notmatch 'TSP User Guide for AI Assistants') { throw 'Packaged AGENTS.md is invalid' }
           if (!(Test-Path -LiteralPath $config -PathType Leaf)) { throw 'Default config was not packaged' }
           $text = Get-Content -Raw -LiteralPath $config
           if ($text -notmatch '"port"\s*:\s*3000') { throw 'Packaged config is missing port default' }
@@ -287,6 +292,8 @@ jobs:
       - name: Verify default config is packaged
         run: |
           test -s dist/tspserver/tsp.config.json
+          test -s dist/tspserver/AGENTS.md
+          grep -q 'TSP User Guide for AI Assistants' dist/tspserver/AGENTS.md
           grep -q '"port": 3000' dist/tspserver/tsp.config.json
           grep -q '"publicDir": "./public"' dist/tspserver/tsp.config.json
           grep -q '"publicPrefix": "/static"' dist/tspserver/tsp.config.json

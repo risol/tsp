@@ -11,9 +11,12 @@ output_dir=${2:-dist/tspserver}
 pages_dir=${3:-pages}
 public_dir=${4:-public}
 config_file=${5:-tsp.config.json}
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+agents_file="$script_dir/../docs/AGENTS.md"
 
 [[ -f "$server_binary" ]] || { echo "server binary not found: $server_binary" >&2; exit 1; }
 [[ -f "$config_file" ]] || { echo "config file not found: $config_file" >&2; exit 1; }
+[[ -f "$agents_file" ]] || { echo "user guide not found: $agents_file" >&2; exit 1; }
 mkdir -p "$output_dir"
 if [[ "$server_binary" == *.exe ]]; then server_name=tspserver.exe; else server_name=tspserver; fi
 server_target="$output_dir/$server_name"
@@ -27,6 +30,7 @@ if [[ -d "$public_dir" ]]; then cp -R "$public_dir" "$output_dir/public"; fi
 if [[ "$(realpath "$config_file")" != "$(realpath "$output_dir/tsp.config.json" 2>/dev/null || true)" ]]; then
   cp "$config_file" "$output_dir/tsp.config.json"
 fi
+cp "$agents_file" "$output_dir/AGENTS.md"
 
 # embedded-worker distribution contract: the packaged directory must NOT
 # ship a standalone `bun(.exe)`. The master self-spawns (Windows)

@@ -11,6 +11,7 @@ RUN groupadd --system tspserver \
 WORKDIR /app
 
 COPY dist/tspserver/tspserver /usr/local/bin/tspserver
+COPY docs/AGENTS.md /app/AGENTS.md
 COPY pages/ /app/pages/
 COPY public/ /app/public/
 

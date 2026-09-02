@@ -16,6 +16,7 @@ param(
 $serverPath = [System.IO.Path]::GetFullPath($ServerBinary)
 $outputPath = [System.IO.Path]::GetFullPath($OutputDirectory)
 $configPath = [System.IO.Path]::GetFullPath($ConfigFile)
+$agentsPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\docs\AGENTS.md"))
 $serverName = if ($serverPath.EndsWith(".exe", [System.StringComparison]::OrdinalIgnoreCase)) { "tspserver.exe" } else { "tspserver" }
 
 if (!(Test-Path -LiteralPath $serverPath -PathType Leaf)) {
@@ -23,6 +24,9 @@ if (!(Test-Path -LiteralPath $serverPath -PathType Leaf)) {
 }
 if (!(Test-Path -LiteralPath $configPath -PathType Leaf)) {
   throw "config file not found: $configPath"
+}
+if (!(Test-Path -LiteralPath $agentsPath -PathType Leaf)) {
+  throw "user guide not found: $agentsPath"
 }
 New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
 $serverTarget = Join-Path $outputPath $serverName
@@ -42,6 +46,7 @@ $configTarget = Join-Path $outputPath "tsp.config.json"
 if ($configPath -ne [System.IO.Path]::GetFullPath($configTarget)) {
   Copy-Item -LiteralPath $configPath -Destination $configTarget -Force
 }
+Copy-Item -LiteralPath $agentsPath -Destination (Join-Path $outputPath "AGENTS.md") -Force
 
 # embedded-worker distribution contract: the packaged directory must NOT
 # ship a standalone `bun.exe`. The master self-spawns the
