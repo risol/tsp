@@ -1,0 +1,34 @@
+name: Check Bun upstream
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: tsp-bun-upstream
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check Bun and WebKit baselines
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up bootstrap Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Check upstream releases and advisories
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bun run scripts/check-bun-upstream.ts --ci

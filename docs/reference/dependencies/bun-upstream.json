@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Pinned upstream runtime versions used to build TSP.",
+  "bun": {
+    "repository": "https://github.com/oven-sh/bun",
+    "sourcePath": "bun",
+    "version": "1.4.0",
+    "revision": "cfd755d62",
+    "releaseTag": null
+  },
+  "bootstrap": {
+    "repository": "https://github.com/oven-sh/bun",
+    "version": "1.3.14",
+    "usedBy": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/release.yml"
+    ]
+  },
+  "webkit": {
+    "repository": "https://github.com/oven-sh/WebKit",
+    "sourcePath": "bun/scripts/build/deps/webkit.ts",
+    "revision": "b9a6abf2d59854e9004155d156b3b751b638d0ec",
+    "releaseTag": "autobuild-b9a6abf2d59854e9004155d156b3b751b638d0ec"
+  },
+  "security": {
+    "knownAdvisoryIds": []
+  }
+}

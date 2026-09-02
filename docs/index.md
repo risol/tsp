@@ -48,6 +48,7 @@ ideas are labelled explicitly and are not part of the current contract.
 - [Reference map](./reference/spec.html) — where each rule is documented.
 - [Architecture decision records](./reference/adr/)
 - [Verified bugs and regressions](./reference/bugs/)
+- [Bun upstream tracking](./reference/dependencies/bun-upstream.html)
 - [Changelog](./changelog.html)
 
 ## Documentation rules

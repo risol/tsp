@@ -24,6 +24,19 @@ Pushing a tag matching `v*` creates a draft release, builds the three supported
 targets, runs smoke tests, uploads archives, and publishes the release after
 all target jobs succeed.
 
+### `check-bun-upstream.yml`
+
+The daily upstream check compares the embedded Bun version and revision, the
+bootstrap Bun version, and the pinned WebKit/JSC revision with upstream
+release metadata. It also checks Bun repository security advisories. New
+releases or advisories create a deduplicated Issue for review; the workflow
+does not modify native source pins automatically.
+
+The accepted versions and already-reviewed advisory IDs are recorded in
+[`reference/dependencies/bun-upstream.json`](./reference/dependencies/bun-upstream.json).
+See the [Bun upstream tracking guide](./reference/dependencies/bun-upstream.html)
+for the upgrade verification checklist.
+
 ## Local verification
 
 From the repository root:
