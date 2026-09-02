@@ -446,6 +446,7 @@ fn rewrite_tsp_server_imports(source: &str) -> Result<String, JsxError> {
                             | "random"
                             | "zod"
                             | "sql"
+                            | "Image"
                             | "util"
                     )
                 };
@@ -704,15 +705,25 @@ pub fn wrap_for_bun_cli(transformed: &str, method: &str, ctx_json: Option<&str>)
 }
 
 fn embedded_response_block() -> &'static str {
-    r###"function __tspPublishEnvelope__(__tspType__, __tspStatus__, __tspHeaders__, __tspBody__) {
+    r###"function __tspEncodeBody__(__tspBytes__) {
+ let __tspBinary__ = '';
+ const __tspChunk__ = 0x8000;
+ for (let __tspOffset__ = 0; __tspOffset__ < __tspBytes__.length; __tspOffset__ += __tspChunk__) {
+  __tspBinary__ += String.fromCharCode(...__tspBytes__.subarray(__tspOffset__, __tspOffset__ + __tspChunk__));
+ }
+ return btoa(__tspBinary__);
+}
+function __tspPublishEnvelope__(__tspType__, __tspStatus__, __tspHeaders__, __tspBody__, __tspBodyB64__) {
  const __tspCookieHeaders__ = Array.isArray(__tspCookieWrites) ? __tspCookieWrites.map((__line__) => ['Set-Cookie', __line__]) : [];
- globalThis.__tspEmbeddedResponse = JSON.stringify({type: __tspType__, status: __tspStatus__, headers: __tspHeaders__.concat(__tspCookieHeaders__), body: __tspBody__, service_logs: __tspServiceLogs, session_writes: __tspSessionWrites});
+ const __tspEnvelope__ = {type: __tspType__, status: __tspStatus__, headers: __tspHeaders__.concat(__tspCookieHeaders__), body: __tspBody__, service_logs: __tspServiceLogs, session_writes: __tspSessionWrites};
+ if (__tspBodyB64__ !== undefined) __tspEnvelope__.body_b64 = __tspBodyB64__;
+ globalThis.__tspEmbeddedResponse = JSON.stringify(__tspEnvelope__);
 }
 function __tspPublishResponse__(__tspResponse__) {
- return __tspResponse__.text().then((__tspBody__) => {
+ return __tspResponse__.arrayBuffer().then((__tspBuffer__) => {
   const __tspHeaders__ = [];
   for (const [__k__, __v__] of __tspResponse__.headers) __tspHeaders__.push([__k__, __v__]);
-  __tspPublishEnvelope__('response', __tspResponse__.status, __tspHeaders__, __tspBody__);
+  __tspPublishEnvelope__('response', __tspResponse__.status, __tspHeaders__, '', __tspEncodeBody__(new Uint8Array(__tspBuffer__)));
  });
 }
 const __tspAsyncRender__ = {};
@@ -919,6 +930,7 @@ fn wrap_for_bun_cli_inner(
           const __tspServer = {};\n\
           Object.assign(__tspServer, {json: __tspJson__, redirect: __tspRedirect__, text: __tspText__, html: __tspHtml__, notFound: __tspNotFound__, HttpError: __tspHttpError__, fragment: __tspFragment__, raw: __tspRaw__, nanoid: __tspNanoid, customAlphabet: __tspNanoidCustomAlphabet, customRandom: __tspNanoidCustomRandom, random: __tspNanoidRandom, zod: __tspZodNs__, util: __tspUtilNs__});\n\
           Object.defineProperty(__tspServer, 'sql', { enumerable: true, get: () => require(\"bun\").SQL });\n\
+          Object.defineProperty(__tspServer, 'Image', { enumerable: true, get: () => Bun.Image });\n\
           Object.freeze(__tspServer);\n\
           // Local CommonJS dependencies are evaluated in their own module\n\
           // scope. The Bun loader rewrites their `tsp:server` imports to\n\
@@ -1095,6 +1107,9 @@ fn wrap_for_bun_cli_inner(
              };\n             // Slice 16j (Phase 8): hydrate ctx.services (spec\n             // sect.17). The host embeds a descriptor snapshot;\n             // kind='logger' becomes a log adapter whose calls\n             // buffer into __tspServiceLogs (carried back in the\n             // envelope -> host flushes into the runtime service);\n             // other descriptors surface read-only -- app code MUST\n             // NOT rely on wrapper identity across requests (17.3).\n             const __tspServicesRaw__ = __tspContext.services || {};\n             __tspContext.services = {};\n             for (const [__sName__, __sDesc__] of Object.entries(__tspServicesRaw__)) {\n             \x20 if (__sDesc__ && __sDesc__.kind === 'logger') {\n             \x20\x20 __tspContext.services[__sName__] = Object.assign({}, __sDesc__, {\n             \x20\x20\x20 info: (...__a__) => __tspServiceLogs.push({svc: __sName__, level: 'info', message: __a__.join(' ')}),\n             \x20\x20\x20 warn: (...__a__) => __tspServiceLogs.push({svc: __sName__, level: 'warn', message: __a__.join(' ')}),\n             \x20\x20\x20 error: (...__a__) => __tspServiceLogs.push({svc: __sName__, level: 'error', message: __a__.join(' ')}),\n             \x20\x20\x20 debug: (...__a__) => __tspServiceLogs.push({svc: __sName__, level: 'debug', message: __a__.join(' ')}),\n             \x20\x20 });\n             \x20 } else {\n             \x20\x20 __tspContext.services[__sName__] = Object.freeze(__sDesc__);\n             \x20 }\n             }\n             // Slice 16k (Phase 8): hydrate ctx.session\n             // (spec sect.16). The host embeds the current\n             // request's session view as {id, data};\n             // calls into the session buffer into\n             // __tspSessionWrites which the wrap carries\n             // back in the envelope -> host applies.\n             const __tspSessionRaw__ = __tspContext.session;\n             const __tspSessionData__ = (__tspSessionRaw__ && __tspSessionRaw__.data) ? __tspSessionRaw__.data : {};\n             const __tspSessionId__ = (__tspSessionRaw__ && __tspSessionRaw__.id) ? __tspSessionRaw__.id : '';\n             function __tspFormatSessionValue__(__v__) {\n             \x20 if (__v__ === null) return null;\n             \x20 if (typeof __v__ === 'boolean' || typeof __v__ === 'number' || typeof __v__ === 'string') return __v__;\n             \x20 if (Array.isArray(__v__)) return __v__.map(__tspFormatSessionValue__);\n             \x20 if (typeof __v__ === 'object') {\n             \x20\x20 const __out__ = {};\n             \x20\x20 for (const __k__ in __v__) if (Object.prototype.hasOwnProperty.call(__v__, __k__)) __out__[__k__] = __tspFormatSessionValue__(__v__[__k__]);\n             \x20\x20 return __out__;\n             \x20 }\n             \x20 return String(__v__);\n             }\n             __tspContext.session = {\n             \x20 id: __tspSessionId__,\n             \x20 get(__k__) { return Object.prototype.hasOwnProperty.call(__tspSessionData__, __k__) ? __tspSessionData__[__k__] : undefined; },\n             \x20 has(__k__) { return Object.prototype.hasOwnProperty.call(__tspSessionData__, __k__); },\n             \x20 set(__k__, __v__) { __tspSessionWrites.push({op: 'set', k: __k__, v: __tspFormatSessionValue__(__v__)}); },\n             \x20 delete(__k__) { __tspSessionWrites.push({op: 'delete', k: __k__}); },\n             \x20 clear() { __tspSessionWrites.push({op: 'clear'}); },\n             \x20 async regenerate() { __tspSessionWrites.push({op: 'regenerate'}); },\n             \x20 async destroy() { __tspSessionWrites.push({op: 'destroy'}); },\n             };\n             "
         );
     }
+    if ctx_json.is_none() {
+        out.push_str("const __tspContext = undefined;\n");
+    }
     // Evaluate the page module before selecting the handler. Fragment
     // exports are `const` bindings and therefore cannot be invoked before
     // the source module has initialized them.
@@ -1105,9 +1120,6 @@ fn wrap_for_bun_cli_inner(
     out.push_str(";\nif (typeof __tspHandler__ !== 'function') throw new Error(__tspFragmentName__ ? 'fragment not found: ' + __tspFragmentName__ : 'page does not export function ");
     out.push_str(method);
     out.push_str("()');\n");
-    if ctx_json.is_none() {
-        out.push_str("const __tspContext = undefined;\n");
-    }
     // §32.1 dev error page: a non-HttpError throw inside
     // the page handler no longer `throw e` to the outer
     // IIFE (which would exit with 1 and lose the error
@@ -1145,6 +1157,26 @@ fn wrap_for_bun_cli_inner(
     } else {
         out.push_str(
         "(async () => {\n         \x20let __tspBody__, __tspStatus__, __tspHeaders__, __tspType__;\n         \x20const __tspResult__ = await __tspResultPromise__;\n         \x20__tspHeaders__ = [];\n         \x20if (__tspResult__ instanceof Response) {\n         \x20\x20__tspType__ = 'response';\n         \x20\x20__tspStatus__ = __tspResult__.status;\n         \x20\x20for (const [__k__, __v__] of __tspResult__.headers) __tspHeaders__.push([__k__, __v__]);\n         \x20\x20__tspBody__ = await __tspResult__.text();\n         \x20} else if (typeof __tspResult__ === 'string') {\n         \x20\x20__tspType__ = 'html';\n         \x20\x20__tspStatus__ = 200;\n         \x20\x20__tspBody__ = __tspResult__;\n         \x20} else {\n         \x20\x20// Spec §6.3 / plan §10.4: an\n         \x20\x20// invalid handler return value\n         \x20\x20// (object, number, boolean,\n         \x20\x20// etc.) is a contract violation.\n         \x20\x20// The typed `TSP3001` prefix is\n         \x20\x20// the application-facing error\n         \x20\x20// code (contract item 5 / plan\n         \x20\x20// §10.4); the inner catch wraps\n         \x20\x20// it in a 500 with a JSON body\n         \x20\x20// that the user can grep for.\n         \x20\x20// The type name is capitalized\n         \x20\x20// to match the plan's message\n         \x20\x20// (Object / Number / etc.).\n         \x20\x20const __tspType__ = (typeof __tspResult__);\n         \x20\x20const __tspTypeCap__ = __tspType__.charAt(0).toUpperCase() + __tspType__.slice(1);\n         \x20\x20throw new Error('TSP3001: handler returned unsupported value ' + __tspTypeCap__ + '. Expected HtmlNode or Response.');\n         \x20}\n         \x20// Merge runtime cookie writes into the outgoing headers\n         \x20// (spec sect.15: cookie writes MUST be reflected even when\n         \x20// the handler returns an HtmlNode). Each write becomes a\n         \x20// separate Set-Cookie line so multiple cookies on one\n         \x20// request don't collapse via the response's flatten loop.\n         \x20if (Array.isArray(__tspCookieWrites)) {\n         \x20\x20for (const __cookieLine__ of __tspCookieWrites) {\n         \x20\x20\x20__tspHeaders__.push(['Set-Cookie', __cookieLine__]);\n         \x20\x20}\n         \x20}\n         \x20const __tspEnvelope__ = JSON.stringify({type: __tspType__, status: __tspStatus__, headers: __tspHeaders__, body: __tspBody__, service_logs: __tspServiceLogs, session_writes: __tspSessionWrites});\n         \x20__tspConsoleLog('__TSP_OUT_V1__' + '\\n' + __tspEnvelope__);\n         process.exit(0);\n         })().catch((e) => { console.error(String(e && e.stack || e)); process.exit(1); });\n"
+        );
+        // Response bodies may contain arbitrary bytes (for example PNG or
+        // WebP output). Keep the subprocess envelope text-safe by carrying
+        // those bytes in a separate Base64 field; the host restores them
+        // before writing the HTTP response.
+        out = out.replace(
+            "(async () => {",
+            "function __tspEncodeBody__(__tspBytes__) {\n         let __tspBinary__ = '';\n         const __tspChunk__ = 0x8000;\n         for (let __tspOffset__ = 0; __tspOffset__ < __tspBytes__.length; __tspOffset__ += __tspChunk__) {\n         __tspBinary__ += String.fromCharCode(...__tspBytes__.subarray(__tspOffset__, __tspOffset__ + __tspChunk__));\n         }\n         return btoa(__tspBinary__);\n         }\n         (async () => {",
+        );
+        out = out.replace(
+            "let __tspBody__, __tspStatus__, __tspHeaders__, __tspType__;",
+            "let __tspBody__, __tspBodyB64__, __tspStatus__, __tspHeaders__, __tspType__;",
+        );
+        out = out.replace(
+            "__tspBody__ = await __tspResult__.text();",
+            "__tspBodyB64__ = __tspEncodeBody__(new Uint8Array(await __tspResult__.arrayBuffer())); __tspBody__ = '';",
+        );
+        out = out.replace(
+            "const __tspEnvelope__ = JSON.stringify({type: __tspType__, status: __tspStatus__, headers: __tspHeaders__, body: __tspBody__, service_logs: __tspServiceLogs, session_writes: __tspSessionWrites});",
+            "const __tspEnvelope__ = JSON.stringify({type: __tspType__, status: __tspStatus__, headers: __tspHeaders__, body: __tspBody__ || '', service_logs: __tspServiceLogs, session_writes: __tspSessionWrites, ...(__tspBodyB64__ !== undefined ? {body_b64: __tspBodyB64__} : {})});",
         );
     }
     out
@@ -1239,6 +1271,25 @@ mod tests {
             "got: {out}"
         );
         assert!(!out.contains("tsp:server"), "got: {out}");
+    }
+
+    #[test]
+    fn exposes_image_as_a_lazy_tsp_server_export() {
+        let src = r#"import { Image } from "tsp:server";
+export function GET() {
+  return new Response(String(typeof Image));
+}
+"#;
+        let transformed = tsx_to_js(src).expect("tsx_to_js must succeed");
+        assert!(
+            transformed.contains("const { Image } = __tspServer;"),
+            "Image must be an allow-listed named export; got: {transformed}"
+        );
+        let wrapped = wrap_for_bun_cli(&transformed, "GET", None);
+        assert!(
+            wrapped.contains("Object.defineProperty(__tspServer, 'Image', { enumerable: true, get: () => Bun.Image });"),
+            "Image must be exposed through a lazy getter; got: {wrapped}"
+        );
     }
 
     #[test]
@@ -1357,6 +1408,60 @@ mod tests {
         assert!(wrapped.contains("__tspHandler__()"));
         assert!(wrapped.contains("__TSP_OUT_V1__"));
         assert!(wrapped.contains("const __tspContext = undefined;"));
+    }
+
+    #[test]
+    fn normal_wrapper_preserves_binary_response_bodies() {
+        let wrapped = wrap_for_bun_cli(
+            "function GET() { return new Response(Uint8Array.from([0, 255]), {headers: {'content-type': 'image/png'}}); }\n",
+            "GET",
+            None,
+        );
+        assert!(wrapped.contains("arrayBuffer()"), "got: {wrapped}");
+        assert!(wrapped.contains("body_b64"), "got: {wrapped}");
+        assert!(wrapped.contains("__tspEncodeBody__"), "got: {wrapped}");
+    }
+
+    #[test]
+    fn image_pipeline_generates_a_binary_response_envelope_under_bun() {
+        let source = r#"
+import { Image } from "tsp:server";
+
+export async function GET() {
+  const image = new Image("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+  const bytes = await image.png().bytes();
+  return new Response(bytes, { headers: { "content-type": "image/png" } });
+}
+"#;
+        let transformed = tsx_to_js(source).expect("image source must transform");
+        let wrapped = wrap_for_bun_cli(&transformed, "GET", None);
+        let candidates = [
+            std::path::PathBuf::from(r"D:\GitHub\tsp\bun\build\release-dev\bun.exe"),
+            std::path::PathBuf::from(r"D:\GitHub\tsp\.bun-bootstrap\node_modules\bun\bin\bun.exe"),
+        ];
+        let Some(bun_exe) = candidates.into_iter().find(|path| path.is_file()) else {
+            eprintln!("skipping: no bun executable found (CI without Bun build)");
+            return;
+        };
+        let temp_path = std::env::temp_dir().join(format!(
+            "tsp-pipeline-image-{}.tsx",
+            std::process::id()
+        ));
+        std::fs::write(&temp_path, wrapped).expect("wrap must be writable");
+        let output = std::process::Command::new(&bun_exe)
+            .arg(&temp_path)
+            .output()
+            .expect("bun must run the generated image wrap");
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let _ = std::fs::remove_file(&temp_path);
+        assert!(
+            output.status.success(),
+            "image wrap must run cleanly under bun\nstdout: {stdout}\nstderr: {stderr}"
+        );
+        assert!(stdout.contains("\"type\":\"response\""), "stdout: {stdout}");
+        assert!(stdout.contains("\"content-type\",\"image/png\""), "stdout: {stdout}");
+        assert!(stdout.contains("\"body_b64\":\""), "stdout: {stdout}");
     }
 
     #[test]

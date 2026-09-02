@@ -34,6 +34,7 @@ impl From<codecs::Error> for BackendError {
             codecs::Error::DecodeFailed => Self::DecodeFailed,
             codecs::Error::EncodeFailed => Self::EncodeFailed,
             codecs::Error::TooManyPixels => Self::TooManyPixels,
+            codecs::Error::InputTooLarge => Self::DecodeFailed,
             codecs::Error::OutOfMemory => Self::OutOfMemory,
             codecs::Error::UnknownFormat => Self::UnknownFormat,
             codecs::Error::UnsupportedOnPlatform => Self::UnsupportedOnPlatform,

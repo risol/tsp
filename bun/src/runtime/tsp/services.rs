@@ -72,6 +72,12 @@ pub struct RuntimeConfig {
     pub public_prefix: Option<String>,
     pub timeout_ms: u64,
     pub max_body_bytes: usize,
+    /// Maximum encoded image input accepted by Bun.Image in each worker.
+    pub image_max_input_bytes: u64,
+    /// Maximum decoded pixel count accepted by Bun.Image in each worker.
+    pub image_max_pixels: u64,
+    /// Maximum number of image pipelines in flight in one worker process.
+    pub image_max_concurrent_tasks: usize,
     pub development: bool,
     pub worker_count: usize,
     pub worker_max_in_flight: usize,
@@ -92,6 +98,9 @@ impl Default for RuntimeConfig {
             public_prefix: None,
             timeout_ms: 30_000,
             max_body_bytes: 1024 * 1024,
+            image_max_input_bytes: 256 << 20,
+            image_max_pixels: 0x3FFF * 0x3FFF,
+            image_max_concurrent_tasks: 4,
             development: false,
             worker_count: 1,
             worker_max_in_flight: 2,
@@ -1353,12 +1362,15 @@ pub fn load_runtime_config(text: &str) -> Result<RuntimeConfig, String> {
         .map(|(start, end)| &text[start..end]);
     let worker = find_top_level_object_for_key(text, "worker")
         .map(|(start, end)| &text[start..end]);
+    let image = find_top_level_object_for_key(text, "image")
+        .map(|(start, end)| &text[start..end]);
     let application = find_top_level_object_for_key(text, "application")
         .map(|(start, end)| &text[start..end]);
     let session = find_top_level_object_for_key(text, "session")
         .map(|(start, end)| &text[start..end]);
     let server = server.as_deref().unwrap_or("");
     let worker = worker.as_deref().unwrap_or("");
+    let image = image.as_deref().unwrap_or("");
     let application = application.as_deref().unwrap_or("");
     let session = session.as_deref().unwrap_or("");
 
@@ -1393,6 +1405,23 @@ pub fn load_runtime_config(text: &str) -> Result<RuntimeConfig, String> {
     if let Some(value) = find_number_field(server, "maxBodyBytes") {
         config.max_body_bytes = usize::try_from(value)
             .map_err(|_| "config: `server.maxBodyBytes` is too large".to_string())?;
+    }
+    if let Some(value) = find_number_field(image, "maxInputBytes") {
+        if value == 0 {
+            return Err("config: `image.maxInputBytes` must be greater than zero".to_string());
+        }
+        config.image_max_input_bytes = value;
+    }
+    if let Some(value) = find_number_field(image, "maxPixels") {
+        if value == 0 {
+            return Err("config: `image.maxPixels` must be greater than zero".to_string());
+        }
+        config.image_max_pixels = value;
+    }
+    if let Some(value) = find_number_field(image, "maxConcurrentTasks") {
+        config.image_max_concurrent_tasks = usize::try_from(value)
+            .map_err(|_| "config: `image.maxConcurrentTasks` is too large".to_string())?
+            .max(1);
     }
     if let Some(value) = find_bool_field(server, "development") {
         config.development = value;
@@ -2566,6 +2595,11 @@ mod tests {
             "maxBodyBytes": 2048,
             "development": true
           },
+          "image": {
+            "maxInputBytes": 10485760,
+            "maxPixels": 1000000,
+            "maxConcurrentTasks": 2
+          },
           "worker": {
             "count": 3,
             "maxInFlight": 7,
@@ -2585,6 +2619,9 @@ mod tests {
         assert_eq!(config.public_prefix, Some("/static".to_string()));
         assert_eq!(config.timeout_ms, 1200);
         assert_eq!(config.max_body_bytes, 2048);
+        assert_eq!(config.image_max_input_bytes, 10 * 1024 * 1024);
+        assert_eq!(config.image_max_pixels, 1_000_000);
+        assert_eq!(config.image_max_concurrent_tasks, 2);
         assert!(config.development);
         assert_eq!(config.worker_count, 3);
         assert_eq!(config.worker_max_in_flight, 7);

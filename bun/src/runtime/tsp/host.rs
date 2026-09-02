@@ -419,6 +419,52 @@ fn base64_encode(out: &mut String, bytes: &[u8]) {
     }
 }
 
+/// Decode standard Base64 emitted by the page-side response wrapper.
+/// Invalid input is rejected so a malformed envelope cannot produce a
+/// partially decoded HTTP response.
+fn base64_decode(input: &str) -> Option<Vec<u8>> {
+    fn value(byte: u8) -> Option<u8> {
+        match byte {
+            b'A'..=b'Z' => Some(byte - b'A'),
+            b'a'..=b'z' => Some(byte - b'a' + 26),
+            b'0'..=b'9' => Some(byte - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+
+    if input.is_empty() || !input.len().is_multiple_of(4) {
+        return if input.is_empty() { Some(Vec::new()) } else { None };
+    }
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(input.len() / 4 * 3);
+    for (index, chunk) in bytes.chunks_exact(4).enumerate() {
+        let last = index + 1 == bytes.len() / 4;
+        let a = value(chunk[0])?;
+        let b = value(chunk[1])?;
+        let c = if chunk[2] == b'=' { 0 } else { value(chunk[2])? };
+        let d = if chunk[3] == b'=' { 0 } else { value(chunk[3])? };
+        if chunk[0] == b'=' || chunk[1] == b'=' {
+            return None;
+        }
+        if chunk[2] == b'=' && chunk[3] != b'=' {
+            return None;
+        }
+        if (chunk[2] == b'=' || chunk[3] == b'=') && !last {
+            return None;
+        }
+        out.push((a << 2) | (b >> 4));
+        if chunk[2] != b'=' {
+            out.push((b << 4) | (c >> 2));
+        }
+        if chunk[3] != b'=' {
+            out.push((c << 6) | d);
+        }
+    }
+    Some(out)
+}
+
 /// Outcome of parsing the `__TSP_OUT_V1__` envelope the page
 /// emits on stdout.
 #[derive(Debug, PartialEq, Eq)]
@@ -426,7 +472,8 @@ enum EnvelopeKind {
     /// `{type: "html", body: "..."}` -> 200 text/html.
     Html,
     /// `{type: "response", status, headers, body}` -> use
-    /// the status / headers / body verbatim.
+    /// the status / headers / body verbatim. `body_b64` is
+    /// used when the response body is binary.
     Response,
     /// The line did not start with the envelope tag, or
     /// the JSON was malformed. The host falls back to
@@ -444,6 +491,7 @@ struct EnvelopeOutcome {
     content_type: String,
     status_line: &'static str,
     body: String,
+    body_bytes: Option<Vec<u8>>,
     headers: Vec<(String, String)>,
     /// Log lines the page buffered via `ctx.services.*`
     /// (spec sect.17 / slice 16j). The host flushes them
@@ -843,6 +891,9 @@ fn read_session_cookie(headers: &[(String, String)]) -> Option<String> {
 /// The JSON is a flat object:
 ///   {"type":"html","body":"..."}              (slice 6 / 16a)
 ///   {"type":"response","status":201,"headers":[...],"body":"..."}
+/// Binary Response bodies additionally carry `body_b64` and leave `body`
+/// empty. The host decodes that field into the original bytes before writing
+/// the HTTP response.
 ///
 /// `headers` accepts two shapes for compatibility with
 /// older wrap scripts and for the array form introduced in
@@ -864,6 +915,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
         content_type,
         status_line,
         body,
+        body_bytes,
         headers,
         service_logs,
         session_writes,
@@ -882,6 +934,13 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
                     .and_then(JsonValue::as_str)
                     .unwrap_or("")
                     .to_string();
+                let body_bytes = if kind == EnvelopeKind::Response {
+                    obj.get("body_b64")
+                        .and_then(JsonValue::as_str)
+                        .and_then(base64_decode)
+                } else {
+                    None
+                };
                 let headers = parse_envelope_headers(obj.get("headers"));
                 let service_logs = parse_service_logs(obj.get("service_logs"));
                 let session_writes = parse_session_writes(obj.get("session_writes"));
@@ -891,6 +950,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
                         content_type: "text/html; charset=utf-8".to_string(),
                         status_line: "HTTP/1.1 200 OK",
                         body,
+                        body_bytes: None,
                         headers,
                         service_logs: service_logs.clone(),
                         session_writes: session_writes.clone(),
@@ -908,6 +968,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
                             content_type: ct,
                             status_line,
                             body,
+                            body_bytes,
                             headers,
                             service_logs: service_logs.clone(),
                             session_writes: session_writes.clone(),
@@ -918,6 +979,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
                         content_type: "text/html; charset=utf-8".to_string(),
                         status_line: "HTTP/1.1 200 OK",
                         body,
+                        body_bytes: None,
                         headers,
                         service_logs: service_logs.clone(),
                         session_writes: session_writes.clone(),
@@ -929,6 +991,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
                 content_type: "text/html; charset=utf-8".to_string(),
                 status_line: "HTTP/1.1 200 OK",
                 body: stdout.to_string(),
+                body_bytes: None,
                 headers: Vec::new(),
                 service_logs: Vec::new(),
                 session_writes: Vec::new(),
@@ -941,6 +1004,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
             content_type: "text/html; charset=utf-8".to_string(),
             status_line: "HTTP/1.1 200 OK",
             body: stdout.to_string(),
+            body_bytes: None,
             headers: Vec::new(),
             service_logs: Vec::new(),
             session_writes: Vec::new(),
@@ -952,6 +1016,7 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
         content_type,
         status_line,
         body,
+        body_bytes,
         headers,
         service_logs,
         session_writes,
@@ -1819,6 +1884,7 @@ fn handle_connection(
     // Default 0 = "use body.len()" -- the GET-equivalent
     // case is unaffected.
     let mut content_length_override: usize = 0;
+    let mut response_body_bytes: Option<Vec<u8>> = None;
 
     let (status_line, content_type, allow_header, body, extra_headers) = match parsed {
         ParsedRequest::Unknown => (
@@ -2087,6 +2153,7 @@ fn handle_connection(
                     // parse_envelope unpacks it and surfaces the
                     // correct status / content-type / body / headers.
                     let outcome = parse_envelope(&body);
+                    response_body_bytes = outcome.body_bytes.clone();
                     // Slice 16j: flush the page's `ctx.services.*`
                     // log lines into the owning runtime service now
                     // that the envelope is back (the page ran in a
@@ -2159,10 +2226,12 @@ fn handle_connection(
                             .any(|(k, v)| k.eq_ignore_ascii_case("x-tsp-error") && v == "page")
                     {
                         if settings.development {
+                            response_body_bytes = None;
                             let (html_body, html_ct) =
                                 render_dev_error_page(&outcome.body, &outcome.status_line);
                             (html_body, html_ct, Vec::new())
                         } else {
+                            response_body_bytes = None;
                             // Prod path: strip the internal
                             // `x-tsp-error` header (the wire
                             // body still carries the JSON; the
@@ -2216,7 +2285,9 @@ fn handle_connection(
                     // size. For non-HEAD the override
                     // stays 0 and `body.len()` is used.
                     if page_method == HttpMethod::Head {
-                        content_length_override = body.len();
+                        content_length_override = response_body_bytes
+                            .as_ref()
+                            .map_or(body.len(), Vec::len);
                     }
                     (
                         if use_envelope {
@@ -2263,7 +2334,11 @@ fn handle_connection(
                     // real body length (the `body` field
                     // in the JSON). The envelope itself
                     // is dropped on the floor.
-                    let get_body_len = parse_envelope(&get_envelope).body.len();
+                    let get_outcome = parse_envelope(&get_envelope);
+                    let get_body_len = get_outcome
+                        .body_bytes
+                        .as_ref()
+                        .map_or(get_outcome.body.len(), Vec::len);
                     let _ = get_envelope; // explicitly drop
                     content_length_override = get_body_len;
                     (
@@ -2380,7 +2455,7 @@ fn handle_connection(
     let content_length = if page_method == HttpMethod::Head {
         content_length_override
     } else {
-        body.len()
+        response_body_bytes.as_ref().map_or(body.len(), Vec::len)
     };
     let mut head = format!(
         "{status_line}\r\n\
@@ -2414,9 +2489,13 @@ fn handle_connection(
     // matches the `head_on_regular_page_...` e2e
     // assertion of Content-Length: 0).
     if page_method != HttpMethod::Head {
-        stream
-            .write_all(body.as_bytes())
-            .map_err(HostError::Connection)?;
+        if let Some(bytes) = response_body_bytes.as_deref() {
+            stream.write_all(bytes).map_err(HostError::Connection)?;
+        } else {
+            stream
+                .write_all(body.as_bytes())
+                .map_err(HostError::Connection)?;
+        }
     }
     let _ = stream.shutdown(Shutdown::Both);
     Ok(())
@@ -4031,6 +4110,24 @@ mod tests {
             out.headers
                 .contains(&("x-comma".to_string(), "a,b,c".to_string()))
         );
+    }
+
+    #[test]
+    fn envelope_decodes_binary_response_body() {
+        let out = parse_envelope(
+            "__TSP_OUT_V1__\n{\"type\":\"response\",\"status\":200,\"headers\":[[\"content-type\",\"image/png\"]],\"body\":\"\",\"body_b64\":\"AAEC//6A\"}",
+        );
+        assert_eq!(out.kind, EnvelopeKind::Response);
+        assert_eq!(out.content_type, "image/png");
+        assert_eq!(out.body, "");
+        assert_eq!(out.body_bytes, Some(vec![0x00, 0x01, 0x02, 0xff, 0xfe, 0x80]));
+    }
+
+    #[test]
+    fn base64_decoder_rejects_invalid_padding() {
+        assert_eq!(base64_decode("aGVsbG8="), Some(b"hello".to_vec()));
+        assert_eq!(base64_decode("aGVsbG8"), None);
+        assert_eq!(base64_decode("a==="), None);
     }
 
     #[test]

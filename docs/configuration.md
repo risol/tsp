@@ -25,6 +25,18 @@ checkout's route and public directories, and `TSP_CONFIG=tsp.config.json`.
 | `TSP_TIMEOUT_MS` | `30000` | request watchdog; `0` disables it |
 | `TSP_MAX_BODY_BYTES` | `1048576` | global request body cap |
 
+## Image processing limits
+
+`Image` is available from `tsp:server`. These limits apply inside each
+embedded worker process and protect image decoding from oversized compressed
+inputs, decompression bombs, and excessive concurrent image work.
+
+| Variable | Default | Meaning |
+| --- | ---: | --- |
+| `TSP_IMAGE_MAX_INPUT_BYTES` | `268435456` | maximum encoded image input size |
+| `TSP_IMAGE_MAX_PIXELS` | `268402689` | maximum decoded width × height |
+| `TSP_IMAGE_MAX_CONCURRENT_TASKS` | `4` | maximum image pipelines in flight per worker |
+
 A route may lower the body cap with `config.bodyLimit` or override the timeout
 with `config.timeoutMs`. The global body limit is always checked first.
 
@@ -79,6 +91,11 @@ host separately:
     "timeoutMs": 30000,
     "maxBodyBytes": 1048576,
     "development": false
+  },
+  "image": {
+    "maxInputBytes": 268435456,
+    "maxPixels": 268402689,
+    "maxConcurrentTasks": 4
   },
   "worker": {
     "count": 1,

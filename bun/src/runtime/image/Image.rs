@@ -10,6 +10,8 @@
 
 use core::cell::Cell;
 use core::mem;
+use core::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 
 use crate::generated_classes::PropertyName;
 use crate::webcore::Blob;
@@ -64,6 +66,9 @@ pub struct Image {
     /// Decompression-bomb guard. Checked against the *header* dimensions before
     /// any RGBA buffer is allocated. Mirrors Sharp's `limitInputPixels`.
     max_pixels: u64,
+    /// Encoded input cap applied before decoding. This protects both byte-backed
+    /// inputs and file-backed inputs from oversized compressed payloads.
+    max_input_bytes: u64,
     /// Apply EXIF Orientation (JPEG) before any user ops, the way Sharp's
     /// `.rotate()`-with-no-args / `autoOrient` does.
     auto_orient: bool,
@@ -84,7 +89,8 @@ impl Default for Image {
         Self {
             source: JsCell::new(Source::JsBuffer),
             pipeline: Cell::new(Pipeline::default()),
-            max_pixels: codecs::DEFAULT_MAX_PIXELS,
+            max_pixels: image_limits().max_pixels,
+            max_input_bytes: image_limits().max_input_bytes,
             auto_orient: true,
             last_width: Cell::new(-1),
             last_height: Cell::new(-1),
@@ -251,6 +257,84 @@ macro_rules! coerce_int {
 /// path-driven request from materialising gigabytes before any guard runs.
 const MAX_INPUT_FILE_BYTES: u64 = 256 << 20;
 
+const DEFAULT_MAX_INPUT_BYTES: u64 = MAX_INPUT_FILE_BYTES;
+const DEFAULT_MAX_CONCURRENT_TASKS: usize = 4;
+
+#[derive(Clone, Copy)]
+struct ImageLimits {
+    max_input_bytes: u64,
+    max_pixels: u64,
+    max_concurrent_tasks: usize,
+}
+
+fn positive_env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+fn image_limits() -> &'static ImageLimits {
+    static LIMITS: OnceLock<ImageLimits> = OnceLock::new();
+    LIMITS.get_or_init(|| ImageLimits {
+        max_input_bytes: positive_env_u64(
+            "TSP_IMAGE_MAX_INPUT_BYTES",
+            DEFAULT_MAX_INPUT_BYTES,
+        ),
+        max_pixels: positive_env_u64("TSP_IMAGE_MAX_PIXELS", codecs::DEFAULT_MAX_PIXELS),
+        max_concurrent_tasks: usize::try_from(positive_env_u64(
+            "TSP_IMAGE_MAX_CONCURRENT_TASKS",
+            DEFAULT_MAX_CONCURRENT_TASKS as u64,
+        ))
+        .unwrap_or(usize::MAX)
+        .max(1),
+    })
+}
+
+struct ImageTaskGate {
+    limit: usize,
+    active: AtomicUsize,
+}
+
+impl ImageTaskGate {
+    fn try_acquire(&self) -> Option<ImageTaskPermit<'_>> {
+        let mut active = self.active.load(Ordering::Relaxed);
+        loop {
+            if active >= self.limit {
+                return None;
+            }
+            match self.active.compare_exchange_weak(
+                active,
+                active + 1,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Some(ImageTaskPermit { gate: self }),
+                Err(next) => active = next,
+            }
+        }
+    }
+}
+
+struct ImageTaskPermit<'a> {
+    gate: &'a ImageTaskGate,
+}
+
+impl Drop for ImageTaskPermit<'_> {
+    fn drop(&mut self) {
+        self.gate.active.fetch_sub(1, Ordering::Release);
+    }
+}
+
+fn image_task_gate() -> &'static ImageTaskGate {
+    static GATE: OnceLock<ImageTaskGate> = OnceLock::new();
+    GATE.get_or_init(|| ImageTaskGate {
+        limit: image_limits().max_concurrent_tasks,
+        active: AtomicUsize::new(0),
+    })
+}
+
 // ───────────────────────────── lifecycle ────────────────────────────────────
 
 impl Image {
@@ -348,7 +432,8 @@ fn apply_options(img: &mut Image, global: &JSGlobalObject, opt: JSValue) -> JsRe
     }
     if let Some(v) = opt.get(global, "maxPixels")? {
         if v.is_number() {
-            img.max_pixels = coerce_int!(u64, v.as_number(), 0.0, 1e15);
+            img.max_pixels = coerce_int!(u64, v.as_number(), 0.0, 1e15)
+                .min(image_limits().max_pixels);
         }
     }
     if let Some(v) = opt.get(global, "autoOrient")? {
@@ -383,6 +468,11 @@ fn source_from_js(
                     "Image(): only base64 data: URLs are supported",
                 )));
             }
+            if u64::try_from(bun_base64::decode_len(payload)).unwrap_or(u64::MAX)
+                > image_limits().max_input_bytes
+            {
+                return Err(global.throw_value(input_too_large_value(global)));
+            }
             let mut out = vec![0u8; bun_base64::decode_len(payload)];
             let r = base64::decode(&mut out, payload);
             if r.fail {
@@ -408,6 +498,11 @@ fn source_from_js(
                 "Image(): resizable / shared ArrayBuffer is not supported; pass a fixed-length view (e.g. buf.slice())",
             )));
         }
+        if u64::try_from(ab.byte_slice().len()).unwrap_or(u64::MAX)
+            > image_limits().max_input_bytes
+        {
+            return Err(global.throw_value(input_too_large_value(global)));
+        }
         // Just remember the JS object — see Source::JsBuffer for why we don't
         // cache the pointer or pin here.
         js::source_js_set_cached(this_value, global, value);
@@ -418,6 +513,9 @@ fn source_from_js(
         // independently).
         let view = blob.shared_view();
         if !view.is_empty() {
+            if u64::try_from(view.len()).unwrap_or(u64::MAX) > image_limits().max_input_bytes {
+                return Err(global.throw_value(input_too_large_value(global)));
+            }
             return Ok(Source::Owned(view.to_vec()));
         }
         // Anything with a backing store but no in-memory view yet
@@ -643,6 +741,7 @@ fn error_code(e: codecs::Error) -> &'static ZStr {
         E::DecodeFailed => zstr!("ERR_IMAGE_DECODE_FAILED"),
         E::EncodeFailed => zstr!("ERR_IMAGE_ENCODE_FAILED"),
         E::TooManyPixels => zstr!("ERR_IMAGE_TOO_MANY_PIXELS"),
+        E::InputTooLarge => zstr!("ERR_IMAGE_INPUT_TOO_LARGE"),
         E::UnsupportedOnPlatform => zstr!("ERR_IMAGE_FORMAT_UNSUPPORTED"),
         E::OutOfMemory => zstr!("ERR_OUT_OF_MEMORY"),
     }
@@ -657,6 +756,7 @@ fn error_message(e: codecs::Error) -> &'static ZStr {
         E::DecodeFailed => zstr!("Image: decode failed"),
         E::EncodeFailed => zstr!("Image: encode failed"),
         E::TooManyPixels => zstr!("Image: input exceeds maxPixels limit"),
+        E::InputTooLarge => zstr!("Image: encoded input exceeds the configured byte limit"),
         E::UnsupportedOnPlatform => zstr!(
             "Image: format not supported on this machine (HEIC/AVIF/TIFF require the OS codec; AVIF encode needs an AV1 encoder)"
         ),
@@ -674,6 +774,14 @@ fn error_with_code(global: &JSGlobalObject, code: &ZStr, msg: &ZStr) -> JSValue 
         .unwrap_or(JSValue::UNDEFINED);
     err.put(global, b"code", code_js);
     err
+}
+
+fn input_too_large_value(global: &JSGlobalObject) -> JSValue {
+    error_with_code(
+        global,
+        zstr!("ERR_IMAGE_INPUT_TOO_LARGE"),
+        zstr!("Image: encoded input exceeds the configured byte limit"),
+    )
 }
 
 #[derive(thiserror::Error, Debug, strum::IntoStaticStr)]
@@ -1135,12 +1243,26 @@ impl Image {
                 .as_value(global));
             }
         };
+        let Some(permit) = image_task_gate().try_acquire() else {
+            drop(deliver);
+            return Ok(JSPromise::rejected_promise(
+                global,
+                error_with_code(
+                    global,
+                    zstr!("ERR_IMAGE_CONCURRENCY_LIMIT"),
+                    zstr!("Image: too many pipelines are running in this worker"),
+                ),
+            )
+            .as_value(global));
+        };
         let work = PipelineTask {
             pipeline: self.pipeline.get(),
             input,
             kind,
             max_pixels: self.max_pixels,
+            max_input_bytes: self.max_input_bytes,
             auto_orient: self.auto_orient,
+            _permit: permit,
             result: TaskResult::Err(codecs::Error::DecodeFailed),
         };
         let cx = global.js_thread();
@@ -1215,7 +1337,13 @@ impl Image {
             input,
             kind: Kind::Encode(self.pipeline.get().output),
             max_pixels: self.max_pixels,
+            max_input_bytes: self.max_input_bytes,
             auto_orient: self.auto_orient,
+            _permit: image_task_gate().try_acquire().ok_or_else(|| {
+                global.throw(format_args!(
+                    "Image: too many pipelines are running in this worker"
+                ))
+            })?,
             result: TaskResult::Err(codecs::Error::DecodeFailed),
         };
         task.run();
@@ -1329,6 +1457,10 @@ impl<'a> BlobReadChain<'a> {
 
         match r {
             ReadBytesResult::Ok(bytes) => {
+                if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > image.max_input_bytes {
+                    drop(deliver);
+                    return outer.reject(global, Ok(input_too_large_value(global)));
+                }
                 // Concurrent terminals can have started multiple BlobReadChains
                 // (no in-flight serialisation — `start()` re-enters every time
                 // it sees `.blob`). The FIRST resolver wins and swaps to
@@ -1381,7 +1513,9 @@ pub struct PipelineTask {
     input: Input,
     kind: Kind,
     max_pixels: u64,
+    max_input_bytes: u64,
     auto_orient: bool,
+    _permit: ImageTaskPermit<'static>,
     result: TaskResult,
 }
 // SAFETY: `input` borrows bytes that are pinned (`Pin`) or owned by the Image
@@ -1588,8 +1722,8 @@ impl PipelineTask {
                 });
                 return;
             }
-            if u64::try_from(st.st_size.max(0)).expect("int cast") > MAX_INPUT_FILE_BYTES {
-                self.result = TaskResult::Err(codecs::Error::TooManyPixels);
+            if u64::try_from(st.st_size.max(0)).expect("int cast") > self.max_input_bytes {
+                self.result = TaskResult::Err(codecs::Error::InputTooLarge);
                 return;
             }
             match file.read_to_end() {
@@ -1603,6 +1737,11 @@ impl PipelineTask {
         } else {
             self.input.slice()
         };
+
+        if u64::try_from(input.len()).unwrap_or(u64::MAX) > self.max_input_bytes {
+            self.result = TaskResult::Err(codecs::Error::InputTooLarge);
+            return;
+        }
 
         // Header-only fast path for `.metadata()` — Sharp parses just the
         // IHDR/SOF/VP8 header; we used to decode the full RGBA buffer first

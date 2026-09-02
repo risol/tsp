@@ -10,7 +10,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use super::lifecycle::RecyclePolicy;
-use super::manager::{ManagerError, WorkerManager};
+use super::manager::{ImageLimits, ManagerError, WorkerManager};
 use super::protocol::{ExecuteRequest, ExecuteResponse};
 use super::sandbox::ResourceLimits;
 
@@ -71,6 +71,7 @@ pub struct WorkerPool {
     admission: Arc<Admission>,
     recycle_policy: RecyclePolicy,
     resource_limits: ResourceLimits,
+    image_limits: ImageLimits,
 }
 
 impl std::fmt::Debug for WorkerPool {
@@ -113,6 +114,7 @@ impl WorkerPool {
             }),
             recycle_policy: RecyclePolicy::disabled(),
             resource_limits: ResourceLimits::disabled(),
+            image_limits: ImageLimits::default(),
         }
     }
 
@@ -126,6 +128,16 @@ impl WorkerPool {
         for slot in &self.slots {
             if let Ok(mut manager) = slot.manager.lock() {
                 manager.set_resource_limits(self.resource_limits.clone());
+            }
+        }
+        self
+    }
+
+    pub fn with_image_limits(mut self, limits: ImageLimits) -> Self {
+        self.image_limits = limits;
+        for slot in &self.slots {
+            if let Ok(mut manager) = slot.manager.lock() {
+                manager.set_image_limits(self.image_limits);
             }
         }
         self

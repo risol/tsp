@@ -17,6 +17,26 @@ use super::protocol::Message;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(1);
 
+/// Per-worker image safety limits. The image implementation reads these
+/// values from the worker environment because it lives in Bun's runtime crate,
+/// while the TSP configuration parser lives in the host crate.
+#[derive(Clone, Copy, Debug)]
+pub struct ImageLimits {
+    pub max_input_bytes: u64,
+    pub max_pixels: u64,
+    pub max_concurrent_tasks: usize,
+}
+
+impl Default for ImageLimits {
+    fn default() -> Self {
+        Self {
+            max_input_bytes: 256 << 20,
+            max_pixels: 0x3FFF * 0x3FFF,
+            max_concurrent_tasks: 4,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum ManagerError {
     Io(std::io::Error),
@@ -78,6 +98,7 @@ pub struct WorkerManager {
     next_request_id: AtomicU64,
     worker: Option<WorkerHandle>,
     resource_limits: ResourceLimits,
+    image_limits: ImageLimits,
 }
 
 impl std::fmt::Debug for WorkerManager {
@@ -100,6 +121,7 @@ impl WorkerManager {
             next_request_id: AtomicU64::new(1),
             worker: None,
             resource_limits: ResourceLimits::disabled(),
+            image_limits: ImageLimits::default(),
         }
     }
 
@@ -110,6 +132,10 @@ impl WorkerManager {
 
     pub fn set_resource_limits(&mut self, limits: ResourceLimits) {
         self.resource_limits = limits;
+    }
+
+    pub fn set_image_limits(&mut self, limits: ImageLimits) {
+        self.image_limits = limits;
     }
 
     pub fn is_running(&self) -> bool {
@@ -139,6 +165,15 @@ impl WorkerManager {
         let mut child = std::process::Command::new(&self.worker_binary)
             .arg("--tsp-worker")
             .env("TSP_WORKER_SOCKET", &self.socket_path)
+            .env(
+                "TSP_IMAGE_MAX_INPUT_BYTES",
+                self.image_limits.max_input_bytes.to_string(),
+            )
+            .env("TSP_IMAGE_MAX_PIXELS", self.image_limits.max_pixels.to_string())
+            .env(
+                "TSP_IMAGE_MAX_CONCURRENT_TASKS",
+                self.image_limits.max_concurrent_tasks.to_string(),
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
@@ -228,6 +263,15 @@ impl WorkerManager {
             let mut child = std::process::Command::new(&self.worker_binary)
                 .arg("--tsp-worker")
                 .env("TSP_WORKER_SOCKET", endpoint)
+                .env(
+                    "TSP_IMAGE_MAX_INPUT_BYTES",
+                    self.image_limits.max_input_bytes.to_string(),
+                )
+                .env("TSP_IMAGE_MAX_PIXELS", self.image_limits.max_pixels.to_string())
+                .env(
+                    "TSP_IMAGE_MAX_CONCURRENT_TASKS",
+                    self.image_limits.max_concurrent_tasks.to_string(),
+                )
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::inherit())

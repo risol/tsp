@@ -36,6 +36,7 @@ use bun_runtime_tsp::services::ServiceRegistry;
 use bun_runtime_tsp::session_backend::{MemoryBackend, RedisBackend, SessionBackend};
 use bun_runtime_tsp::typings;
 use bun_runtime_tsp::watcher::{self, WatchConfig};
+use bun_runtime_tsp::worker::manager::ImageLimits;
 use bun_runtime_tsp::worker::pool::WorkerPool;
 use bun_runtime_tsp::worker::lifecycle::RecyclePolicy;
 use bun_runtime_tsp::worker::sandbox::ResourceLimits;
@@ -177,9 +178,25 @@ fn serve_main() -> ExitCode {
         cpu_max: std::env::var("TSP_WORKER_CPU_MAX").ok(),
         pids_max: env_u64("TSP_WORKER_PIDS_MAX"),
     };
+    let image_limits = ImageLimits {
+        max_input_bytes: env_u64("TSP_IMAGE_MAX_INPUT_BYTES")
+            .unwrap_or(file_config.image_max_input_bytes),
+        max_pixels: env_u64("TSP_IMAGE_MAX_PIXELS")
+            .unwrap_or(file_config.image_max_pixels),
+        max_concurrent_tasks: env_usize("TSP_IMAGE_MAX_CONCURRENT_TASKS")
+            .unwrap_or(file_config.image_max_concurrent_tasks)
+            .max(1),
+    };
+    eprintln!(
+        "TSP: image limits = input {} bytes, {} pixels, {} concurrent task(s) per worker",
+        image_limits.max_input_bytes,
+        image_limits.max_pixels,
+        image_limits.max_concurrent_tasks
+    );
     let pool = WorkerPool::new(worker_binary.clone(), socket_dir, worker_count, max_in_flight)
         .with_recycle_policy(recycle_policy)
-        .with_resource_limits(resource_limits);
+        .with_resource_limits(resource_limits)
+        .with_image_limits(image_limits);
     let pool = Arc::new(pool);
     let application_name = std::env::var("TSP_APPLICATION_NAME")
         .unwrap_or_else(|_| file_config.application_name.clone());
@@ -477,6 +494,9 @@ fn print_help() {
     );
     println!(
         "TSP commands:\n  tspserver              run the native HTTP server\n  tspserver check       validate routes and local imports\n  tspserver routes      list filesystem routes and exports\n  tspserver graph       print the resolved module graph\n  tspserver typings     write tsp:* TypeScript declaration files\n  tspserver --version   print the version and exit\n  tspserver --help      print this help and exit\n\nEnvironment:\n  TSP_ROUTES_DIR            page source root (default: pages)\n  TSP_PUBLIC_DIR            public asset root (default: public)\n  TSP_PORT                  HTTP port (default: 3000)\n  TSP_TIMEOUT_MS            per-request timeout in ms; 0 disables the\n                            watchdog (default: 30000). The per-page\n                            `config.timeoutMs` overrides this per\n                            request (spec section 7 current contract PageConfig)\n  TSP_DEVELOPMENT           set to 1 for dev mode: page-throw 500\n                            responses render as self-contained HTML\n                            error pages (name + message + stack) instead\n                            of the prod JSON body (default: 0 / prod)\n  TSP_WORKER_COUNT          embedded self-spawned worker processes (default: 1)\n  TSP_WORKER_MAX_IN_FLIGHT  max concurrent requests per worker (default: 2*count)\n  TSP_WORKER_MAX_REQUESTS   recycle each worker after N requests\n  TSP_WORKER_MAX_AGE_MS     recycle each worker after this many ms\n  TSP_WORKER_MAX_MEMORY_BYTES  recycle each worker when RSS reaches this\n  TSP_INVALIDATION_FILE     shared cross-worker invalidation log\n  TSP_MAX_BODY_BYTES         per-request body size cap; requests with\n                            Content-Length over this are rejected with\n                            413 Payload Too Large (default: 1 MiB)\n  TSP_CGROUP_ROOT           explicit Linux cgroup v2 parent directory\n  TSP_WORKER_MEMORY_MAX / TSP_WORKER_CPU_MAX / TSP_WORKER_PIDS_MAX  cgroup limits\n  TSP_REDIS_URL             optional Redis URL for the session backend\n  TSP_CONFIG                JSON file declaring config-driven custom\n                            services (default: tsp.config.json);\n                            supports `kind: counter` with `initial`\n  TSP_APPLICATION_NAME      application name registered in the registry (default: main)"
+    );
+    println!(
+        "Image environment overrides:\n  TSP_IMAGE_MAX_INPUT_BYTES       encoded input cap (default: 256 MiB)\n  TSP_IMAGE_MAX_PIXELS            decoded width × height cap (default: 268402689)\n  TSP_IMAGE_MAX_CONCURRENT_TASKS  in-flight image pipelines per worker (default: 4)"
     );
 }
 

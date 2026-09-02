@@ -43,8 +43,8 @@
 /// §14 / contract item 7), the html-escape helper (`raw`),
 /// the id-generation namespace (`nanoid` family, slice
 /// 17a), the validation library (`zod`, slice 17b), the
-/// database factory (`sql`, slice 17d), and the bun-builtin
-/// `util` namespace (slice 18 + Amendment 2).
+/// database factory (`sql`, slice 17d), the native image pipeline
+/// (`Image`), and the bun-builtin `util` namespace (slice 18 + Amendment 2).
 pub fn tsp_server_dts() -> &'static str {
     include_str!("../../../../tsp-types/tsp-server.d.ts")
 }
@@ -128,6 +128,8 @@ mod tests {
             // Validation + database (slice 17b/d).
             "export const zod",
             "export const sql",
+            // Native image pipeline.
+            "export class Image",
             // Bun builtin namespace (slice 18 + Amendment 2).
             "export const util",
         ] {

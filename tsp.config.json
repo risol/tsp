@@ -9,6 +9,11 @@
     "maxBodyBytes": 1048576,
     "development": false
   },
+  "image": {
+    "maxInputBytes": 268435456,
+    "maxPixels": 268402689,
+    "maxConcurrentTasks": 4
+  },
   "worker": {
     "count": 1,
     "maxInFlight": 2,

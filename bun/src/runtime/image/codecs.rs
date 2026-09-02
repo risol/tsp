@@ -239,6 +239,9 @@ pub enum Error {
     /// BEFORE allocating the full RGBA buffer.
     #[error("TooManyPixels")]
     TooManyPixels,
+    /// The encoded input exceeds the runtime's image input cap.
+    #[error("InputTooLarge")]
+    InputTooLarge,
     /// HEIC/AVIF on a platform with no system backend (Linux), or the system
     /// backend declined and there's no static codec to fall back to.
     #[error("UnsupportedOnPlatform")]

@@ -273,6 +273,97 @@ declare module "tsp:server" {
   export const sql: any;
 
   // -------------------------------------------------------------
+  // Image processing
+  // -------------------------------------------------------------
+
+  /**
+   * Bun's native image pipeline, exposed explicitly through TSP. The
+   * constructor accepts encoded image bytes or a Blob; path-backed inputs are
+   * also supported by the underlying Bun implementation. Decode, transform,
+   * and encode work runs on Bun's image worker pool.
+   */
+  export namespace Image {
+    type ErrorCode =
+      | "ERR_IMAGE_FORMAT_UNSUPPORTED"
+      | "ERR_IMAGE_TOO_MANY_PIXELS"
+      | "ERR_IMAGE_INPUT_TOO_LARGE"
+      | "ERR_IMAGE_CONCURRENCY_LIMIT"
+      | "ERR_IMAGE_DECODE_FAILED"
+      | "ERR_IMAGE_ENCODE_FAILED"
+      | "ERR_IMAGE_UNKNOWN_FORMAT"
+      | "ERR_INVALID_STATE";
+
+    type Format = "jpeg" | "png" | "webp" | "heic" | "avif" | "bmp" | "tiff" | "gif";
+    type Filter =
+      | "nearest"
+      | "box"
+      | "bilinear"
+      | "linear"
+      | "cubic"
+      | "mitchell"
+      | "lanczos2"
+      | "lanczos3"
+      | "mks2013"
+      | "mks2021";
+
+    interface ConstructorOptions {
+      maxPixels?: number;
+      autoOrient?: boolean;
+    }
+
+    interface ResizeOptions {
+      filter?: Filter;
+      fit?: "fill" | "inside";
+      withoutEnlargement?: boolean;
+    }
+
+    interface Metadata {
+      width: number;
+      height: number;
+      format: Format;
+    }
+  }
+
+  export class Image {
+    static backend: "system" | "bun";
+    static fromClipboard(): Image | null;
+    static hasClipboardImage(): boolean;
+    static clipboardChangeCount(): number;
+
+    constructor(
+      input: string | ArrayBuffer | ArrayBufferView | Blob,
+      options?: Image.ConstructorOptions,
+    );
+
+    resize(width: number, height?: number, options?: Image.ResizeOptions): this;
+    rotate(degrees: number): this;
+    flip(): this;
+    flop(): this;
+    modulate(options: { brightness?: number; saturation?: number }): this;
+    jpeg(options?: { quality?: number; progressive?: boolean }): this;
+    png(options?: {
+      compressionLevel?: number;
+      palette?: boolean;
+      colors?: number;
+      dither?: boolean;
+    }): this;
+    webp(options?: { quality?: number; lossless?: boolean }): this;
+    heic(options?: { quality?: number }): this;
+    avif(options?: { quality?: number }): this;
+    bytes(): Promise<Uint8Array>;
+    buffer(): Promise<Uint8Array>;
+    toBuffer(): Promise<Uint8Array>;
+    blob(): Promise<Blob>;
+    toBase64(): Promise<string>;
+    dataurl(): Promise<string>;
+    placeholder(as?: "dataurl"): Promise<string>;
+    metadata(): Promise<Image.Metadata>;
+    write(destination: unknown): Promise<number>;
+    readonly width: number;
+    readonly height: number;
+  }
+
+  // -------------------------------------------------------------
   // Bun builtin namespace (slice 18 + Amendment 2)
   // -------------------------------------------------------------
 
