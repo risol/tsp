@@ -8,8 +8,8 @@
 //!
 //! The platform split is intentional:
 //!
-//! - Unix uses `/proc/<pid>/{stat,exe,cmdline}`, the same surface
-//!   `kill -0` uses and which every supported Linux target ships.
+//! - Linux uses `/proc/<pid>/{stat,exe,cmdline}`, the same surface
+//!   `kill -0` uses and which the supported Linux target ships.
 //! - Windows has no `/proc`; process model assertions that need the
 //!   parent's exe path or argv are satisfied by having the *master*
 //!   pass its own exe path through an environment variable before
@@ -52,28 +52,27 @@ pub fn current() -> std::io::Result<ProcessInfo> {
 /// exited or never existed. Permission errors surface with the
 /// platform's default kind.
 ///
-/// On Windows, this is a no-op for arbitrary PIDs (returns
-/// `PermissionDenied`); tests that need cross-process inspection on
-/// Windows should arrange for the inspected process to publish its
-/// info to a file.
+/// On non-Linux platforms, this is a no-op for arbitrary PIDs (returns
+/// `PermissionDenied`); tests that need cross-process inspection should
+/// arrange for the inspected process to publish its info to a file.
 pub fn collect(pid: u32) -> std::io::Result<ProcessInfo> {
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
         unix::collect(pid)
     }
-    #[cfg(not(unix))]
+    #[cfg(not(target_os = "linux"))]
     {
-        // Windows: only "self" is fully supported. For an arbitrary
+        // Non-Linux platforms: only "self" is fully supported. For an arbitrary
         // PID we return PermissionDenied so tests that try to inspect
         // a peer process are told to use the file-based path instead
         // of silently getting a half-populated record.
         if pid == std::process::id() {
-            self_info_windows()
+            self_info_non_linux()
         } else {
             Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
-                "process_inspector::collect(arbitrary pid) is Unix-only; \
-                 use the file-based process_info.json path on Windows",
+                "process_inspector::collect(arbitrary pid) is Linux-only; \
+                 use the file-based process_info.json path on non-Linux platforms",
             ))
         }
     }
@@ -103,9 +102,9 @@ pub fn is_alive(pid: u32) -> bool {
             )
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(not(target_os = "linux"))]
     {
-        // On Windows, the master process can only directly query
+        // On non-Linux platforms, the master process can only directly query
         // itself. Reaping a peer is observable through the
         // protocol (the peer's stream closes) or the test
         // framework, not through this helper.
@@ -113,7 +112,7 @@ pub fn is_alive(pid: u32) -> bool {
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 mod unix {
     use super::ProcessInfo;
     use std::io;
@@ -191,17 +190,17 @@ mod unix {
     }
 }
 
-#[cfg(not(unix))]
-fn self_info_windows() -> std::io::Result<ProcessInfo> {
+#[cfg(not(target_os = "linux"))]
+fn self_info_non_linux() -> std::io::Result<ProcessInfo> {
     let pid = std::process::id();
     let exe_path = std::env::current_exe()?;
+    #[cfg(unix)]
+    let ppid = unsafe { libc::getppid() as u32 };
+    #[cfg(not(unix))]
+    let ppid = 0;
     Ok(ProcessInfo {
         pid,
-        // The "parent PID" of a self-inspection on Windows is
-        // irrelevant for our test purposes; tests that need a
-        // real parent PID on Windows pass `TSP_MASTER_PID` via
-        // the env and assert against that instead.
-        ppid: 0,
+        ppid,
         exe_path,
         argv: std::env::args().collect(),
     })

@@ -26,6 +26,27 @@ use std::time::Duration;
 
 static MASTER_BINARY: OnceLock<Option<PathBuf>> = OnceLock::new();
 
+fn repository_root() -> PathBuf {
+    let mut starts = Vec::new();
+    if let Some(workspace) = std::env::var_os("GITHUB_WORKSPACE") {
+        starts.push(PathBuf::from(workspace));
+    }
+    if let Ok(current) = std::env::current_dir() {
+        starts.push(current);
+    }
+    starts.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+
+    for start in starts {
+        for candidate in start.ancestors() {
+            if candidate.join("tsp.config.json").is_file() && candidate.join("bun").is_dir() {
+                return candidate.to_path_buf();
+            }
+        }
+    }
+
+    panic!("could not locate the TSP repository root");
+}
+
 fn locate_master() -> Option<&'static PathBuf> {
     MASTER_BINARY
         .get_or_init(|| locate_master_inner())
@@ -4598,7 +4619,7 @@ fn check_with_tsc_flag_catches_user_type_errors_and_passes_clean_routes() {
         .arg("check")
         .arg("--tsc")
         .env("TSP_ROUTES_DIR", &clean_routes)
-        .current_dir(std::path::Path::new("D:/GitHub/tsp"))
+        .current_dir(repository_root())
         .output()
         .expect("check --tsc spawn");
     let clean_stdout = String::from_utf8_lossy(&clean_output.stdout);
@@ -4632,7 +4653,7 @@ fn check_with_tsc_flag_catches_user_type_errors_and_passes_clean_routes() {
         .arg("check")
         .arg("--tsc")
         .env("TSP_ROUTES_DIR", &broken_routes)
-        .current_dir(std::path::Path::new("D:/GitHub/tsp"))
+        .current_dir(repository_root())
         .output()
         .expect("check --tsc broken spawn");
     let broken_stdout = String::from_utf8_lossy(&broken_output.stdout);
@@ -5083,7 +5104,7 @@ fn tsc_check_no_color_flag_strips_ansi_escapes_from_output() {
         .arg("--tsc")
         .arg("--no-color")
         .env("TSP_ROUTES_DIR", &routes_dir)
-        .current_dir(std::path::Path::new("D:/GitHub/tsp"))
+        .current_dir(repository_root())
         .output()
         .expect("check --tsc --no-color spawn");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -5562,7 +5583,7 @@ export function DELETE() {
         .arg("routes")
         .arg("--json")
         .env("TSP_ROUTES_DIR", &routes_dir)
-        .current_dir(std::path::Path::new("D:/GitHub/tsp"))
+        .current_dir(repository_root())
         .output()
         .expect("routes --json spawn");
     assert_eq!(
@@ -5666,7 +5687,7 @@ export function GET() {
         .arg("graph")
         .arg("--json")
         .env("TSP_ROUTES_DIR", &routes_dir)
-        .current_dir(std::path::Path::new("D:/GitHub/tsp"))
+        .current_dir(repository_root())
         .output()
         .expect("graph --json spawn");
     assert_eq!(
@@ -5787,7 +5808,7 @@ export function GET() { return new Response("g"); }
     let output = std::process::Command::new(master)
         .arg("check")
         .env("TSP_ROUTES_DIR", &routes_dir)
-        .current_dir(std::path::Path::new("D:/GitHub/tsp"))
+        .current_dir(repository_root())
         .output()
         .expect("check spawn");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -5895,7 +5916,7 @@ export function another_helper() { return 2; }
     let output = std::process::Command::new(master)
         .arg("check")
         .env("TSP_ROUTES_DIR", &routes_dir)
-        .current_dir(std::path::Path::new("D:/GitHub/tsp"))
+        .current_dir(repository_root())
         .output()
         .expect("check spawn");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -6016,7 +6037,7 @@ export function GET() { return new Response("ok"); }
     let output = std::process::Command::new(master)
         .arg("check")
         .env("TSP_ROUTES_DIR", &routes_dir)
-        .current_dir(std::path::Path::new("D:/GitHub/tsp"))
+        .current_dir(repository_root())
         .output()
         .expect("check spawn");
     let stdout = String::from_utf8_lossy(&output.stdout);
