@@ -1204,13 +1204,25 @@ fn copy_routes_recursive(
 ///   3. `tsc` on PATH
 fn locate_tsc_binary() -> Option<PathBuf> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let candidate_cmd = cwd.join("node_modules").join(".bin").join("tsc.cmd");
-    if candidate_cmd.is_file() {
-        return Some(candidate_cmd);
+    let mut roots = vec![cwd.clone()];
+    if cwd.join("bun").is_dir() {
+        roots.push(cwd.join("bun"));
     }
-    let candidate = cwd.join("node_modules").join(".bin").join("tsc");
-    if candidate.is_file() {
-        return Some(candidate);
+    if let Some(workspace) = std::env::var_os("GITHUB_WORKSPACE") {
+        let workspace = PathBuf::from(workspace);
+        roots.push(workspace.clone());
+        roots.push(workspace.join("bun"));
+    }
+    for root in roots {
+        let bin_dir = root.join("node_modules").join(".bin");
+        let candidate_cmd = bin_dir.join("tsc.cmd");
+        if candidate_cmd.is_file() {
+            return Some(candidate_cmd);
+        }
+        let candidate = bin_dir.join("tsc");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
     }
     // Fall back to PATH: `Command::new("tsc")` resolves
     // through the standard PATH search on both Windows
@@ -1242,7 +1254,6 @@ const TSC_TSCONFIG_JSON: &str = r#"{
     "skipLibCheck": true,
     "strict": false,
     "esModuleInterop": true,
-    "baseUrl": ".",
     "paths": {
       "tsp:server": ["./tsp-types/tsp-server.d.ts"],
       "tsp:html": ["./tsp-types/tsp-html.d.ts"],

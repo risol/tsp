@@ -217,7 +217,7 @@ mod tests {
         assert!(!info.exe_path.as_os_str().is_empty());
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn parse_ppid_handles_comm_with_parentheses() {
         // A renamed self (e.g. setproctitle-style "foo)bar") must

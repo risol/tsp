@@ -255,6 +255,7 @@ jobs:
         shell: pwsh
         env:
           TSP_REQUIRE_E2E: '1'
+          TSP_WORKER_STARTUP_TRACE: '1'
           TSP_TEST_MASTER: ${{ github.workspace }}/dist/tspserver/tspserver.exe
         run: cargo test --manifest-path bun/Cargo.toml -p bun_runtime_tsp --test start_order --no-fail-fast --locked -- --test-threads=1
 
