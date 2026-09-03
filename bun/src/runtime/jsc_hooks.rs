@@ -4516,9 +4516,9 @@ const ALWAYS_SYNC_MODULES: &[&[u8]] = &[b"reflect-metadata"];
 
 const TSP_SERVER_BRIDGE: &str = "globalThis[Symbol.for('tsp.server.bridge')]";
 
-/// Rewrite `tsp:server` imports in application modules loaded through Bun's
-/// CommonJS path. Route entry points are transformed by the TSP host before
-/// they reach Bun, but a local `.ts` helper is loaded later by `require()` and
+/// Rewrite `tsp:server` imports in local application modules loaded through
+/// Bun's native module path. Route entry points are transformed by the TSP
+/// host before they reach Bun, but a local `.ts` helper is loaded later and
 /// would otherwise be resolved as an ordinary package import. Keep this
 /// compatibility rewrite in the file loader so it applies recursively to
 /// every local dependency without modifying the user's source file.
@@ -5265,8 +5265,7 @@ pub(crate) fn transpile_embedded_source(
         ErrorableResolvedSource::err(ErrorCode(ErrorCode::JS_ERROR_OBJECT), JSValue::UNDEFINED);
 
     // SAFETY: all slices and the output remain live for the synchronous call;
-    // `global` is the embedded worker's live JS global. The virtual-module
-    // path consumes the result into an RAII owner below before returning.
+    // the virtual-module path consumes the result into an RAII owner below.
     unsafe {
         transpile_virtual_module_with_type(
             global,
@@ -5274,12 +5273,6 @@ pub(crate) fn transpile_embedded_source(
             &raw const referrer_string,
             &raw mut source_string,
             bun_options_types::schema::api::Loader::tsx,
-            // Print the request wrapper as CommonJS, then unwrap the
-            // printer's outer function below. The embedded evaluator runs a
-            // plain script, so ESM-only syntax such as `import.meta` cannot
-            // be left in the result. We do not invoke the CJS wrapper itself:
-            // doing that would recreate the module-builder path that failed
-            // on Windows.
             ModuleType::Cjs,
             &raw mut result,
         );
@@ -5289,23 +5282,104 @@ pub(crate) fn transpile_embedded_source(
         return Err("embedded TSP wrapper transpilation failed".into());
     }
 
-    // `transpile_virtual_module` transfers the successful `ResolvedSource`
-    // into the out-param exactly as the C++ module loader does. Adopt it here
-    // so every owned BunString field is released after copying the JS bytes.
     let resolved = unsafe { result.result.value };
     let owned = OwnedResolvedSource::from(resolved);
     let source = owned.get().source_code.to_utf8_bytes();
-    const CJS_PREFIX: &[u8] = b"(function(exports, require, module, __filename, __dirname) {\n";
-    const CJS_SUFFIX: &[u8] = b"\n});";
-    let source_without_trailing_newline = source.strip_suffix(b"\n").unwrap_or(&source);
-    if source_without_trailing_newline.starts_with(CJS_PREFIX)
-        && source_without_trailing_newline.ends_with(CJS_SUFFIX)
-    {
-        return Ok(source_without_trailing_newline
-            [CJS_PREFIX.len()..source_without_trailing_newline.len() - CJS_SUFFIX.len()]
-            .to_vec());
+    // The printer may prepend a Bun metadata comment and may vary whitespace
+    // around the CommonJS shell. Locate the wrapper structurally instead of
+    // depending on an incidental printer prefix.
+    let function_offset = {
+        let mut search_from = 0;
+        let mut found = None;
+        while let Some(relative_offset) = source[search_from..].windows(b"(function".len()).position(|window| window == b"(function") {
+            let offset = search_from + relative_offset;
+            let Some(end_relative) = source[offset..].iter().position(|byte| *byte == b')') else {
+                break;
+            };
+            let signature = &source[offset..=offset + end_relative];
+            let compact_signature: Vec<u8> = signature
+                .iter()
+                .copied()
+                .filter(|byte| !byte.is_ascii_whitespace())
+                .collect();
+            if compact_signature == b"(function(exports,require,module,__filename,__dirname)"
+                || compact_signature == b"(function(require,exports,module,__filename,__dirname)"
+            {
+                found = Some(offset);
+                break;
+            }
+            search_from = offset + b"(function".len();
+        }
+        found
+    };
+    let Some(function_offset) = function_offset else {
+        // Recent Bun printers can return already-unwrapped JavaScript for a
+        // virtual CJS source. It is safe to evaluate that form directly.
+        return Ok(normalize_plain_script_source(&source));
+    };
+    let shell = &source[function_offset..];
+    let Some(body_offset) = shell.iter().position(|byte| *byte == b'{') else {
+        return Err("embedded TSP wrapper transpilation produced an unexpected CommonJS shape".into());
+    };
+    let Some(suffix_offset) = shell.windows(b"});".len()).rposition(|window| window == b"});") else {
+        return Err("embedded TSP wrapper transpilation produced an unexpected CommonJS shape".into());
+    };
+    let body_start = body_offset + 1;
+    if body_start > suffix_offset {
+        return Err("embedded TSP wrapper transpilation produced an unexpected CommonJS shape".into());
     }
-    Err("embedded TSP wrapper transpilation produced an unexpected CommonJS shape".into())
+    Ok(normalize_plain_script_source(&shell[body_start..suffix_offset]))
+}
+
+/// `Bun__REPL__evaluate` parses a plain script, while some bundled Bun
+/// shims can retain `import.meta` syntax even after the outer source is
+/// printed as CommonJS. Keep that syntax out of the plain-script boundary;
+/// the generated TSP wrapper does not rely on `import.meta` itself.
+fn normalize_plain_script_source(source: &[u8]) -> Vec<u8> {
+    const IMPORT_META: &[u8] = b"import.meta";
+    let mut normalized = Vec::with_capacity(source.len());
+    let mut start = 0;
+    while let Some(relative_offset) = source[start..]
+        .windows(IMPORT_META.len())
+        .position(|window| window == IMPORT_META)
+    {
+        let offset = start + relative_offset;
+        normalized.extend_from_slice(&source[start..offset]);
+        normalized.extend_from_slice(b"globalThis.__tspImportMeta__");
+        start = offset + IMPORT_META.len();
+    }
+    normalized.extend_from_slice(&source[start..]);
+
+    // `transpile_source_code_inner` may preserve ESM exports when the input
+    // contains route declarations. The request wrapper is evaluated inside
+    // an async script, not through the module loader, so keep the declarations
+    // while dropping only their module-export marker.
+    let mut out = Vec::with_capacity(normalized.len());
+    for line in normalized.split_inclusive(|byte| *byte == b'\n') {
+        let line_without_newline = line.strip_suffix(b"\n").unwrap_or(line);
+        let indentation_len = line_without_newline
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace())
+            .unwrap_or(line_without_newline.len());
+        let indentation = &line_without_newline[..indentation_len];
+        let content = &line_without_newline[indentation_len..];
+        if let Some(rest) = content.strip_prefix(b"export ") {
+            if rest.starts_with(b"{") {
+                // `export { GET };` only publishes an already declared
+                // binding, so it has no work to do in the request script.
+                out.extend_from_slice(indentation);
+            } else {
+                out.extend_from_slice(indentation);
+                out.extend_from_slice(rest);
+            }
+        } else {
+            out.extend_from_slice(line_without_newline);
+        }
+        if line.ends_with(b"\n") {
+            out.push(b'\n');
+        }
+    }
+    out
 }
 
 /// Materialise an embedded file (`.node`/`.so`/`.dylib`/`.dll` from

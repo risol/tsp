@@ -38,32 +38,19 @@ impl std::fmt::Display for JsxError {
 
 impl std::error::Error for JsxError {}
 
-/// Transform a `.tsp` source string into a runnable TSX module body for
-/// `bun run tempfile`. Bun performs the actual TypeScript/TSX lowering.
+/// Transform a `.tsp` source string into a runnable TSX module body for the
+/// embedded ESM entry point. Bun performs the actual TypeScript/TSX lowering.
 pub fn tsx_to_js(source: &str) -> Result<String, JsxError> {
     let source = rewrite_tsp_server_imports(source)?;
     Ok(rewrite_fragment_exports(&source))
 }
 
-/// Transform relative local imports into a form the synthetic `bun:main`
-/// wrap can load.
-///
-/// **Why not keep the `import` statement?** The wrap preamble (`jsx::wrap_for_bun_cli`)
-/// prepends a non-trivial prelude (nanoid, zod, bcrypt, `require("bun").SQL`,
-/// `__tspServer`, ctx hydration, fragment registry, etc.) before the page
-/// body. The page's `import { x } from "./y"` therefore lands **mid-file**
-/// in the generated module. Bun's synthetic `bun:main` entry evaluates the
-/// file as a single module, and a mid-file `import` is invalid in both CJS
-/// and ESM contexts. Empirically (slice 17d) the wrap loads successfully
-/// but the IIFE that calls the page handler never resolves, and the worker
-/// poll loop times out with "embedded TSP wrapper did not produce a response".
-///
-/// **The fix**: rewrite `import { a, b as c } from "./y"` into
-/// `const { a, b: c } = require("file:///...y?tsp_generation=N");` and
-/// `import("./y")` into `require("file:///...y?tsp_generation=N")`. The
-/// page keeps its `import` syntax (no page-side changes); the rewriter
-/// turns it into a CommonJS `require` so the page's relative import lands
-/// at a position in the module where a `const` / expression is legal.
+/// Transform relative local imports into absolute ESM imports that the
+/// synthetic `bun:main` module can resolve regardless of the generated
+/// wrapper's temporary directory. Static imports become top-level
+/// `await import(...)` bindings because the wrapper must initialize the
+/// per-request TSP bridge before evaluating a dependency's own module graph.
+/// This keeps dependency loading in Bun's native ESM loader.
 ///
 /// `.tsp` is intentionally rejected as an import target; route modules are
 /// entry points, not reusable library modules.
@@ -121,11 +108,8 @@ fn rewrite_local_imports_at_generation(
     Ok(out)
 }
 
-/// Rewrite a dynamic `import("./y")` expression into a synchronous
-/// `require("file:///...y?tsp_generation=N")`. Dynamic imports are
-/// expressions, so they can appear mid-file in any module mode; the
-/// `require` substitution keeps the call site and its surrounding
-/// parentheses / arguments intact.
+/// Rewrite a dynamic local import to an absolute ESM URL. Dynamic imports are
+/// expressions, so they can remain in place without changing module syntax.
 fn rewrite_dynamic_import(
     line: &str,
     quote: char,
@@ -159,28 +143,17 @@ fn rewrite_dynamic_import(
         });
     };
     let url = file_url(&path, generation);
-    // `import("...")` -> `require("file://...")`. We keep the same
-    // span (everything up to and including the closing `)` of the call).
+    // Preserve the dynamic-import expression and replace only its specifier.
     let mut result = String::with_capacity(line.len() + 8 + url.len());
     result.push_str(&line[..start]);
-    result.push_str("require(\"");
+    result.push_str("import(\"");
     result.push_str(&url);
-    result.push_str("\")");
-    // The original `import(...)` is closed by the `)` that comes after
-    // the specifier; we've already emitted that via the url-quote-quote
-    // suffix. We must skip the `)` in the original line -- so drop
-    // `end` (specifier close quote) AND the character right after
-    // (which is the `)`).
-    let after = if end < line.len() { &line[end + 1..] } else { "" };
-    // The `after` slice starts with the character following the spec's
-    // closing quote. For `import("...")`, that's `)`. We want to keep
-    // it (the `require("...")` is the call, no extra `)` needed).
-    result.push_str(after);
+    result.push_str(&line[end..]);
     Ok(result)
 }
 
 /// Rewrite a static `import { a, b as c } from "./y"` declaration into a
-/// `const { a, b: c } = require("file:///...y?...")`. The named-binding
+/// `const { a, b: c } = await import("file:///...y?...")`. The named-binding
 /// shape is the only one the current rewriter accepts (plan §16.1:
 /// `import { x }` is the supported named-import form). The transformation
 /// preserves `as` renames (`a as b` -> `a: b` in the destructure).
@@ -292,7 +265,7 @@ fn rewrite_import_marker(
     replacement.push_str(&line[..import_kw]);
     replacement.push_str("const { ");
     replacement.push_str(&destructure);
-    replacement.push_str(" } = require(\"");
+    replacement.push_str(" } = await import(\"");
     replacement.push_str(&url);
     replacement.push_str("\");");
     Ok(replacement)
@@ -932,10 +905,10 @@ fn wrap_for_bun_cli_inner(
           Object.defineProperty(__tspServer, 'sql', { enumerable: true, get: () => require(\"bun\").SQL });\n\
           Object.defineProperty(__tspServer, 'Image', { enumerable: true, get: () => Bun.Image });\n\
           Object.freeze(__tspServer);\n\
-          // Local CommonJS dependencies are evaluated in their own module\n\
-          // scope. The Bun loader rewrites their `tsp:server` imports to\n\
+          // Local ESM dependencies are evaluated by Bun's native module loader\n\
+          // scope. The loader rewrites their `tsp:server` imports to\n\
           // this non-enumerable symbol bridge, so expose the current request\n\
-          // namespace before the route's dependencies are required.\n\
+          // namespace before the route dynamically imports them.\n\
           Object.defineProperty(globalThis, Symbol.for('tsp.server.bridge'), { configurable: true, value: __tspServer });\n"
     );
     out.push_str(
@@ -1189,12 +1162,9 @@ fn wrap_for_bun_cli_inner(
 /// well-known global for the native worker to read, and the wrapper does not
 /// call `process.exit`, which would tear down the embedded runtime.
 pub fn wrap_for_embedded_worker(transformed: &str, method: &str, ctx_json: Option<&str>) -> String {
-    // Load embedded request wrappers through CommonJS so a synchronous route
-    // does not create an ESM async-module resume microtask. The latter is the
-    // first failing JSC checkpoint on the Windows source build. Route exports
-    // are local declarations for this wrapper, so remove their markers before
-    // the file is loaded as CommonJS.
-    let transformed = strip_embedded_module_exports(transformed);
+    // Keep the request wrapper as an ESM module. Local dependencies are
+    // loaded by Bun's native module loader, and the generated wrapper uses
+    // top-level dynamic imports after publishing its per-request bridge.
     let mut wrapped = wrap_for_bun_cli_inner(&transformed, method, ctx_json, true);
     // A worker VM serves more than one request. Clear the previous request's
     // result before loading the next entry point so a failed execution cannot
@@ -1214,31 +1184,42 @@ pub fn wrap_for_embedded_worker(transformed: &str, method: &str, ctx_json: Optio
     wrapped.replace(stdout_error, embedded_error)
 }
 
-/// Make route declarations valid inside the CommonJS request wrapper.
-///
-/// The wrapper selects `GET`/`POST` by local name and does not consume an ESM
-/// namespace. Removing declaration-level `export` markers therefore preserves
-/// the route contract while keeping the request file on the synchronous CJS
-/// loader path.
-fn strip_embedded_module_exports(source: &str) -> String {
-    let mut out = String::with_capacity(source.len());
-    for line in source.lines() {
-        let indent_len = line.len() - line.trim_start().len();
-        let (indent, trimmed) = line.split_at(indent_len);
-        if let Some(rest) = trimmed.strip_prefix("export ") {
-            out.push_str(indent);
-            out.push_str(rest);
-        } else {
-            out.push_str(line);
-        }
-        out.push('\n');
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn response_body_from_stdout(stdout: &str) -> String {
+        let encoded = stdout
+            .split_once("\"body_b64\":\"")
+            .and_then(|(_, rest)| rest.split_once('\"'))
+            .map(|(body, _)| body)
+            .expect("response envelope must contain body_b64");
+        let mut bytes = Vec::with_capacity(encoded.len() / 4 * 3);
+        for chunk in encoded.as_bytes().chunks_exact(4) {
+            let value = |byte: u8| -> u8 {
+                match byte {
+                    b'A'..=b'Z' => byte - b'A',
+                    b'a'..=b'z' => byte - b'a' + 26,
+                    b'0'..=b'9' => byte - b'0' + 52,
+                    b'+' => 62,
+                    b'/' => 63,
+                    _ => panic!("response body contains invalid base64"),
+                }
+            };
+            let a = value(chunk[0]);
+            let b = value(chunk[1]);
+            let c = if chunk[2] == b'=' { 0 } else { value(chunk[2]) };
+            let d = if chunk[3] == b'=' { 0 } else { value(chunk[3]) };
+            bytes.push((a << 2) | (b >> 4));
+            if chunk[2] != b'=' {
+                bytes.push((b << 4) | (c >> 2));
+            }
+            if chunk[3] != b'=' {
+                bytes.push((c << 6) | d);
+            }
+        }
+        String::from_utf8(bytes).expect("test response body must be UTF-8")
+    }
 
     #[test]
     fn preserves_module_exports_for_bun_tsx_transpiler() {
@@ -1306,17 +1287,10 @@ export function GET() {
     }
 
     #[test]
-    fn rewrite_local_imports_converts_static_imports_to_require() {
-        // Slice 17d: relative `import { x } from "./y"` declarations
-        // cannot survive the wrap preamble (which prepends a
-        // multi-line prelude before the page body lands mid-file,
-        // so a static `import` is invalid in both CJS and ESM
-        // module scopes and bun's synthetic `bun:main` poll loop
-        // never sees the response). The rewriter turns them into
-        // `const { x } = require("file:///...y?tsp_generation=N")`
-        // so the binding is available at a top-level position the
-        // prelude can follow up on. Pages still write `import`;
-        // the rewriter absorbs the syntactic difference.
+    fn rewrite_local_imports_preserves_esm_loading() {
+        // The embedded worker writes the generated wrapper as a real ESM
+        // entry point. Static local imports therefore use top-level await
+        // instead of entering Bun's CommonJS loader recursively.
         let dir =
             std::env::temp_dir().join(format!("tspserver-jsx-rewrite-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1325,12 +1299,12 @@ export function GET() {
         let src = "import { a, b as renamed } from './shared';\nexport function GET() { return a + renamed; }\n";
         let out = rewrite_local_imports(src, &dir).unwrap();
         assert!(
-            out.contains("const { a, b: renamed } = require("),
-            "rewriter must collapse the import to a `const ... = require(...)` destructure; got: {out}"
+            out.contains("const { a, b: renamed } = await import("),
+            "rewriter must keep local dependencies on the native ESM loader; got: {out}"
         );
         assert!(
-            !out.contains("import {"),
-            "the original `import` syntax must not survive the rewriter; got: {out}"
+            !out.contains("require("),
+            "the local dependency rewriter must not introduce CommonJS require; got: {out}"
         );
         assert!(
             out.contains("file://") && out.contains("shared.ts"),
@@ -1485,13 +1459,11 @@ export async function GET() {
     }
 
     #[test]
-    fn embedded_wrapper_removes_route_export_markers_for_commonjs_loading() {
+    fn embedded_wrapper_preserves_route_exports_for_esm_loading() {
         let transformed = "export const config = { cache: 'no-store' };\nexport async function GET() { return 'ok'; }\n";
         let wrapped = wrap_for_embedded_worker(transformed, "GET", None);
-        assert!(wrapped.contains("const config = { cache: 'no-store' }"));
-        assert!(wrapped.contains("async function GET()"));
-        assert!(!wrapped.contains("export const config"));
-        assert!(!wrapped.contains("export async function GET"));
+        assert!(wrapped.contains("export const config = { cache: 'no-store' }"));
+        assert!(wrapped.contains("export async function GET()"));
     }
 
     #[test]
@@ -2465,16 +2437,14 @@ export function GET() {
         );
         // The zod parse produced `{ ok: true, name: "alice", age: 30 }`
         // (the `coerce.number()` converted "30" to 30). The page
-        // JSON-stringifies that object and returns it as the body,
-        // so the envelope's `body` field is itself a JSON-encoded
-        // string with the inner `"` escaped. Look for the three
-        // escaped fragments -- they're the strongest evidence that
-        // the page actually ran and produced the right envelope
-        // without going through any zod or prelude error.
+        // The response wrapper carries every Response body as Base64
+        // so binary responses remain lossless. Decode it before checking
+        // the JSON returned by the page.
+        let response_body = response_body_from_stdout(&stdout);
         assert!(
-            stdout.contains(r#"\"ok\":true"#)
-                && stdout.contains(r#"\"name\":\"alice\""#)
-                && stdout.contains(r#"\"age\":30"#),
+            response_body.contains(r#""ok":true"#)
+                && response_body.contains(r#""name":"alice""#)
+                && response_body.contains(r#""age":30"#),
             "envelope must contain the parsed zod result; stdout: {stdout}"
         );
         assert!(
@@ -2748,12 +2718,13 @@ export async function GET(ctx) {
             "bun must print the envelope marker; stdout: {stdout}"
         );
         // The page returned `{ ok: true, row: { id: 1, label: "slice17d" } }`.
-        // Body is JSON-escaped inside the envelope, so look for
-        // the escaped fragments. `bun:sqlite` is in-process (no
-        // server needed) and the row count check confirms the
-        // conn was real (not a stub).
+        // Decode the Base64 response body before checking the returned
+        // row. `bun:sqlite` is in-process (no server needed) and the row
+        // value confirms the connection was real (not a stub).
+        let response_body = response_body_from_stdout(&stdout);
         assert!(
-            stdout.contains(r#"\"ok\":true"#) && stdout.contains(r#"\"label\":\"slice17d\""#),
+            response_body.contains(r#""ok":true"#)
+                && response_body.contains(r#""label":"slice17d""#),
             "envelope must contain the bun:sql row; stdout: {stdout}"
         );
         assert!(
@@ -2962,22 +2933,22 @@ export function GET() {
         // The page produced
         // `{ ok: true, isBcrypt: true, isArgon: true,
         //    bcryptSample: "$2b$04$", argonSample: "$argon2id" }`.
-        // Body is JSON-escaped inside the envelope, so look for
-        // the escaped fragments. The presence of the
-        // algorithm-specific prefixes proves that the real
-        // bcrypt + argon2id implementations ran (not a stub).
+        // Decode the Base64 response body before checking the result. The
+        // algorithm-specific prefixes prove that the real bcrypt and
+        // argon2id implementations ran (not a stub).
+        let response_body = response_body_from_stdout(&stdout);
         assert!(
-            stdout.contains(r#"\"ok\":true"#)
-                && stdout.contains(r#"\"isBcrypt\":true"#)
-                && stdout.contains(r#"\"isArgon\":true"#)
-                && stdout.contains(r#"\"bcryptSample\":\"$2b$04$\""#)
-                && stdout.contains(r#"\"argonSample\":\"$argon2id$\""#),
+            response_body.contains(r#""ok":true"#)
+                && response_body.contains(r#""isBcrypt":true"#)
+                && response_body.contains(r#""isArgon":true"#)
+                && response_body.contains(r#""bcryptSample":"$2b$04$""#)
+                && response_body.contains(r#""argonSample":"$argon2id$""#),
             "envelope must contain the password result fragments\n  ok={}\n  isBcrypt={}\n  isArgon={}\n  bcryptSample={}\n  argonSample={}\n  stdout: {stdout}",
-            stdout.contains(r#"\"ok\":true"#),
-            stdout.contains(r#"\"isBcrypt\":true"#),
-            stdout.contains(r#"\"isArgon\":true"#),
-            stdout.contains(r#"\"bcryptSample\":\"$2b$04$\""#),
-            stdout.contains(r#"\"argonSample\":\"$argon2id\""#),
+            response_body.contains(r#""ok":true"#),
+            response_body.contains(r#""isBcrypt":true"#),
+            response_body.contains(r#""isArgon":true"#),
+            response_body.contains(r#""bcryptSample":"$2b$04$""#),
+            response_body.contains(r#""argonSample":"$argon2id""#),
         );
         assert!(
             !stdout.contains("ReferenceError") && !stdout.contains("SyntaxError"),

@@ -13,11 +13,10 @@
 //! test boots the binary, sends SIGTERM, and asserts the markers
 //! appeared in the right relative order.
 //!
-//! The test is gated on the existence of a built `tspserver`
-//! binary at `dist/tspserver/tspserver[.exe]`. The CI job that
-//! already builds the runtime (`smoke-linux`, plus the
-//! `release.yml` matrix) is the right place to run this; running
-//! it without a prior build skips the assertions.
+//! The test uses a built `tspserver` binary at
+//! `dist/tspserver/tspserver[.exe]`. Local runs remain skippable when
+//! no binary has been built; CI sets `TSP_REQUIRE_E2E=1` so a missing
+//! binary is a hard failure instead of a false-positive pass.
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -34,6 +33,19 @@ fn locate_master() -> Option<&'static PathBuf> {
 }
 
 fn locate_master_inner() -> Option<PathBuf> {
+    if let Some(configured) = std::env::var_os("TSP_TEST_MASTER") {
+        let path = PathBuf::from(configured);
+        if path.is_file() {
+            return Some(path);
+        }
+        if std::env::var_os("TSP_REQUIRE_E2E").is_some() {
+            panic!(
+                "application E2E binary from TSP_TEST_MASTER does not exist: {}",
+                path.display()
+            );
+        }
+        return None;
+    }
     // Walk from the test target's working directory up to the
     // workspace root looking for `dist/tspserver/tspserver[.exe]`.
     // The CI job that runs this test is responsible for
@@ -48,6 +60,12 @@ fn locate_master_inner() -> Option<PathBuf> {
         if path.is_file() {
             return Some(path);
         }
+    }
+    if std::env::var_os("TSP_REQUIRE_E2E").is_some() {
+        panic!(
+            "application E2E requires a built tspserver under dist/tspserver; \
+             run the release build and package steps first"
+        );
     }
     None
 }

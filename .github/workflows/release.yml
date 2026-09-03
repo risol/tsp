@@ -129,14 +129,19 @@ jobs:
           grep -q '"name": "main"' "$package_dir/tsp.config.json"
           grep -q '"services": {}' "$package_dir/tsp.config.json"
 
-      - name: Run native process-model + start-order tests (Linux/Windows)
+      - name: Run full native and application E2E tests (Linux/Windows)
         if: matrix.os != 'macos-latest'
         working-directory: bun
+        env:
+          TSP_REQUIRE_E2E: '1'
+          TSP_TEST_MASTER: ${{ github.workspace }}/${{ matrix.runtime }}
         run: |
+          cargo test -p bun_runtime_tsp --lib --no-fail-fast --locked
+          cargo test -p bun_runtime_tsp --test worker_integration --no-fail-fast --locked -- --test-threads=1
           cargo test -p bun_runtime_tsp --test process_model --no-fail-fast --locked -- --test-threads=1
-          cargo test -p bun_runtime_tsp --test start_order --no-fail-fast --locked
+          cargo test -p bun_runtime_tsp --test start_order --no-fail-fast --locked -- --test-threads=1
 
-      - name: Run native process-model + start-order tests (macOS)
+      - name: Run full native and application E2E tests (macOS)
         if: matrix.os == 'macos-latest'
         working-directory: bun
         env:
@@ -148,9 +153,13 @@ jobs:
           RUSTFLAGS: -C link-arg=-Qunused-arguments -A linker_messages
           CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER: /usr/bin/clang++
           CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER: /usr/bin/clang++
+          TSP_REQUIRE_E2E: '1'
+          TSP_TEST_MASTER: ${{ github.workspace }}/${{ matrix.runtime }}
         run: |
+          cargo test -p bun_runtime_tsp --lib --no-fail-fast --locked
+          cargo test -p bun_runtime_tsp --test worker_integration --no-fail-fast --locked -- --test-threads=1
           cargo test -p bun_runtime_tsp --test process_model --no-fail-fast --locked -- --test-threads=1
-          cargo test -p bun_runtime_tsp --test start_order --no-fail-fast --locked
+          cargo test -p bun_runtime_tsp --test start_order --no-fail-fast --locked -- --test-threads=1
 
       - name: Run smoke test
         if: matrix.os != 'windows-latest'

@@ -1023,6 +1023,14 @@ fn parse_envelope(stdout: &str) -> EnvelopeOutcome {
     }
 }
 
+fn envelope_body_text(outcome: &EnvelopeOutcome) -> String {
+    outcome
+        .body_bytes
+        .as_deref()
+        .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+        .unwrap_or_else(|| outcome.body.clone())
+}
+
 /// Extract the response `headers` field from the envelope
 /// JSON. Slice 16f accepts the array form `[[k,v], ...]`
 /// (preserves multi-value `Set-Cookie`); the slice 16c
@@ -2225,10 +2233,17 @@ fn handle_connection(
                             .iter()
                             .any(|(k, v)| k.eq_ignore_ascii_case("x-tsp-error") && v == "page")
                     {
+                        // Error envelopes use the same binary-safe response
+                        // transport as ordinary `Response` values. Their
+                        // body is JSON text, so restore the UTF-8 body before
+                        // rendering the dev page or returning the prod error
+                        // payload. Otherwise `body` is intentionally empty
+                        // and the host would discard the useful message.
+                        let error_body = envelope_body_text(&outcome);
                         if settings.development {
                             response_body_bytes = None;
                             let (html_body, html_ct) =
-                                render_dev_error_page(&outcome.body, &outcome.status_line);
+                                render_dev_error_page(&error_body, &outcome.status_line);
                             (html_body, html_ct, Vec::new())
                         } else {
                             response_body_bytes = None;
@@ -2243,7 +2258,7 @@ fn handle_connection(
                                 .filter(|(k, _)| !k.eq_ignore_ascii_case("x-tsp-error"))
                                 .cloned()
                                 .collect();
-                            (outcome.body.clone(), outcome.content_type.clone(), filtered)
+                            (error_body, outcome.content_type.clone(), filtered)
                         }
                     } else {
                         (
@@ -4121,6 +4136,17 @@ mod tests {
         assert_eq!(out.content_type, "image/png");
         assert_eq!(out.body, "");
         assert_eq!(out.body_bytes, Some(vec![0x00, 0x01, 0x02, 0xff, 0xfe, 0x80]));
+    }
+
+    #[test]
+    fn page_error_body_restores_utf8_body_from_binary_envelope() {
+        let out = parse_envelope(
+            "__TSP_OUT_V1__\n{\"type\":\"response\",\"status\":500,\"headers\":[[\"content-type\",\"application/json\"],[\"x-tsp-error\",\"page\"]],\"body\":\"\",\"body_b64\":\"eyJtZXNzYWdlIjoiVFNQMzAwMTogb2JqZWN0In0=\"}",
+        );
+        assert_eq!(
+            envelope_body_text(&out),
+            r#"{"message":"TSP3001: object"}"#
+        );
     }
 
     #[test]

@@ -49,10 +49,11 @@ fn startup_trace(stage: &str) {
 
 /// Run one embedded Bun VM and serve requests until the master shuts down.
 ///
-/// The first implementation accepts the generated wrapper path in
-/// `ExecuteRequest.path`. The next migration step will move wrapper creation
-/// and route loading behind this same boundary; the VM lifecycle is already
-/// correct here: one initialization per worker process and no Bun child.
+/// The master sends a generated wrapper source in `ExecuteRequest.script`.
+/// The worker materializes it for diagnostics and relative resolution, then
+/// uses Bun's Rust-side transpiler before evaluating a fresh plain-script
+/// closure in the long-lived VM. Requests with local dynamic imports use an
+/// async closure; the native worker protocol remains the only process boundary.
 pub fn run() -> i32 {
     #[cfg(unix)]
     { return run_unix(); }
@@ -297,9 +298,9 @@ impl EmbeddedVm {
         if request.script.is_empty() {
             return self.execute_path(&request.path);
         }
-        // Reuse one process-unique path. The source is passed as a virtual
-        // module, so a new filename per request only leaks path entries into
-        // Bun's process-lifetime FilenameStore and defeats cache identity.
+        // The wrapper is evaluated as a fresh program, so the filename is
+        // used for diagnostics and relative `require()` resolution rather
+        // than as a module-cache identity.
         let path = std::env::temp_dir().join(format!(
             "tsp-embedded-worker-{}.tsx",
             std::process::id()
@@ -312,13 +313,10 @@ impl EmbeddedVm {
     }
 
     /// Evaluate one request wrapper as a synchronous JavaScript program inside
-    /// the long-lived VM. The old path imported every wrapper from synthetic
-    /// `bun:main`, which created an ESM async-module resume microtask even for
-    /// a synchronous route. A later attempt to avoid that checkpoint by using
-    /// `require(<temp>.cts)` sent the single-file runtime through Bun's module
-    /// builder and failed with an AggregateError. Keep the wrapper in an IIFE
-    /// so its `const` declarations do not collide across requests, while the
-    /// global `require` remains available to route-local dependencies.
+    /// the long-lived VM. The wrapper is transpiled through Bun's native
+    /// Rust-side printer, then evaluated as a plain IIFE. This avoids creating
+    /// a synthetic ESM `bun:main` module and its persistent module-evaluation
+    /// promise for every request.
     fn execute_embedded_script(
         &mut self,
         script: &[u8],
@@ -346,11 +344,6 @@ impl EmbeddedVm {
         let path = path
             .to_str()
             .ok_or_else(|| "embedded worker request path is not UTF-8".to_string())?;
-        // `tsx_to_js` intentionally leaves TypeScript and JSX for Bun's
-        // transpiler. Use the Rust-side runtime transpiler directly instead
-        // of calling `Bun.Transpiler` from inside this native evaluation:
-        // the latter re-enters JSC and crashes on Windows. The Rust helper
-        // prints JavaScript without creating an ESM module-resume job.
         startup_trace("request:transpile:begin");
         let transpiled = crate::jsc_hooks::transpile_embedded_source(
             std::ptr::from_ref(self.vm.global()).cast_mut(),
@@ -359,15 +352,26 @@ impl EmbeddedVm {
         )
         .map_err(|error| format!("embedded TSP wrapper transpilation failed: {error}"))?;
         startup_trace("request:transpile:end");
+        let wrapper_source = if transpiled
+            .windows(b"await import(".len())
+            .any(|window| window == b"await import(")
+        {
+            format!(
+                "(async () => {{\n{}\n}})();",
+                String::from_utf8_lossy(&transpiled)
+            )
+        } else {
+            format!(
+                "(() => {{\n{}\n}})();",
+                String::from_utf8_lossy(&transpiled)
+            )
+        };
         let source = format!(
-            "(() => {{\n{}\n}})();",
-            String::from_utf8_lossy(&transpiled)
+            "globalThis.__tspImportMeta__ = {{ require: typeof require === 'function' ? require : globalThis.require, url: {:?}, path: {:?} }};\n{}",
+            path, path, wrapper_source
         );
         let filename = path.as_bytes();
         let mut exception = JSValue::UNDEFINED;
-        // SAFETY: all pointers refer to live byte slices for the duration of
-        // the synchronous call; `global` is the VM's live opaque handle and
-        // `exception` is a stack out-parameter understood by the C++ shim.
         startup_trace("request:evaluate:begin");
         unsafe {
             let _ = Bun__REPL__evaluate(
@@ -380,7 +384,6 @@ impl EmbeddedVm {
             );
         }
         startup_trace("request:evaluate:end");
-        startup_trace("request:response-check:begin");
         if !exception.is_undefined() && !exception.is_null() {
             let detail = self
                 .read_global_string("_error")?
@@ -396,11 +399,7 @@ impl EmbeddedVm {
             startup_trace("request:error-ready");
             return Err(error);
         }
-        startup_trace("request:response-check:end");
 
-        // Async handlers and Response.text() still use ordinary Promise jobs.
-        // They are not ESM module-resume jobs, so drive the normal event loop
-        // only when the synchronous wrapper did not publish a result.
         startup_trace("load-entry:wait:begin");
         for _ in 0..10_000 {
             if let Some(value) = self.read_global_string("__tspEmbeddedResponse")? {
@@ -428,6 +427,20 @@ impl EmbeddedVm {
         startup_trace("request:api-lock:begin");
         let _api_lock = self.vm.global().vm().get_api_lock();
         startup_trace("request:api-lock:acquired");
+        if !self.global_require_ready {
+            let cwd = std::path::Path::new(path)
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."));
+            let cwd = cwd
+                .to_str()
+                .ok_or_else(|| "embedded worker entry directory is not UTF-8".to_string())?;
+            // SAFETY: the global object is live for the VM lifetime and the
+            // UTF-8 cwd slice remains valid for this synchronous FFI call.
+            unsafe {
+                Bun__REPL__setupGlobalRequire(self.vm.global(), cwd.as_ptr(), cwd.len());
+            }
+            self.global_require_ready = true;
+        }
         let result = self.execute_path_with_api_lock(path);
         startup_trace("request:api-lock:end");
         result
@@ -442,11 +455,7 @@ impl EmbeddedVm {
         // synthetic `bun:main` module and stores the resolved promise
         // in the JS module registry under that hardcoded name. Without
         // this drop the second call returns the first request's
-        // already-resolved promise, the new wrap preamble never runs,
-        // and every URL aliases to whichever .tsp the first request hit
-        // (see docs/reference/bugs/0001). `clear_entry_point` removes the
-        // `bun:main` entry only; shared modules (e.g. `tsp:server`
-        // shims) keep their cache hits across requests.
+        // already-resolved promise and the new wrapper never runs.
         startup_trace("request:clear-entry:begin");
         self.vm
             .clear_entry_point()
@@ -454,8 +463,6 @@ impl EmbeddedVm {
         startup_trace("request:clear-entry:end");
         // Keep the previous backing allocation valid until
         // `clear_entry_point` has completed its last read of `vm.main`.
-        // Replacing this buffer first could reallocate for a longer path and
-        // leave that cleanup call observing the old dangling slice.
         self.entry_path.clear();
         self.entry_path.extend_from_slice(path.as_bytes());
         startup_trace("request:load-entry:begin");
