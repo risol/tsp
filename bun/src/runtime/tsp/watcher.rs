@@ -7,8 +7,8 @@
 //!   (not immediately).
 //! - 22.3: eager reload is a future option (`[dev] reload = "eager"`).
 //!
-//! Implementation: a polling backend (checks file mtime + content
-//! hash every `poll_ms`). This is deliberately NOT the
+//! Implementation: a polling backend (checks file content hash
+//! every `poll_ms`). This is deliberately NOT the
 //! `bun_watcher` crate integration from slice 7's spike -- bun's
 //! watcher is platform-native (inotify / ReadDirectoryChangesW)
 //! and its `WatcherContext` callback API requires the full Bun
@@ -181,9 +181,8 @@ pub struct PollStats {
     pub snapshot_errors: usize,
 }
 
-/// Metadata and content identity for one watched source file. The hash is
-/// reused when size and mtime are unchanged, avoiding a full read on every
-/// polling tick.
+/// Metadata and content identity for one watched source file. The metadata
+/// is retained with the content hash for diagnostics and future backends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileSnapshot {
     pub modified: Option<SystemTime>,
@@ -472,8 +471,7 @@ fn poll_once_with_index(
     let mut stats = PollStats::default();
     let mut current: HashMap<PathBuf, FileSnapshot> = HashMap::new();
 
-    stats.snapshot_complete =
-        collect_sources_with_previous(root, &mut current, last_seen, &mut stats);
+    stats.snapshot_complete = collect_sources_recursive(root, &mut current, &mut stats);
 
     // Find files whose hash changed (new file or content change).
     for (path, snapshot) in &current {
@@ -587,13 +585,12 @@ fn collect_sources(
     current: &mut HashMap<PathBuf, FileSnapshot>,
     stats: &mut PollStats,
 ) -> bool {
-    collect_sources_with_previous(root, current, &HashMap::new(), stats)
+    collect_sources_recursive(root, current, stats)
 }
 
-fn collect_sources_with_previous(
+fn collect_sources_recursive(
     root: &Path,
     current: &mut HashMap<PathBuf, FileSnapshot>,
-    previous: &HashMap<PathBuf, FileSnapshot>,
     stats: &mut PollStats,
 ) -> bool {
     let Ok(entries) = fs::read_dir(root) else {
@@ -622,7 +619,7 @@ fn collect_sources_with_previous(
             ) {
                 continue;
             }
-            if !collect_sources_with_previous(&path, current, previous, stats) {
+            if !collect_sources_recursive(&path, current, stats) {
                 complete = false;
             }
             continue;
@@ -642,12 +639,6 @@ fn collect_sources_with_previous(
             continue;
         };
         let modified = metadata.modified().ok();
-        if let Some(snapshot) = previous.get(&path) {
-            if snapshot.len == metadata.len() && snapshot.modified == modified {
-                current.insert(path.clone(), *snapshot);
-                continue;
-            }
-        }
         let Ok(bytes) = fs::read(&path) else {
             stats.snapshot_errors += 1;
             complete = false;

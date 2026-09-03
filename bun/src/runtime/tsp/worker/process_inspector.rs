@@ -102,9 +102,9 @@ pub fn is_alive(pid: u32) -> bool {
             )
         }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     {
-        // On non-Linux platforms, the master process can only directly query
+        // On Windows, the master process can only directly query
         // itself. Reaping a peer is observable through the
         // protocol (the peer's stream closes) or the test
         // framework, not through this helper.
