@@ -145,6 +145,7 @@ jobs:
           TSP_JSC_SDK_ROOT: ${{ runner.temp }}/tsp-jsc-sdk
           TSP_NATIVE_E2E_ROOT: native/fixtures/pages
           TSP_REQUIRE_E2E: '1'
+          TSP_JSC_TRACE: '1'
         run: node scripts/native-e2e.mjs
 
       - name: Run standalone application E2E (Windows)
@@ -154,6 +155,7 @@ jobs:
           TSP_JSC_SDK_ROOT: ${{ runner.temp }}\tsp-jsc-sdk
           TSP_NATIVE_E2E_ROOT: native/fixtures/pages
           TSP_REQUIRE_E2E: '1'
+          TSP_JSC_TRACE: '1'
         run: |
           $env:CXX = 'clang-cl.exe'
           node scripts/native-e2e.mjs
