@@ -106,9 +106,26 @@ pub struct NativeBackend {
 
 #[cfg(feature = "native-ffi")]
 impl NativeBackend {
+    fn link_webkit_allocator() {
+        // WebKit's bmalloc archive calls the mimalloc C symbols directly.
+        // Keep that allocator available for the SDK without installing it as
+        // Rust's global allocator: Rust ownership and WebKit ownership remain
+        // separate domains.
+        use std::alloc::{GlobalAlloc, Layout};
+        static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+        let layout = Layout::from_size_align(1, 1).expect("valid allocator link layout");
+        unsafe {
+            let pointer = ALLOCATOR.alloc(layout);
+            if !pointer.is_null() {
+                ALLOCATOR.dealloc(pointer, layout);
+            }
+        }
+    }
+
     /// Create a VM through the TSP JSC ABI. The native side owns the VM and
     /// every buffer returned by it; Rust copies buffers before freeing them.
     pub fn new() -> Result<Self, Error> {
+        Self::link_webkit_allocator();
         let status = unsafe { ffi::tsp_jsc_initialize() };
         if status != 0 {
             return Err(Error::Initialization(format!("status {status}")));

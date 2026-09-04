@@ -4,7 +4,7 @@
   "repository": "https://github.com/oven-sh/WebKit",
   "releaseTag": "autobuild-b9a6abf2d59854e9004155d156b3b751b638d0ec",
   "webkitRevision": "b9a6abf2d59854e9004155d156b3b751b638d0ec",
-  "allocator": "webkit-bmalloc",
+  "allocator": "webkit-bmalloc+mimalloc-symbols",
   "assets": {
     "linux-x64": {
       "name": "bun-webkit-linux-amd64.tar.gz",

@@ -8,6 +8,7 @@ build = "build.rs"
 
 [dependencies]
 tsp-js = { path = "../tsp-js" }
+mimalloc = "0.1"
 
 [features]
 default = ["mock"]

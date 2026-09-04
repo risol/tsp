@@ -28,9 +28,7 @@ fn main() {
     if metadata.is_file() {
         let metadata = std::fs::read_to_string(&metadata)
             .expect("TSP_JSC_SDK_ROOT metadata.json must be readable");
-        if !metadata.contains("\"sdkVersion\": 1")
-            || !metadata.contains("\"runtimeAbi\": 1")
-        {
+        if !metadata.contains("\"sdkVersion\": 1") || !metadata.contains("\"runtimeAbi\": 1") {
             panic!("TSP_JSC_SDK_ROOT metadata.json is incompatible with this runtime");
         }
     } else {
@@ -62,6 +60,7 @@ fn main() {
     }
     if cfg!(windows) {
         build.flag_if_supported("/EHsc");
+        build.flag("/DNOMINMAX");
         // Keep the bridge language mode aligned with the WebKit headers used
         // by the SDK. Current WebKit exposes std::to_underlying and Expected
         // through its public headers, which requires C++23 on Windows.
@@ -89,6 +88,16 @@ fn main() {
     println!("cargo:rustc-link-lib=static=JavaScriptCore");
     println!("cargo:rustc-link-lib=static=WTF");
     println!("cargo:rustc-link-lib=static=bmalloc");
+    for library in ["mimalloc"] {
+        let static_library = if cfg!(windows) {
+            lib.join(format!("{library}.lib"))
+        } else {
+            lib.join(format!("lib{library}.a"))
+        };
+        if static_library.is_file() {
+            println!("cargo:rustc-link-lib=static={library}");
+        }
+    }
     if cfg!(windows) {
         for library in ["sicudt", "sicuin", "sicuuc"] {
             println!("cargo:rustc-link-lib=static={library}");
