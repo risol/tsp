@@ -42,7 +42,10 @@ fn main() {
     }
     if cfg!(windows) {
         build.flag_if_supported("/EHsc");
-        build.flag_if_supported("/std:c++20");
+        // Keep the bridge language mode aligned with the WebKit headers used
+        // by Bun. Current WebKit exposes std::to_underlying and Expected
+        // through its public headers, which requires C++23 on Windows.
+        build.flag_if_supported("/std:c++23preview");
         // WebKit's portable headers use Clang's pointer-width macro, which
         // MSVC does not provide. The Rust target guarantees this Windows
         // build is 64-bit, so define the header contract explicitly.
@@ -52,7 +55,13 @@ fn main() {
         build.flag("/D__ORDER_BIG_ENDIAN__=4321");
     } else {
         build.flag_if_supported("-fexceptions");
-        build.flag_if_supported("-std=c++20");
+        // WebKit's Unix headers use GNU extensions and C++23 library types.
+        // Match Bun's native compilation mode to avoid header/ABI drift.
+        if cfg!(target_os = "linux") || cfg!(target_os = "freebsd") {
+            build.flag_if_supported("-std=gnu++23");
+        } else {
+            build.flag_if_supported("-std=c++23");
+        }
     }
     build.compile("tsp_jsc_bridge");
 
