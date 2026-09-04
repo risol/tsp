@@ -41,6 +41,11 @@ fn main() {
         .file("cxx/tsp_jsc.cpp")
         .include(&include)
         .include("include")
+        // The standalone bridge links the release WebKit archive. Match its
+        // header configuration even when Cargo is compiling a debug profile;
+        // otherwise HeapInlines enables debug-only DFG validation references
+        // that are absent from the release archive.
+        .define("NDEBUG", None)
         .warnings(true)
         .warnings_into_errors(false);
     let unicode_include = include.join("wtf").join("unicode");
