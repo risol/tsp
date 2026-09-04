@@ -51,6 +51,27 @@ jobs:
         working-directory: tools
         run: npm run tspc -- check --root ../pages --out .tsp-build-ci
 
+  native-contract:
+    name: TSP native contracts (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run native contract tests
+        run: cargo test --manifest-path native/Cargo.toml --workspace
+
+      - name: Check native FFI feature
+        run: cargo check --manifest-path native/Cargo.toml -p tsp-jsc --features native-ffi
+
   native-linux:
     name: Native runtime (Linux)
     runs-on: ubuntu-latest

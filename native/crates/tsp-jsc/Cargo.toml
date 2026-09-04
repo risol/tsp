@@ -1,0 +1,11 @@
+[package]
+name = "tsp-jsc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Small JavaScriptCore ownership boundary for TSP"
+
+[features]
+default = ["mock"]
+mock = []
+native-ffi = []

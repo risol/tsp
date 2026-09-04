@@ -1,0 +1,12 @@
+[package]
+name = "tsp-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "TSP-owned route and request runtime"
+
+[dependencies]
+tsp-jsc = { path = "../tsp-jsc" }
+tsp-http = { path = "../tsp-http" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

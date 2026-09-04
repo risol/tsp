@@ -19,8 +19,9 @@ function fixture(files) {
 test("compiles a TSP route and emits a route manifest", () => {
   const root = fixture({
     "users/[id].tsp": `import { html } from "tsp:server";
+import { answer } from "../shared";
 export function GET(ctx: { params: Record<string, string> }) {
-  return <main>{ctx.params.id}</main>;
+  return <main>{ctx.params.id}:{answer}</main>;
 }
 `,
     "shared.ts": "export const answer: number = 42;\n",
@@ -29,9 +30,12 @@ export function GET(ctx: { params: Record<string, string> }) {
   const manifest = compileProject({ root, out });
 
   assert.deepEqual(manifest.routes[0].path, "/users/:id");
+  assert.deepEqual(manifest.routes[0].parameters, ["id"]);
   assert.deepEqual(manifest.routes[0].methods, ["GET"]);
   assert.deepEqual(manifest.modules[0].source, "shared.ts");
   assert.match(fs.readFileSync(path.join(out, "users/[id].js"), "utf8"), /__tsp_jsx/);
+  assert.match(fs.readFileSync(path.join(out, "bundle.js"), "utf8"), /__tsp_require\("shared.js"\)/);
+  assert.equal(manifest.bundle, "bundle.js");
   assert.equal(fs.existsSync(path.join(out, "manifest.json")), true);
 });
 
@@ -59,4 +63,5 @@ test("maps a catch-all route to the TSP wildcard path", () => {
   });
   const manifest = compileProject({ root, out: path.join(root, ".tsp-build") });
   assert.equal(manifest.routes[0].path, "/files/*");
+  assert.deepEqual(manifest.routes[0].parameters, ["path"]);
 });
