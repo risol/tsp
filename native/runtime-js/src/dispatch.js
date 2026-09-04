@@ -17,6 +17,7 @@
     globalThis.__tsp_result = undefined;
     globalThis.__tsp_error = undefined;
     globalThis.__tsp_request_id = input.request_id || "";
+    globalThis.__tsp_generation = input.generation || null;
     try {
       const route = globalThis.__tsp_routes && globalThis.__tsp_routes[input.route];
       const handler = route && (route[input.method] || route.ANY);
@@ -62,6 +63,7 @@
       result: response ? {
         version: 1,
         request_id: globalThis.__tsp_request_id || "",
+        generation: globalThis.__tsp_generation || null,
         status: response.status,
         headers: response.headers,
         body: { kind: "Text", data: response.body },

@@ -6,9 +6,7 @@ use std::sync::Arc;
 
 use tsp_core::{CompiledManifest, Request, Response, RouteTable};
 use tsp_http::{Server, ServerLimits};
-use tsp_jsc::{Engine, NativeBackend};
-use tsp_runtime::WorkerPool;
-use tsp_runtime::worker::{RouteExecutor, WorkerError};
+use tsp_runtime::{GenerationRegistry, ProcessWorkerManager, WorkerError};
 
 #[derive(Debug)]
 struct Options {
@@ -16,6 +14,7 @@ struct Options {
     bundle: Option<PathBuf>,
     listen: String,
     workers: usize,
+    worker: Option<PathBuf>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -29,14 +28,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(Path::new("."))
             .join("bundle.js")
     });
-    let bundle = Arc::new(fs::read_to_string(&bundle_path)?);
+    let bundle = fs::read_to_string(&bundle_path)?;
     let table = Arc::new(RouteTable::from_manifest(&manifest)?);
-    let bundle_name = bundle_path.display().to_string();
-    let pool = Arc::new(WorkerPool::try_new(options.workers, move |_| {
-        let backend =
-            NativeBackend::new().map_err(|error| WorkerError::Execution(error.to_string()))?;
-        RouteExecutor::new(Engine::new(backend), &bundle, &bundle_name)
-    })?);
+    let registry = Arc::new(GenerationRegistry::new());
+    let generation = registry.publish(bundle, bundle_path.display().to_string())?;
+    let worker_path = options.worker.unwrap_or_else(default_worker_path);
+    let workers = Arc::new(ProcessWorkerManager::new(worker_path, options.workers)?);
+    workers.load_generation(generation.id, &generation.bundle, &generation.filename)?;
     let handler = move |request: Request| {
         let pathname = request
             .target
@@ -53,7 +51,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             return Response::new(405, "Method Not Allowed");
         }
-        match pool.dispatch(request, matched.route, matched.params) {
+        let mut request = request;
+        if registry.pin(&mut request).is_none() {
+            return Response::new(503, "no application generation is loaded");
+        }
+        match workers.dispatch(request, matched.route, matched.params) {
             Ok(response) => response,
             Err(WorkerError::QueueClosed) => Response::new(503, "worker queue closed"),
             Err(WorkerError::Timeout) => Response::new(504, "request execution timed out"),
@@ -67,12 +69,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn default_worker_path() -> PathBuf {
+    let mut path = env::current_exe().unwrap_or_else(|_| PathBuf::from("tsp-cli"));
+    path.set_file_name(if cfg!(windows) {
+        "tsp-worker.exe"
+    } else {
+        "tsp-worker"
+    });
+    path
+}
+
 impl Options {
     fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, String> {
         let mut manifest = None;
         let mut bundle = None;
         let mut listen = "127.0.0.1:3000".to_owned();
         let mut workers = 1;
+        let mut worker = None;
         while let Some(argument) = args.next() {
             match argument.as_str() {
                 "--manifest" => {
@@ -89,6 +102,9 @@ impl Options {
                         .parse()
                         .map_err(|_| "--workers must be a positive number")?
                 }
+                "--worker" => {
+                    worker = Some(PathBuf::from(args.next().ok_or("--worker needs a path")?))
+                }
                 "--help" | "-h" => return Err(Self::usage()),
                 other => return Err(format!("unknown argument: {other}\n{}", Self::usage())),
             }
@@ -98,11 +114,12 @@ impl Options {
             bundle,
             listen,
             workers,
+            worker,
         })
     }
 
     fn usage() -> String {
-        "usage: tsp-cli --manifest DIR/manifest.json [--bundle DIR/bundle.js] [--listen HOST:PORT] [--workers N]".to_owned()
+        "usage: tsp-cli --manifest DIR/manifest.json [--bundle DIR/bundle.js] [--listen HOST:PORT] [--workers N] [--worker PATH]".to_owned()
     }
 }
 
