@@ -13,6 +13,7 @@
 #include "../include/tsp_jsc.h"
 #include <JavaScriptCore/APICast.h>
 #include <JavaScriptCore/GetVM.h>
+#include <JavaScriptCore/HeapInlines.h>
 #include <JavaScriptCore/InitializeThreading.h>
 #include <JavaScriptCore/JSLock.h>
 #include <JavaScriptCore/JavaScript.h>
