@@ -230,7 +230,21 @@ fn execute_windows_cli(request: &protocol::ExecuteRequest) -> Result<String, Str
         .map_err(|error| format!("failed to materialize Windows route module: {error}"))?;
     let executable = std::env::current_exe()
         .map_err(|error| format!("failed to locate the packaged TSP executable: {error}"))?;
-    let output = Command::new(executable)
+    // Keep the request child self-contained, but do not launch the packaged
+    // file under its `tspserver.exe` name. Bun's CLI path uses the executable
+    // name as part of its process-mode detection on Windows; a hard link keeps
+    // the exact same bytes and does not depend on PATH or a second runtime.
+    let cli_executable = std::env::temp_dir().join(format!(
+        "tsp-bun-cli-{}-{}.exe",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| format!("worker clock failed: {error}"))?
+            .as_nanos()
+    ));
+    std::fs::hard_link(&executable, &cli_executable)
+        .map_err(|error| format!("failed to link the packaged Bun CLI: {error}"))?;
+    let output = Command::new(&cli_executable)
         .env("TSP_CLI_WORKER", "1")
         // The startup trace belongs to the long-lived protocol supervisor.
         // Keep the normal CLI child on Bun's ordinary process-main path.
@@ -242,6 +256,7 @@ fn execute_windows_cli(request: &protocol::ExecuteRequest) -> Result<String, Str
         .stderr(Stdio::piped())
         .output();
     let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&cli_executable);
     let output = output.map_err(|error| format!("failed to start packaged Bun CLI: {error}"))?;
     if !output.status.success() {
         return Err(format!(
