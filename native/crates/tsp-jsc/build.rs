@@ -91,6 +91,13 @@ fn main() {
         mimalloc.flag_if_supported("-Wno-deprecated");
         mimalloc.flag_if_supported("-Wno-static-in-inline");
         mimalloc.flag_if_supported("-ftls-model=initial-exec");
+        if cfg!(target_os = "linux") {
+            // glibc hides dl_phdr_info and dl_iterate_phdr unless GNU
+            // extensions are enabled. Bun's native allocator build enables
+            // this feature implicitly; the standalone C compilation must do
+            // it explicitly.
+            mimalloc.define("_GNU_SOURCE", None);
+        }
     } else {
         mimalloc.flag_if_supported("/EHsc");
     }
