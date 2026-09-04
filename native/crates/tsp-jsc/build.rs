@@ -110,7 +110,7 @@ fn main() {
         for library in ["sicudt", "sicuin", "sicuuc"] {
             println!("cargo:rustc-link-lib=static={library}");
         }
-    } else if cfg!(target_os = "linux") {
+    } else if cfg!(target_os = "linux") || cfg!(target_os = "macos") {
         for library in ["icui18n", "icuuc", "icudata"] {
             println!("cargo:rustc-link-lib=static={library}");
         }
