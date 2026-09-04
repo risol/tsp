@@ -10,5 +10,10 @@ pub trait JsRuntime {
     type Error: Display;
 
     fn evaluate(&mut self, source: &str, filename: &str) -> Result<String, Self::Error>;
+    /// Call a cached global JavaScript function with one JSON argument.
+    ///
+    /// The engine adapter parses the argument and invokes the function
+    /// directly; request data must not be interpolated into source text.
+    fn call_json(&mut self, function: &str, argument: &str) -> Result<String, Self::Error>;
     fn drain_microtasks(&mut self) -> Result<(), Self::Error>;
 }

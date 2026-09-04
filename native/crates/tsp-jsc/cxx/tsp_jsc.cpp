@@ -210,6 +210,70 @@ extern "C" TSP_JSC_EXPORT TspJscResult tsp_jsc_evaluate(
     return result;
 }
 
+extern "C" TSP_JSC_EXPORT TspJscResult tsp_jsc_call_json(
+    TspJscVm* vm,
+    TspJscBuffer function,
+    TspJscBuffer argumentJson)
+{
+    TspJscResult result {};
+    trace("call-json.begin");
+    if (!vm || !vm->context
+        || (!function.ptr && function.len != 0)
+        || (!argumentJson.ptr && argumentJson.len != 0)) {
+        result.error = copyLiteral("invalid JSC call input");
+        return result;
+    }
+
+    JSStringRef functionString = createString(function);
+    JSStringRef argumentString = createString(argumentJson);
+    if (!functionString || !argumentString) {
+        if (functionString)
+            JSStringRelease(functionString);
+        if (argumentString)
+            JSStringRelease(argumentString);
+        result.error = copyLiteral("failed to allocate JSC call strings");
+        return result;
+    }
+
+    auto* globalObject = toJSGlobalObject(vm->context);
+    auto& jscVm = JSC::getVM(globalObject);
+    JSC::JSLockHolder lock(jscVm);
+    JSValueRef exception = nullptr;
+    JSValueRef functionValue = JSObjectGetProperty(
+        vm->context,
+        globalObject,
+        functionString,
+        &exception);
+    JSValueRef argumentValue = nullptr;
+    if (!exception)
+        argumentValue = JSValueMakeFromJSONString(vm->context, argumentString);
+    if (!functionValue || exception || !JSValueIsObject(vm->context, functionValue)) {
+        result.error = exception
+            ? copyValueAsString(vm->context, exception)
+            : copyLiteral("cached JSC function was not found");
+    } else if (!argumentValue) {
+        result.error = copyLiteral("JSC call argument is not valid JSON");
+    } else {
+        JSValueRef value = JSObjectCallAsFunction(
+            vm->context,
+            JSValueToObject(vm->context, functionValue, &exception),
+            globalObject,
+            1,
+            &argumentValue,
+            &exception);
+        if (exception)
+            result.error = copyValueAsString(vm->context, exception);
+        else if (value) {
+            result.ok = 1;
+            result.value = copyValueAsString(vm->context, value);
+        }
+    }
+    JSStringRelease(functionString);
+    JSStringRelease(argumentString);
+    trace("call-json.done");
+    return result;
+}
+
 extern "C" TSP_JSC_EXPORT int32_t tsp_jsc_drain_microtasks(TspJscVm* vm)
 {
     if (!vm || !vm->context)

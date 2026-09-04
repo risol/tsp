@@ -41,6 +41,7 @@ impl std::fmt::Display for WorkerError {
 impl std::error::Error for WorkerError {}
 
 const RUNTIME_PRELUDE: &str = include_str!("../../../runtime-js/src/bootstrap.js");
+const DISPATCH_RUNTIME: &str = include_str!("../../../runtime-js/src/dispatch.js");
 
 /// Executes a compiled route bundle through an injected JavaScript runtime.
 /// The host runtime does not know whether the implementation is JSC, a test
@@ -57,10 +58,15 @@ impl<J: JsRuntime> RouteExecutor<J> {
         engine
             .evaluate(bundle, filename)
             .map_err(|error| WorkerError::Execution(error.to_string()))?;
+        engine
+            .evaluate(DISPATCH_RUNTIME, "tsp-dispatch.js")
+            .map_err(|error| WorkerError::Execution(error.to_string()))?;
         Ok(Self { engine })
     }
+}
 
-    fn dispatch_source(
+impl<J> RouteExecutor<J> {
+    fn dispatch_payload(
         request: &Request,
         route: &RouteSpec,
         params: &HashMap<String, String>,
@@ -68,6 +74,8 @@ impl<J: JsRuntime> RouteExecutor<J> {
         let context = json!({
             "method": request.method,
             "target": request.target,
+            "request_id": request.request_id,
+            "route": route.path,
             "params": params,
             "request": {
                 "method": request.method,
@@ -75,46 +83,9 @@ impl<J: JsRuntime> RouteExecutor<J> {
                 "body": String::from_utf8_lossy(request.body.as_bytes()),
             },
         });
-        let context = serde_json::to_string(&context).map_err(|error| {
-            WorkerError::Execution(format!("context serialization failed: {error}"))
-        })?;
-        Ok(format!(
-            r#"(function() {{
-  globalThis.__tsp_pending = true;
-  globalThis.__tsp_result = undefined;
-  globalThis.__tsp_error = undefined;
-  try {{
-    const route = globalThis.__tsp_routes[{route}];
-    const handler = route && (route[{method}] || route.ANY);
-    const normalize = (value, context) => {{
-      const response = value instanceof Response ? value : new Response(value);
-      for (const cookie of context.__tsp_set_cookies || []) response.headers.push(["set-cookie", cookie]);
-      return response;
-    }};
-    if (!handler) {{
-      globalThis.__tsp_result = new Response("Method Not Allowed", {{ status: 405 }});
-      globalThis.__tsp_pending = false;
-    }} else {{
-      const context = globalThis.__tsp_make_context(JSON.parse({context}));
-      const value = handler(context);
-      if (value && typeof value.then === "function") {{
-        value.then((resolved) => {{ globalThis.__tsp_result = normalize(resolved, context); globalThis.__tsp_pending = false; }},
-          (error) => {{ globalThis.__tsp_error = String(error); globalThis.__tsp_pending = false; }});
-      }} else {{
-        globalThis.__tsp_result = normalize(value, context);
-        globalThis.__tsp_pending = false;
-      }}
-    }}
-  }} catch (error) {{
-    globalThis.__tsp_error = String(error && error.stack || error);
-    globalThis.__tsp_pending = false;
-  }}
-  return "scheduled";
-}})()"#,
-            route = serde_json::to_string(&route.path).unwrap_or_else(|_| "\"/\"".into()),
-            method = serde_json::to_string(&request.method).unwrap_or_else(|_| "\"GET\"".into()),
-            context = serde_json::to_string(&context).unwrap_or_else(|_| "\"{}\"".into()),
-        ))
+        serde_json::to_string(&context).map_err(|error| {
+            WorkerError::Execution(format!("request serialization failed: {error}"))
+        })
     }
 }
 
@@ -125,19 +96,16 @@ impl<J: JsRuntime + 'static> WorkerExecutor for RouteExecutor<J> {
         route: RouteSpec,
         params: HashMap<String, String>,
     ) -> Result<Response, WorkerError> {
-        let source = Self::dispatch_source(&request, &route, &params)?;
+        let payload = Self::dispatch_payload(&request, &route, &params)?;
         self.engine
-            .evaluate(&source, "tsp-request.js")
+            .call_json("__tsp_dispatch_json", &payload)
             .map_err(|error| WorkerError::Execution(error.to_string()))?;
         self.engine
             .drain_microtasks()
             .map_err(|error| WorkerError::Execution(error.to_string()))?;
         let state = self
             .engine
-            .evaluate(
-                "JSON.stringify({pending: !!globalThis.__tsp_pending, error: globalThis.__tsp_error || null, result: globalThis.__tsp_result || null})",
-                "tsp-response.js",
-            )
+            .call_json("__tsp_read_response_json", "null")
             .map_err(|error| WorkerError::Execution(error.to_string()))?;
         let state: serde_json::Value = serde_json::from_str(&state).map_err(|error| {
             WorkerError::Execution(format!("response JSON is invalid: {error}"))
@@ -378,5 +346,25 @@ mod tests {
             result,
             Err(WorkerError::Execution(message)) if message == "bundle failed to load"
         ));
+    }
+
+    #[test]
+    fn request_payload_is_data_and_not_generated_javascript() {
+        let request = Request {
+            version: crate::PROTOCOL_VERSION,
+            request_id: "request-1".into(),
+            method: "GET".into(),
+            target: "/search?q=quote%20%22%20%7D".into(),
+            http_version: "HTTP/1.1".into(),
+            headers: vec![("x-test".into(), "value".into())],
+            body: crate::BodyEnvelope::Text("body".into()),
+        };
+        let payload = RouteExecutor::<()>::dispatch_payload(&request, &route(), &HashMap::new());
+        let payload = payload.unwrap();
+        let value: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(value["request_id"], "request-1");
+        assert_eq!(value["target"], "/search?q=quote%20%22%20%7D");
+        assert!(!payload.contains("__tsp_pending"));
+        assert!(!payload.contains("function()"));
     }
 }

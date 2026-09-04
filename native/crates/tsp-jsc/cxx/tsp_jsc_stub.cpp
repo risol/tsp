@@ -28,6 +28,14 @@ extern "C" TSP_JSC_EXPORT TspJscResult tsp_jsc_evaluate(
     return {};
 }
 
+extern "C" TSP_JSC_EXPORT TspJscResult tsp_jsc_call_json(
+    TspJscVm*,
+    TspJscBuffer,
+    TspJscBuffer)
+{
+    return {};
+}
+
 extern "C" TSP_JSC_EXPORT int32_t tsp_jsc_drain_microtasks(TspJscVm*)
 {
     return 1;

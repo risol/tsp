@@ -38,6 +38,10 @@ TSP_JSC_EXPORT TspJscResult tsp_jsc_evaluate(
     TspJscVm* vm,
     TspJscBuffer source,
     TspJscBuffer filename);
+TSP_JSC_EXPORT TspJscResult tsp_jsc_call_json(
+    TspJscVm* vm,
+    TspJscBuffer function,
+    TspJscBuffer argument_json);
 TSP_JSC_EXPORT int32_t tsp_jsc_drain_microtasks(TspJscVm* vm);
 TSP_JSC_EXPORT void tsp_jsc_buffer_free(TspJscBuffer buffer);
 

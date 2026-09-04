@@ -44,6 +44,11 @@ pub mod ffi {
             source: TspJscBuffer,
             filename: TspJscBuffer,
         ) -> TspJscResult;
+        pub fn tsp_jsc_call_json(
+            vm: *mut TspJscVm,
+            function: TspJscBuffer,
+            argument_json: TspJscBuffer,
+        ) -> TspJscResult;
         pub fn tsp_jsc_drain_microtasks(vm: *mut TspJscVm) -> i32;
         pub fn tsp_jsc_buffer_free(buffer: TspJscBuffer);
     }
@@ -89,6 +94,7 @@ pub struct ScriptValue(pub String);
 /// only surface the TSP runtime needs from a JavaScript engine in phase one.
 pub trait Backend {
     fn evaluate(&mut self, source: &str, filename: &str) -> Result<ScriptValue, Error>;
+    fn call_json(&mut self, function: &str, argument: &str) -> Result<ScriptValue, Error>;
     fn drain_microtasks(&mut self) -> Result<(), Error>;
 }
 
@@ -149,6 +155,23 @@ impl Backend for NativeBackend {
         Ok(ScriptValue(Self::copy_buffer(result.value)?))
     }
 
+    fn call_json(&mut self, function: &str, argument: &str) -> Result<ScriptValue, Error> {
+        let function_buffer = ffi::TspJscBuffer {
+            ptr: function.as_ptr(),
+            len: function.len(),
+        };
+        let argument_buffer = ffi::TspJscBuffer {
+            ptr: argument.as_ptr(),
+            len: argument.len(),
+        };
+        let result =
+            unsafe { ffi::tsp_jsc_call_json(self.vm.as_ptr(), function_buffer, argument_buffer) };
+        if result.ok == 0 {
+            return Err(Error::Evaluation(Self::copy_buffer(result.error)?));
+        }
+        Ok(ScriptValue(Self::copy_buffer(result.value)?))
+    }
+
     fn drain_microtasks(&mut self) -> Result<(), Error> {
         let status = unsafe { ffi::tsp_jsc_drain_microtasks(self.vm.as_ptr()) };
         if status == 0 {
@@ -199,6 +222,11 @@ impl<B: Backend> Engine<B> {
         self.backend.drain_microtasks()
     }
 
+    pub fn call_json(&mut self, function: &str, argument: &str) -> Result<ScriptValue, Error> {
+        self.assert_owner()?;
+        self.backend.call_json(function, argument)
+    }
+
     fn assert_owner(&self) -> Result<(), Error> {
         let current = thread::current().id();
         if current == self.owner {
@@ -217,6 +245,10 @@ impl<B: Backend> tsp_js::JsRuntime for Engine<B> {
 
     fn evaluate(&mut self, source: &str, filename: &str) -> Result<String, Self::Error> {
         Engine::evaluate(self, source, filename).map(|value| value.0)
+    }
+
+    fn call_json(&mut self, function: &str, argument: &str) -> Result<String, Self::Error> {
+        Engine::call_json(self, function, argument).map(|value| value.0)
     }
 
     fn drain_microtasks(&mut self) -> Result<(), Self::Error> {
@@ -243,6 +275,12 @@ impl Backend for MockBackend {
         if source.contains("queueMicrotask") || source.contains("Promise.resolve") {
             self.pending_microtasks += 1;
         }
+        Ok(ScriptValue("undefined".to_owned()))
+    }
+
+    fn call_json(&mut self, function: &str, argument: &str) -> Result<ScriptValue, Error> {
+        self.evaluations
+            .push((format!("call:{function}:{argument}"), String::new()));
         Ok(ScriptValue("undefined".to_owned()))
     }
 
@@ -307,6 +345,19 @@ mod tests {
         }
         let mut engine = Engine::new(NativeBackend::new().unwrap());
         assert_eq!(engine.evaluate("1 + 1", "native-smoke.js").unwrap().0, "2");
+        engine
+            .evaluate(
+                "globalThis.__tsp_test_call = (value) => JSON.stringify({value: value.value})",
+                "native-smoke.js",
+            )
+            .unwrap();
+        assert_eq!(
+            engine
+                .call_json("__tsp_test_call", r#"{"value":"ok"}"#)
+                .unwrap()
+                .0,
+            r#"{"value":"ok"}"#
+        );
         engine
             .evaluate("Promise.resolve('ready')", "native-smoke.js")
             .unwrap();
