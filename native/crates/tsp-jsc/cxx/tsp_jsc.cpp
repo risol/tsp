@@ -150,8 +150,21 @@ extern "C" TSP_JSC_EXPORT void tsp_jsc_vm_destroy(TspJscVm* vm)
     if (!vm)
         return;
     trace("vm-destroy.begin");
-    if (vm->context)
+    if (vm->context) {
+        // VM creation publishes heap access for the lifetime of this native
+        // handle. Release that access before dropping the API context. The
+        // context-release path takes the API lock and may destroy the VM
+        // synchronously; leaving the embedder-owned heap access published
+        // makes that destruction path abort in WebKit's heap invariants.
+        auto* globalObject = toJSGlobalObject(vm->context);
+        auto& jscVm = JSC::getVM(globalObject);
+        {
+            JSC::JSLockHolder lock(jscVm);
+            jscVm.heap.releaseAccess();
+        }
+        trace("vm-destroy.heap-released");
         JSGlobalContextRelease(vm->context);
+    }
     trace("vm-destroy.context-released");
     std::free(vm);
     trace("vm-destroy.done");
