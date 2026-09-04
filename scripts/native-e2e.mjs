@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -33,6 +33,13 @@ const build = spawnSync(
   { cwd: repository, env: process.env, encoding: "utf8", stdio: "inherit" },
 );
 if (build.status !== 0) process.exit(build.status ?? 1);
+
+const nativeTests = spawnSync(
+  process.platform === "win32" ? "cargo.exe" : "cargo",
+  ["test", "--manifest-path", "native/Cargo.toml", "-p", "tsp-jsc", "--features", "native-ffi"],
+  { cwd: repository, env: process.env, encoding: "utf8", stdio: "inherit" },
+);
+if (nativeTests.status !== 0) process.exit(nativeTests.status ?? 1);
 
 const server = spawn(binary, ["--manifest", path.join(output, "manifest.json"), "--listen", "127.0.0.1:0"], {
   cwd: repository,

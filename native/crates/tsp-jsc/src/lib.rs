@@ -286,4 +286,18 @@ mod tests {
             ""
         );
     }
+
+    #[cfg(feature = "native-ffi")]
+    #[test]
+    fn native_jsc_smoke_runs_when_a_webkit_root_is_configured() {
+        if std::env::var_os("TSP_WEBKIT_ROOT").is_none() {
+            return;
+        }
+        let mut engine = Engine::new(NativeBackend::new().unwrap());
+        assert_eq!(engine.evaluate("1 + 1", "native-smoke.js").unwrap().0, "2");
+        engine
+            .evaluate("Promise.resolve('ready')", "native-smoke.js")
+            .unwrap();
+        engine.drain_microtasks().unwrap();
+    }
 }
