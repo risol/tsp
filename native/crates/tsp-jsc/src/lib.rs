@@ -120,8 +120,11 @@ impl NativeBackend {
         if buffer.ptr.is_null() && buffer.len != 0 {
             return Err(Error::Evaluation("native buffer has a null pointer".into()));
         }
-        let bytes = unsafe { std::slice::from_raw_parts(buffer.ptr, buffer.len) };
-        let owned = bytes.to_vec();
+        let owned = if buffer.len == 0 {
+            Vec::new()
+        } else {
+            unsafe { std::slice::from_raw_parts(buffer.ptr, buffer.len) }.to_vec()
+        };
         unsafe { ffi::tsp_jsc_buffer_free(buffer) };
         String::from_utf8(owned).map_err(|_| Error::Evaluation("native buffer is not UTF-8".into()))
     }
@@ -272,6 +275,15 @@ mod tests {
         let result = engine.evaluate("throw new Error('boom')", "broken.tsp");
         assert!(
             matches!(result, Err(Error::Evaluation(message)) if message.contains("broken.tsp"))
+        );
+    }
+
+    #[cfg(feature = "native-ffi")]
+    #[test]
+    fn empty_native_buffers_are_safe_to_copy_and_release() {
+        assert_eq!(
+            NativeBackend::copy_buffer(ffi::TspJscBuffer::default()).unwrap(),
+            ""
         );
     }
 }
