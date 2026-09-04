@@ -451,4 +451,27 @@ mod tests {
         assert_eq!(decoded.body, BodyEnvelope::Bytes(vec![0, 1, 2]));
         assert_eq!(decoded.request_id, "r-1");
     }
+
+    #[test]
+    fn response_envelope_round_trips_text_headers_effects_and_errors() {
+        let mut response = Response::new(400, "bad request");
+        response.request_id = "r-2".into();
+        response
+            .headers
+            .push(("content-type".into(), "text/plain".into()));
+        response
+            .effects
+            .cookies
+            .push("sid=deleted; Max-Age=0".into());
+        response.error = Some(ErrorEnvelope {
+            code: "TSP2001".into(),
+            kind: "BadRequest".into(),
+            message: "invalid input".into(),
+        });
+        let decoded: Response =
+            serde_json::from_str(&serde_json::to_string(&response).unwrap()).unwrap();
+        assert_eq!(decoded.body, BodyEnvelope::Text("bad request".into()));
+        assert_eq!(decoded.effects.cookies, response.effects.cookies);
+        assert_eq!(decoded.error, response.error);
+    }
 }
