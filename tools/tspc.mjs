@@ -344,6 +344,7 @@ export function compileProject({ root, out }) {
   fs.writeFileSync(path.join(outputDirectory, bundleName), renderBundle(compiledModules, routes), "utf8");
   const manifest = {
     version: 1,
+    runtimeAbi: 1,
     compiler: "tspc-typescript-frontend",
     sourceRoot: rootDirectory,
     bundle: bundleName,

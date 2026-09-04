@@ -1,0 +1,13 @@
+[package]
+name = "tsp-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "TSP isolated JavaScript worker process"
+
+[dependencies]
+tsp-core = { path = "../tsp-core" }
+tsp-jsc = { path = "../tsp-jsc", features = ["native-ffi"] }
+tsp-runtime = { path = "../tsp-runtime" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

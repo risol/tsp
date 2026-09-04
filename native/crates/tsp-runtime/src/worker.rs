@@ -102,6 +102,7 @@ impl<J> RouteExecutor<J> {
             "method": request.method,
             "target": request.target,
             "request_id": request.request_id,
+            "generation": request.generation,
             "route": route.path,
             "params": params,
             "request": {
@@ -343,6 +344,7 @@ mod tests {
                 Request {
                     version: crate::PROTOCOL_VERSION,
                     request_id: "test-1".into(),
+                    generation: None,
                     method: "GET".into(),
                     target: "/users/42".into(),
                     http_version: "HTTP/1.1".into(),
@@ -386,6 +388,7 @@ mod tests {
         let request = Request {
             version: crate::PROTOCOL_VERSION,
             request_id: "request-1".into(),
+            generation: None,
             method: "GET".into(),
             target: "/search?q=quote%20%22%20%7D".into(),
             http_version: "HTTP/1.1".into(),

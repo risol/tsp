@@ -29,7 +29,7 @@ const binary = path.join(
 );
 const build = spawnSync(
   process.platform === "win32" ? "cargo.exe" : "cargo",
-  ["build", "--manifest-path", "native/Cargo.toml", "-p", "tsp-cli"],
+  ["build", "--manifest-path", "native/Cargo.toml", "-p", "tsp-cli", "-p", "tsp-worker"],
   { cwd: repository, env: process.env, encoding: "utf8", stdio: "inherit" },
 );
 if (build.status !== 0) process.exit(build.status ?? 1);

@@ -7,6 +7,7 @@ members = [
   "crates/tsp-js",
   "crates/tsp-http",
   "crates/tsp-runtime",
+  "crates/tsp-worker",
 ]
 
 [workspace.package]

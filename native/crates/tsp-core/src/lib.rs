@@ -10,6 +10,11 @@ use std::collections::HashMap;
 pub const PROTOCOL_VERSION: u16 = 1;
 pub const RUNTIME_ABI_VERSION: u16 = 1;
 
+pub const WORKER_PROTOCOL_VERSION: u16 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct GenerationId(pub u64);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data")]
 pub enum BodyEnvelope {
@@ -66,6 +71,7 @@ impl From<&str> for BodyEnvelope {
 pub struct RequestEnvelope {
     pub version: u16,
     pub request_id: String,
+    pub generation: Option<GenerationId>,
     pub method: String,
     pub target: String,
     pub http_version: String,
@@ -86,6 +92,7 @@ impl RequestEnvelope {
 pub struct ResponseEnvelope {
     pub version: u16,
     pub request_id: String,
+    pub generation: Option<GenerationId>,
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub body: BodyEnvelope,
@@ -97,6 +104,7 @@ impl ResponseEnvelope {
         Self {
             version: PROTOCOL_VERSION,
             request_id: String::new(),
+            generation: None,
             status,
             headers: Vec::new(),
             body: body.into(),
@@ -122,6 +130,47 @@ pub struct SessionEffect {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum WorkerCommand {
+    Hello {
+        version: u16,
+    },
+    LoadGeneration {
+        generation: GenerationId,
+        bundle: String,
+        filename: String,
+    },
+    Execute {
+        request: RequestEnvelope,
+        route: RouteSpec,
+        params: HashMap<String, String>,
+    },
+    Cancel {
+        request_id: String,
+    },
+    Ping,
+    Shutdown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum WorkerEvent {
+    Ready {
+        version: u16,
+    },
+    GenerationReady {
+        generation: GenerationId,
+    },
+    Result(ResponseEnvelope),
+    Error {
+        request_id: Option<String>,
+        message: String,
+    },
+    Pong,
+    Exiting,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RouteSpec {
     pub path: String,
     pub source: String,
@@ -142,6 +191,8 @@ pub struct ModuleSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompiledManifest {
     pub version: u32,
+    #[serde(rename = "runtimeAbi", alias = "runtime_abi")]
+    pub runtime_abi: u16,
     pub compiler: String,
     #[serde(rename = "sourceRoot", alias = "source_root")]
     pub source_root: String,
@@ -364,6 +415,7 @@ mod tests {
         let request = Request {
             version: PROTOCOL_VERSION,
             request_id: "r-1".into(),
+            generation: None,
             method: "POST".into(),
             target: "/upload".into(),
             http_version: "HTTP/1.1".into(),

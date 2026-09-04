@@ -151,6 +151,7 @@ pub fn parse_request_with_header_limit(
         Request {
             version: PROTOCOL_VERSION,
             request_id: format!("http-{}", REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)),
+            generation: None,
             method: method.to_owned(),
             target: target.to_owned(),
             http_version: version.to_owned(),

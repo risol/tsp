@@ -115,7 +115,6 @@ dependencies = [
  "serde_json",
  "tsp-core",
  "tsp-http",
- "tsp-jsc",
  "tsp-runtime",
 ]
 
@@ -155,6 +154,17 @@ dependencies = [
  "serde_json",
  "tsp-core",
  "tsp-js",
+]
+
+[[package]]
+name = "tsp-worker"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tsp-core",
+ "tsp-jsc",
+ "tsp-runtime",
 ]
 
 [[package]]
