@@ -234,14 +234,17 @@ fn execute_windows_cli(request: &protocol::ExecuteRequest) -> Result<String, Str
     // file under its `tspserver.exe` name. Bun's CLI path uses the executable
     // name as part of its process-mode detection on Windows; a hard link keeps
     // the exact same bytes and does not depend on PATH or a second runtime.
-    let cli_executable = std::env::temp_dir().join(format!(
-        "tsp-bun-cli-{}-{}.exe",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|error| format!("worker clock failed: {error}"))?
-            .as_nanos()
-    ));
+    let cli_executable = executable
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join(format!(
+            "tsp-bun-cli-{}-{}.exe",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|error| format!("worker clock failed: {error}"))?
+                .as_nanos()
+        ));
     std::fs::hard_link(&executable, &cli_executable)
         .map_err(|error| format!("failed to link the packaged Bun CLI: {error}"))?;
     let output = Command::new(&cli_executable)
