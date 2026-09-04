@@ -36,7 +36,17 @@ if (build.status !== 0) process.exit(build.status ?? 1);
 
 const nativeTests = spawnSync(
   process.platform === "win32" ? "cargo.exe" : "cargo",
-  ["test", "--manifest-path", "native/Cargo.toml", "-p", "tsp-jsc", "--features", "native-ffi"],
+  [
+    "test",
+    "--manifest-path",
+    "native/Cargo.toml",
+    "-p",
+    "tsp-jsc",
+    "--features",
+    "native-ffi",
+    "--",
+    "--test-threads=1",
+  ],
   { cwd: repository, env: process.env, encoding: "utf8", stdio: "inherit" },
 );
 if (nativeTests.status !== 0) process.exit(nativeTests.status ?? 1);
