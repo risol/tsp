@@ -148,7 +148,6 @@ dependencies = [
 name = "tsp-http"
 version = "0.1.0"
 dependencies = [
- "serde",
  "tsp-core",
 ]
 
@@ -169,7 +168,6 @@ dependencies = [
 name = "tsp-runtime"
 version = "0.1.0"
 dependencies = [
- "serde",
  "serde_json",
  "tsp-core",
  "tsp-js",

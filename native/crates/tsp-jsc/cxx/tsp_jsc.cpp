@@ -2,14 +2,10 @@
  * TSP's minimal JavaScriptCore bridge.
  *
  * This file intentionally uses JavaScriptCore's public C API plus the small
- * VM accessor needed to drain microtasks. It does not create Bun's global
- * object and does not depend on Bun's runtime, event loop, module loader, or
- * transpiler.
+ * VM accessor needed to drain microtasks. It does not create an application
+ * global object and does not depend on a host runtime, event loop, module
+ * loader, or transpiler.
  */
-#if defined(TSP_JSC_BUN_BUILD)
-#include "root.h"
-#endif
-
 #include "../include/tsp_jsc.h"
 #include <JavaScriptCore/APICast.h>
 #include <JavaScriptCore/GetVM.h>
@@ -106,8 +102,8 @@ static JSStringRef createString(TspJscBuffer input)
 extern "C" TSP_JSC_EXPORT int32_t tsp_jsc_initialize(void)
 {
     trace("initialize.begin");
-    // Standalone embedders must perform the same low-level initialization that
-    // Bun performs before creating a VM. JSGlobalContextCreate is not a
+    // Standalone embedders must perform low-level initialization before
+    // creating a VM. JSGlobalContextCreate is not a
     // replacement for initializing WTF's main-thread state and JSC's option
     // table; omitting this can corrupt the VM when Promise microtasks are
     // drained or when the context is released.
@@ -139,7 +135,7 @@ extern "C" TSP_JSC_EXPORT TspJscVm* tsp_jsc_vm_create(void)
 
     // The public context factory creates the VM and global object, but the
     // embedder still has to publish heap access before using JSC's C++ API.
-    // This is the order used by Bun's VM setup: acquire heap access first,
+    // Acquire heap access first,
     // then take the API lock. Skipping it makes JSLockHolder touch an
     // unavailable heap state on Linux and can crash before the lock is held.
     auto* globalObject = toJSGlobalObject(vm->context);

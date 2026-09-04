@@ -8,5 +8,4 @@ description = "TSP-owned route and request runtime"
 [dependencies]
 tsp-core = { path = "../tsp-core" }
 tsp-js = { path = "../tsp-js" }
-serde = { version = "1", features = ["derive"] }
 serde_json = "1"

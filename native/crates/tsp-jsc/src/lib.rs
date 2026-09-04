@@ -1,6 +1,6 @@
 //! TSP's JavaScriptCore boundary.
 //!
-//! This crate deliberately does not expose Bun VM, event-loop, transpiler, or
+//! This crate deliberately does not expose host event-loop, transpiler, or
 //! module-loader types. A VM is owned by exactly one thread and all operations
 //! must happen on that owner thread. The native FFI contract is kept in
 //! `include/tsp_jsc.h`; the default backend is a test backend so the ownership
@@ -94,7 +94,7 @@ impl std::error::Error for Error {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptValue(pub String);
 
-/// A backend is intentionally smaller than Bun's `VirtualMachine`. It is the
+/// A backend is intentionally smaller than a full application runtime. It is the
 /// only surface the TSP runtime needs from a JavaScript engine in phase one.
 pub trait Backend {
     fn evaluate(&mut self, source: &str, filename: &str) -> Result<ScriptValue, Error>;

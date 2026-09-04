@@ -2,7 +2,7 @@
 //!
 //! The parser intentionally handles one complete request at a time. The
 //! connection owner decides whether to keep the socket alive; this crate does
-//! not depend on uWebSockets, libuv, or Bun HTTP types.
+//! not depend on a particular HTTP framework or JavaScript runtime.
 
 use std::fmt;
 use std::io::{self, Read, Write};

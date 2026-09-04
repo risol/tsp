@@ -7,4 +7,3 @@ description = "Small HTTP/1.1 parser and response writer for TSP"
 
 [dependencies]
 tsp-core = { path = "../tsp-core" }
-serde = { version = "1", features = ["derive"] }
