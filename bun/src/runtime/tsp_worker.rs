@@ -233,6 +233,7 @@ fn execute_windows_cli(request: &protocol::ExecuteRequest) -> Result<String, Str
     let executable = std::env::current_exe()
         .map_err(|error| format!("failed to locate packaged Bun executable: {error}"))?;
     let output = Command::new(executable)
+        .arg("run")
         .arg(&path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
