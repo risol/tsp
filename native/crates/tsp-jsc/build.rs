@@ -110,9 +110,14 @@ fn main() {
         for library in ["sicudt", "sicuin", "sicuuc"] {
             println!("cargo:rustc-link-lib=static={library}");
         }
-    } else if cfg!(target_os = "linux") || cfg!(target_os = "macos") {
+    } else if cfg!(target_os = "linux") {
         for library in ["icui18n", "icuuc", "icudata"] {
             println!("cargo:rustc-link-lib=static={library}");
         }
+    } else if cfg!(target_os = "macos") {
+        // macOS supplies ICU through the system icucore library; the
+        // standalone SDK intentionally does not bundle a second ICU copy.
+        println!("cargo:rustc-link-lib=dylib=icucore");
+        println!("cargo:rustc-link-lib=dylib=resolv");
     }
 }
