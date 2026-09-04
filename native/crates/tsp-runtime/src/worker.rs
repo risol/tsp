@@ -453,4 +453,15 @@ mod tests {
             Err(WorkerError::Execution(message)) if message == "worker count must be greater than zero"
         ));
     }
+
+    #[test]
+    fn worker_initialization_errors_are_returned_before_pool_creation() {
+        let result = WorkerPool::try_new::<EchoExecutor, _>(1, |_| {
+            Err(WorkerError::Execution("bundle failed to load".into()))
+        });
+        assert!(matches!(
+            result,
+            Err(WorkerError::Execution(message)) if message == "bundle failed to load"
+        ));
+    }
 }

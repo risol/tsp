@@ -34,6 +34,7 @@ export function GET(ctx: { params: Record<string, string> }) {
   assert.deepEqual(manifest.routes[0].methods, ["GET"]);
   assert.deepEqual(manifest.modules[0].source, "shared.ts");
   assert.match(fs.readFileSync(path.join(out, "users/[id].js"), "utf8"), /__tsp_jsx/);
+  assert.doesNotMatch(fs.readFileSync(path.join(out, "users/[id].js"), "utf8"), /sourceMappingURL/);
   assert.match(fs.readFileSync(path.join(out, "bundle.js"), "utf8"), /__tsp_require\("shared.js"\)/);
   assert.equal(manifest.bundle, "bundle.js");
   assert.equal(fs.existsSync(path.join(out, "manifest.json")), true);

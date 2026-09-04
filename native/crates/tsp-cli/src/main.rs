@@ -8,6 +8,7 @@ use tsp_http::{Request, Response, Server, ServerLimits};
 use tsp_runtime::worker::{NativeRouteExecutor, WorkerError};
 use tsp_runtime::{CompiledManifest, RouteTable, WorkerPool};
 
+#[derive(Debug)]
 struct Options {
     manifest: PathBuf,
     bundle: Option<PathBuf>,
@@ -97,5 +98,32 @@ impl Options {
 
     fn usage() -> String {
         "usage: tsp-cli --manifest DIR/manifest.json [--bundle DIR/bundle.js] [--listen HOST:PORT] [--workers N]".to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::Options;
+
+    #[test]
+    fn parses_required_manifest_and_runtime_defaults() {
+        let options = Options::parse(
+            ["--manifest", "manifest.json"]
+                .into_iter()
+                .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(options.manifest, Path::new("manifest.json"));
+        assert_eq!(options.listen, "127.0.0.1:3000");
+        assert_eq!(options.workers, 1);
+        assert!(options.bundle.is_none());
+    }
+
+    #[test]
+    fn rejects_unknown_arguments() {
+        let error = Options::parse(["--nope"].into_iter().map(String::from)).unwrap_err();
+        assert!(error.contains("unknown argument"));
     }
 }
