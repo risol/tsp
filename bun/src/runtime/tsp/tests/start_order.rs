@@ -4750,9 +4750,16 @@ fn http_send_raw(port: u16, raw_request: &str) -> (u16, String) {
     stream
         .set_read_timeout(Some(Duration::from_secs(15)))
         .expect("set_read_timeout");
-    stream
-        .write_all(raw_request.as_bytes())
-        .expect("write request");
+    let request_bytes = raw_request.as_bytes();
+    let mut written = 0;
+    while written < request_bytes.len() {
+        match stream.write(&request_bytes[written..]) {
+            Ok(0) => break,
+            Ok(n) => written += n,
+            Err(e) if e.kind() == ErrorKind::ConnectionReset => break,
+            Err(e) => panic!("write request: {e}"),
+        }
+    }
     // Read in a manual loop so a trailing RST (after
     // the response body has been received) does not
     // panic the test. We accept the data we have as
