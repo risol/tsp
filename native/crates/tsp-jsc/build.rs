@@ -79,7 +79,6 @@ fn main() {
     // link directive after WebKit so archive resolution can satisfy bmalloc.
     let mut mimalloc = cc::Build::new();
     mimalloc
-        .cpp(true)
         .file(&mimalloc_source)
         .include(&mimalloc_include)
         .define("MI_STATIC_LIB", None)
