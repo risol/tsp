@@ -13,7 +13,6 @@
 #include "../include/tsp_jsc.h"
 #include <JavaScriptCore/APICast.h>
 #include <JavaScriptCore/GetVM.h>
-#include <JavaScriptCore/HeapInlines.h>
 #include <JavaScriptCore/InitializeThreading.h>
 #include <JavaScriptCore/JSLock.h>
 #include <JavaScriptCore/JavaScript.h>
@@ -144,7 +143,10 @@ extern "C" TSP_JSC_EXPORT TspJscVm* tsp_jsc_vm_create(void)
     // unavailable heap state on Linux and can crash before the lock is held.
     auto* globalObject = toJSGlobalObject(vm->context);
     auto& jscVm = JSC::getVM(globalObject);
-    jscVm.heap.acquireAccess();
+    // Call the exported slow path directly instead of the inline helper. The
+    // inline helper conditionally references DFG validation symbols that are
+    // not present in every standalone WebKit archive configuration.
+    jscVm.heap.acquireAccessSlow();
     trace("vm-create.heap-ready");
     return vm;
 }
