@@ -97,11 +97,49 @@ const RUNTIME_PRELUDE: &str = r#"
   };
   globalThis.__tsp_fragment = (_props, ...children) => children.map(renderChild).join("");
   globalThis.Response = TspResponse;
+  globalThis.process = { env: Object.create(null) };
   globalThis.__tsp_make_context = function (raw) {
     const request = raw.request || {};
     const body = String(request.body || "");
     raw.url = new TspUrl(raw.target);
     raw.query = raw.url.searchParams;
+    raw.path = raw.url.pathname;
+    const cookieValues = new Map();
+    const setCookies = [];
+    const cookieHeader = (raw.request.headers || {}).cookie || "";
+    for (const pair of cookieHeader.split(";")) {
+      const separator = pair.indexOf("=");
+      if (separator > 0) cookieValues.set(pair.slice(0, separator).trim(), pair.slice(separator + 1).trim());
+    }
+    raw.cookies = {
+      get: (name) => cookieValues.get(name),
+      has: (name) => cookieValues.has(name),
+      set: (name, value, options = {}) => {
+        cookieValues.set(name, String(value));
+        let line = `${name}=${encodeURIComponent(String(value))}`;
+        if (options.path) line += `; Path=${options.path}`;
+        if (options.maxAge != null) line += `; Max-Age=${Number(options.maxAge)}`;
+        if (options.httpOnly) line += "; HttpOnly";
+        if (options.secure) line += "; Secure";
+        setCookies.push(line);
+      },
+      delete: (name) => {
+        cookieValues.delete(name);
+        setCookies.push(`${name}=; Max-Age=0; Path=/`);
+      },
+    };
+    raw.__tsp_set_cookies = setCookies;
+    raw.services = raw.services || Object.create(null);
+    raw.signal = { aborted: false, addEventListener: () => {} };
+    raw.session = raw.session || {
+      id: "native-session",
+      get: () => undefined,
+      set: () => {},
+      delete: () => {},
+      regenerate: async () => {},
+      destroy: async () => {},
+    };
+    raw.fragment = () => "";
     raw.request = {
       method: request.method,
       headers: request.headers || {},
@@ -124,6 +162,8 @@ const RUNTIME_PRELUDE: &str = r#"
         status, headers: { location }
       }),
       notFound: (message = "Not Found") => new TspResponse(message, { status: 404 }),
+      fragment: (handler) => handler,
+      nanoid: () => "native-nanoid",
     },
     "tsp:html": { escapeHtml },
   };
@@ -175,17 +215,22 @@ impl NativeRouteExecutor {
   try {{
     const route = globalThis.__tsp_routes[{route}];
     const handler = route && (route[{method}] || route.ANY);
-    const normalize = (value) => value instanceof Response ? value : new Response(value);
+    const normalize = (value, context) => {{
+      const response = value instanceof Response ? value : new Response(value);
+      for (const cookie of context.__tsp_set_cookies || []) response.headers.push(["set-cookie", cookie]);
+      return response;
+    }};
     if (!handler) {{
       globalThis.__tsp_result = new Response("Method Not Allowed", {{ status: 405 }});
       globalThis.__tsp_pending = false;
     }} else {{
-      const value = handler(globalThis.__tsp_make_context(JSON.parse({context})));
+      const context = globalThis.__tsp_make_context(JSON.parse({context}));
+      const value = handler(context);
       if (value && typeof value.then === "function") {{
-        value.then((resolved) => {{ globalThis.__tsp_result = normalize(resolved); globalThis.__tsp_pending = false; }},
+        value.then((resolved) => {{ globalThis.__tsp_result = normalize(resolved, context); globalThis.__tsp_pending = false; }},
           (error) => {{ globalThis.__tsp_error = String(error); globalThis.__tsp_pending = false; }});
       }} else {{
-        globalThis.__tsp_result = normalize(value);
+        globalThis.__tsp_result = normalize(value, context);
         globalThis.__tsp_pending = false;
       }}
     }}

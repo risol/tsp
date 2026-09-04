@@ -12,9 +12,10 @@ if (!webkitRoot) {
 }
 
 const output = mkdtempSync(path.join(os.tmpdir(), "tsp-native-e2e-"));
+const applicationRoot = process.env.TSP_NATIVE_E2E_ROOT ?? "native/fixtures/pages";
 const compiler = spawnSync(
   process.platform === "win32" ? "node.exe" : "node",
-  ["tools/tspc.mjs", "compile", "--root", "native/fixtures/pages", "--out", output],
+  ["tools/tspc.mjs", "compile", "--root", applicationRoot, "--out", output],
   { cwd: repository, encoding: "utf8", stdio: "inherit" },
 );
 if (compiler.status !== 0) process.exit(compiler.status ?? 1);
@@ -56,12 +57,22 @@ try {
     if (response.status !== expectedStatus) throw new Error(`${route}: expected ${expectedStatus}, got ${response.status}: ${body}`);
     return body;
   };
-  const root = JSON.parse(await get("/?q=hello"));
-  if (root.path !== "/" || root.query !== "hello") throw new Error("root route context mismatch");
-  const user = JSON.parse(await get("/users/42"));
-  if (user.id !== "42") throw new Error("dynamic route parameter mismatch");
-  const asyncBody = await get("/async");
-  if (asyncBody !== "async:/async") throw new Error(`async route mismatch: ${asyncBody}`);
+  if (applicationRoot === "pages") {
+    const root = await get("/");
+    if (!root.includes("Hello GET") || !root.includes("path=/")) throw new Error("application root route mismatch");
+    const user = await get("/users/42?q=hello");
+    if (!user.includes("User 42") || !user.includes("path=/users/42")) throw new Error("dynamic route parameter mismatch");
+    const created = await fetch(`http://${address}/`, { method: "POST", body: "native" });
+    const createdBody = await created.text();
+    if (created.status !== 201 || createdBody !== "echo:native (signal=pending)") throw new Error(`POST route mismatch: ${created.status} ${createdBody}`);
+  } else {
+    const root = JSON.parse(await get("/?q=hello"));
+    if (root.path !== "/" || root.query !== "hello") throw new Error("root route context mismatch");
+    const user = JSON.parse(await get("/users/42"));
+    if (user.id !== "42") throw new Error("dynamic route parameter mismatch");
+    const asyncBody = await get("/async");
+    if (asyncBody !== "async:/async") throw new Error(`async route mismatch: ${asyncBody}`);
+  }
   await get("/missing", 404);
   console.log("native application E2E passed: root, dynamic, async, and 404 routes");
 } finally {
