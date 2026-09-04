@@ -19,8 +19,15 @@ fn main() {
     let webkit_root = std::path::PathBuf::from(webkit_root);
     let include = webkit_root.join("include");
     let lib = webkit_root.join("lib");
+    let mimalloc_source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../bun/vendor/mimalloc/src/static.c");
+    let mimalloc_include = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../bun/vendor/mimalloc/include");
     if !include.is_dir() || !lib.is_dir() {
         panic!("TSP_WEBKIT_ROOT must contain include and lib directories");
+    }
+    if !mimalloc_source.is_file() || !mimalloc_include.is_dir() {
+        panic!("the vendored mimalloc source required by WebKit is missing");
     }
     if cfg!(windows) && !include.join("wtf").join("PlatformEnableWin.h").is_file() {
         panic!(
@@ -65,6 +72,31 @@ fn main() {
     }
     build.compile("tsp_jsc_bridge");
 
+    // Bun's WebKit build uses bmalloc with the mimalloc C API. The Bun
+    // executable normally supplies these symbols as part of its own link,
+    // but the standalone TSP executable must own this dependency explicitly.
+    // Compile the vendored allocator as a separate archive and repeat its
+    // link directive after WebKit so archive resolution can satisfy bmalloc.
+    let mut mimalloc = cc::Build::new();
+    mimalloc
+        .cpp(true)
+        .file(&mimalloc_source)
+        .include(&mimalloc_include)
+        .define("MI_STATIC_LIB", None)
+        .define("MI_SKIP_COLLECT_ON_EXIT", Some("1"))
+        .define("MI_NO_PROCESS_DETACH", Some("1"))
+        .define("MI_BUILD_RELEASE", None)
+        .warnings(false);
+    if !cfg!(windows) {
+        mimalloc.flag_if_supported("-fvisibility=hidden");
+        mimalloc.flag_if_supported("-Wno-deprecated");
+        mimalloc.flag_if_supported("-Wno-static-in-inline");
+        mimalloc.flag_if_supported("-ftls-model=initial-exec");
+    } else {
+        mimalloc.flag_if_supported("/EHsc");
+    }
+    mimalloc.compile("tsp_mimalloc");
+
     println!("cargo:rustc-link-search=native={}", lib.display());
     println!("cargo:rustc-link-lib=static=JavaScriptCore");
     println!("cargo:rustc-link-lib=static=WTF");
@@ -78,4 +110,7 @@ fn main() {
             println!("cargo:rustc-link-lib=static={library}");
         }
     }
+    // See the archive-order note above. This second directive intentionally
+    // places mimalloc after the archives that reference its mi_* symbols.
+    println!("cargo:rustc-link-lib=static=tsp_mimalloc");
 }
