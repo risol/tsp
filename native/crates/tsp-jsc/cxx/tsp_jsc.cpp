@@ -19,6 +19,7 @@
 #include <JavaScriptCore/VM.h>
 
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <mutex>
@@ -26,6 +27,20 @@
 struct TspJscVm {
     JSGlobalContextRef context;
 };
+
+static bool traceEnabled()
+{
+    static const bool enabled = std::getenv("TSP_JSC_TRACE") != nullptr;
+    return enabled;
+}
+
+static void trace(const char* stage)
+{
+    if (!traceEnabled())
+        return;
+    std::fprintf(stderr, "TSP_JSC_TRACE %s\n", stage);
+    std::fflush(stderr);
+}
 
 static TspJscBuffer copyString(JSStringRef value)
 {
@@ -89,6 +104,7 @@ static JSStringRef createString(TspJscBuffer input)
 
 extern "C" TSP_JSC_EXPORT int32_t tsp_jsc_initialize(void)
 {
+    trace("initialize.begin");
     // Standalone embedders must perform the same low-level initialization that
     // Bun performs before creating a VM. JSGlobalContextCreate is not a
     // replacement for initializing WTF's main-thread state and JSC's option
@@ -96,22 +112,29 @@ extern "C" TSP_JSC_EXPORT int32_t tsp_jsc_initialize(void)
     // drained or when the context is released.
     static std::once_flag initializeOnce;
     std::call_once(initializeOnce, [] {
+        trace("initialize.main-thread");
         WTF::initializeMainThread();
+        trace("initialize.wtf-ready");
         JSC::initialize([] {});
+        trace("initialize.jsc-ready");
     });
+    trace("initialize.done");
     return 0;
 }
 
 extern "C" TSP_JSC_EXPORT TspJscVm* tsp_jsc_vm_create(void)
 {
+    trace("vm-create.begin");
     auto* vm = static_cast<TspJscVm*>(std::calloc(1, sizeof(TspJscVm)));
     if (!vm)
         return nullptr;
+    trace("vm-create.storage-ready");
     vm->context = JSGlobalContextCreate(nullptr);
     if (!vm->context) {
         std::free(vm);
         return nullptr;
     }
+    trace("vm-create.context-ready");
     return vm;
 }
 
@@ -119,9 +142,12 @@ extern "C" TSP_JSC_EXPORT void tsp_jsc_vm_destroy(TspJscVm* vm)
 {
     if (!vm)
         return;
+    trace("vm-destroy.begin");
     if (vm->context)
         JSGlobalContextRelease(vm->context);
+    trace("vm-destroy.context-released");
     std::free(vm);
+    trace("vm-destroy.done");
 }
 
 extern "C" TSP_JSC_EXPORT TspJscResult tsp_jsc_evaluate(
@@ -130,6 +156,7 @@ extern "C" TSP_JSC_EXPORT TspJscResult tsp_jsc_evaluate(
     TspJscBuffer filename)
 {
     TspJscResult result {};
+    trace("evaluate.begin");
     if (!vm || !vm->context
         || (!source.ptr && source.len != 0)
         || (!filename.ptr && filename.len != 0)) {
@@ -139,6 +166,7 @@ extern "C" TSP_JSC_EXPORT TspJscResult tsp_jsc_evaluate(
 
     JSStringRef sourceString = createString(source);
     JSStringRef filenameString = filename.ptr ? createString(filename) : nullptr;
+    trace("evaluate.strings-ready");
     if (!sourceString || (filename.ptr && !filenameString)) {
         if (sourceString)
             JSStringRelease(sourceString);
@@ -156,6 +184,7 @@ extern "C" TSP_JSC_EXPORT TspJscResult tsp_jsc_evaluate(
         filenameString,
         1,
         &exception);
+    trace("evaluate.script-done");
     if (exception) {
         result.error = copyValueAsString(vm->context, exception);
     } else if (value) {
@@ -166,6 +195,7 @@ extern "C" TSP_JSC_EXPORT TspJscResult tsp_jsc_evaluate(
     JSStringRelease(sourceString);
     if (filenameString)
         JSStringRelease(filenameString);
+    trace("evaluate.done");
     return result;
 }
 
@@ -173,10 +203,15 @@ extern "C" TSP_JSC_EXPORT int32_t tsp_jsc_drain_microtasks(TspJscVm* vm)
 {
     if (!vm || !vm->context)
         return 1;
+    trace("microtasks.begin");
     auto* globalObject = toJSGlobalObject(vm->context);
+    trace("microtasks.global-ready");
     auto& jscVm = JSC::getVM(globalObject);
+    trace("microtasks.vm-ready");
     JSC::JSLockHolder lock(jscVm);
+    trace("microtasks.locked");
     jscVm.drainMicrotasks();
+    trace("microtasks.done");
     return 0;
 }
 
