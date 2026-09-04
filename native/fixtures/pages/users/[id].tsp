@@ -1,5 +1,3 @@
-import { json } from "tsp:server";
-
 export function GET(ctx) {
-  return json({ ok: true, id: ctx.params.id, path: ctx.url.pathname });
+  return `<!doctype html><h1>User ${ctx.params.id}</h1><p>query=${ctx.query.get("q")}</p><p>path=${ctx.url.pathname}</p>`;
 }

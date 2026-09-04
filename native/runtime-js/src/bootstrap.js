@@ -13,6 +13,10 @@
     get(name) { return this.values.has(name) ? this.values.get(name) : null; }
     has(name) { return this.values.has(name); }
   }
+  class TspHtmlNode {
+    constructor(value) { this.value = value; }
+    toString() { return this.value; }
+  }
   class TspUrl {
     constructor(target) {
       const value = String(target || "/");
@@ -27,7 +31,7 @@
     constructor(body = "", init = {}) {
       this.status = Number(init.status || 200);
       this.headers = Object.entries(init.headers || {});
-      this.body = body == null ? "" : String(body);
+      this.body = body instanceof TspHtmlNode ? body.value : body == null ? "" : String(body);
     }
     toJSON() { return { status: this.status, headers: this.headers, body: this.body }; }
   }
@@ -39,6 +43,7 @@
   function renderChild(value) {
     if (value == null || value === false) return "";
     if (Array.isArray(value)) return value.map(renderChild).join("");
+    if (value instanceof TspHtmlNode) return value.value;
     return escapeHtml(value);
   }
   globalThis.__tsp_jsx = function (type, props, ...children) {
@@ -46,9 +51,9 @@
     const attributes = Object.entries(props || {})
       .filter(([key, value]) => key !== "children" && value != null && value !== false)
       .map(([key, value]) => ` ${key}="${escapeHtml(value)}"`).join("");
-    return `<${type}${attributes}>${children.map(renderChild).join("")}</${type}>`;
+    return new TspHtmlNode(`<${type}${attributes}>${children.map(renderChild).join("")}</${type}>`);
   };
-  globalThis.__tsp_fragment = (_props, ...children) => children.map(renderChild).join("");
+  globalThis.__tsp_fragment = (_props, ...children) => new TspHtmlNode(children.map(renderChild).join(""));
   globalThis.Response = TspResponse;
   globalThis.process = { env: Object.create(null) };
   globalThis.__tsp_make_context = function (raw) {

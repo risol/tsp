@@ -73,30 +73,59 @@ const address = await new Promise((resolve, reject) => {
 });
 
 try {
-  const get = async (route, expectedStatus = 200) => {
-    const response = await fetch(`http://${address}${route}`);
-    const body = await response.text();
-    if (response.status !== expectedStatus) throw new Error(`${route}: expected ${expectedStatus}, got ${response.status}: ${body}`);
-    return body;
+  const request = async (route, { method = "GET", headers, body: requestBody } = {}, expectedStatus = 200) => {
+    const response = await fetch(`http://${address}${route}`, { method, headers, body: requestBody });
+    const responseBody = await response.text();
+    if (response.status !== expectedStatus) throw new Error(`${route}: expected ${expectedStatus}, got ${response.status}: ${responseBody}`);
+    return { body: responseBody, headers: response.headers, status: response.status };
   };
   if (applicationRoot === "pages") {
-    const root = await get("/");
-    if (!root.includes("Hello GET") || !root.includes("path=/")) throw new Error("application root route mismatch");
-    const user = await get("/users/42?q=hello");
-    if (!user.includes("User 42") || !user.includes("path=/users/42")) throw new Error("dynamic route parameter mismatch");
-    const created = await fetch(`http://${address}/`, { method: "POST", body: "native" });
-    const createdBody = await created.text();
-    if (created.status !== 201 || createdBody !== "echo:native (signal=pending)") throw new Error(`POST route mismatch: ${created.status} ${createdBody}`);
+    const root = await request("/");
+    if (!root.body.includes("Hello GET") || !root.body.includes("path=/")) throw new Error("application root route mismatch");
+    const user = await request("/users/42?q=hello");
+    if (!user.body.includes("User 42") || !user.body.includes("path=/users/42")) throw new Error("dynamic route parameter mismatch");
+    const created = await request("/", { method: "POST", body: "native" }, 201);
+    if (created.body !== "echo:native (signal=pending)") throw new Error(`POST route mismatch: ${created.body}`);
+  } else if (applicationRoot === "native/fixtures/pages") {
+    const root = await request("/?q=hello");
+    const rootValue = JSON.parse(root.body);
+    if (rootValue.path !== "/" || rootValue.query !== "hello" || rootValue.method !== "GET") throw new Error("native root route mismatch");
+    const created = await request("/", { method: "POST", body: "native" }, 201);
+    if (created.body !== "echo:native" || created.headers.get("x-tsp-case") !== "post") throw new Error("native POST route mismatch");
+    const user = await request("/users/42?q=hello");
+    if (!user.body.includes("User 42") || !user.body.includes("query=hello")) throw new Error("native dynamic route mismatch");
+    const wildcard = await request("/docs/a/b");
+    if (wildcard.body !== "catch-all:a/b") throw new Error("native catch-all route mismatch");
+    const cookie = await request("/cookies");
+    if (!cookie.body.includes("seen=none") || !cookie.body.includes("has=true")) throw new Error("native cookie write mismatch");
+    const sid = cookie.headers.get("set-cookie")?.match(/sid=([^;]+)/)?.[1];
+    if (sid !== "native-session") throw new Error("native Set-Cookie mismatch");
+    const cookieAgain = await request("/cookies", { headers: { cookie: `sid=${sid}` } });
+    if (!cookieAgain.body.includes("seen=native-session")) throw new Error("native cookie read mismatch");
+    const jsonResponse = await request("/json", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "hello" }),
+    });
+    const jsonValue = JSON.parse(jsonResponse.body);
+    if (jsonValue.received !== "hello" || jsonValue.method !== "POST") throw new Error("native JSON route mismatch");
+    const asyncResponse = await request("/async", {}, 201);
+    if (asyncResponse.body !== "async:/async" || asyncResponse.headers.get("x-tsp") !== "native") throw new Error("native async route mismatch");
+    const jsx = await request("/jsx");
+    if (!jsx.body.includes("<main><h1>JSX</h1><p>native</p></main>")) throw new Error("native JSX route mismatch");
+    const error = await request("/error", {}, 500);
+    if (!error.body.includes("internal server error")) throw new Error("native handler error mismatch");
+    await request("/users/42", { method: "POST" }, 405);
   } else {
-    const root = JSON.parse(await get("/?q=hello"));
+    const root = JSON.parse((await request("/?q=hello")).body);
     if (root.path !== "/" || root.query !== "hello") throw new Error("root route context mismatch");
-    const user = JSON.parse(await get("/users/42"));
+    const user = JSON.parse((await request("/users/42")).body);
     if (user.id !== "42") throw new Error("dynamic route parameter mismatch");
-    const asyncBody = await get("/async");
+    const asyncBody = (await request("/async")).body;
     if (asyncBody !== "async:/async") throw new Error(`async route mismatch: ${asyncBody}`);
   }
-  await get("/missing", 404);
-  console.log("native application E2E passed: root, dynamic, async, and 404 routes");
+  await request("/missing", {}, 404);
+  console.log("native application E2E passed: routing, request data, response effects, async, errors, 404, and 405");
 } finally {
   server.kill();
   rmSync(output, { recursive: true, force: true });

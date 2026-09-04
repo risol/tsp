@@ -27,6 +27,18 @@ test("bootstrap builds request context without host interpolation", async () => 
   assert.equal(await result.request.text(), "");
 });
 
+test("bootstrap preserves nested JSX nodes while escaping text children", () => {
+  const context = { console };
+  vm.runInNewContext(source, context, { filename: "tsp-runtime.js" });
+  const node = context.__tsp_jsx(
+    "main",
+    null,
+    context.__tsp_jsx("strong", null, "safe <text>"),
+  );
+  assert.equal(String(node), "<main><strong>safe &lt;text&gt;</strong></main>");
+  assert.equal(new context.Response(node).body, "<main><strong>safe &lt;text&gt;</strong></main>");
+});
+
 test("dispatch is a cached function that accepts structured request data", () => {
   const context = { console };
   vm.runInNewContext(source, context, { filename: "tsp-runtime.js" });
