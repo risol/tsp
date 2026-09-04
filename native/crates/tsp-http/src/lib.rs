@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
+use std::time::Duration;
 
 pub use tsp_core::{BodyEnvelope, PROTOCOL_VERSION, Request, Response};
 
@@ -100,6 +101,7 @@ pub fn parse_request_with_header_limit(
 
     let mut headers = Vec::new();
     let mut content_length = None;
+    let mut chunked = false;
     for line in lines {
         if line.is_empty() {
             continue;
@@ -126,27 +128,38 @@ pub fn parse_request_with_header_limit(
             }
             content_length = Some(parsed);
         }
-        if name == "transfer-encoding" && !value.eq_ignore_ascii_case("identity") {
-            return Err(ParseError::UnsupportedTransferEncoding);
+        if name == "transfer-encoding" {
+            if !value.eq_ignore_ascii_case("chunked") {
+                return Err(ParseError::UnsupportedTransferEncoding);
+            }
+            chunked = true;
         }
         headers.push((name, value.to_owned()));
     }
 
-    let body_length = content_length.unwrap_or(0);
-    if body_length > max_body_bytes {
-        return Err(ParseError::BodyTooLarge {
-            limit: max_body_bytes,
-        });
-    }
     let body_start = header_end + 4;
-    let request_end = body_start
-        .checked_add(body_length)
-        .ok_or(ParseError::BodyTooLarge {
-            limit: max_body_bytes,
-        })?;
-    if bytes.len() < request_end {
-        return Err(ParseError::Incomplete);
-    }
+    let (body, request_end) = if chunked {
+        if content_length.is_some() {
+            return Err(ParseError::InvalidContentLength);
+        }
+        decode_chunked_body(bytes, body_start, max_body_bytes)?
+    } else {
+        let body_length = content_length.unwrap_or(0);
+        if body_length > max_body_bytes {
+            return Err(ParseError::BodyTooLarge {
+                limit: max_body_bytes,
+            });
+        }
+        let request_end = body_start
+            .checked_add(body_length)
+            .ok_or(ParseError::BodyTooLarge {
+                limit: max_body_bytes,
+            })?;
+        if bytes.len() < request_end {
+            return Err(ParseError::Incomplete);
+        }
+        (bytes[body_start..request_end].to_vec(), request_end)
+    };
 
     Ok((
         Request {
@@ -157,10 +170,71 @@ pub fn parse_request_with_header_limit(
             target: target.to_owned(),
             http_version: version.to_owned(),
             headers,
-            body: BodyEnvelope::from(bytes[body_start..request_end].to_vec()),
+            body: BodyEnvelope::from(body),
         },
         request_end,
     ))
+}
+
+fn decode_chunked_body(
+    bytes: &[u8],
+    mut cursor: usize,
+    max_body_bytes: usize,
+) -> Result<(Vec<u8>, usize), ParseError> {
+    let mut body = Vec::new();
+    loop {
+        let Some(line_end) = find_crlf(bytes, cursor) else {
+            return Err(ParseError::Incomplete);
+        };
+        let line = std::str::from_utf8(&bytes[cursor..line_end])
+            .map_err(|_| ParseError::InvalidContentLength)?;
+        let size_text = line.split(';').next().unwrap_or("").trim();
+        let size =
+            usize::from_str_radix(size_text, 16).map_err(|_| ParseError::InvalidContentLength)?;
+        cursor = line_end + 2;
+        if size == 0 {
+            if bytes.get(cursor..cursor + 2) == Some(b"\r\n") {
+                return Ok((body, cursor + 2));
+            }
+            let Some(trailer_end) = find_double_crlf(bytes, cursor) else {
+                return Err(ParseError::Incomplete);
+            };
+            return Ok((body, trailer_end + 4));
+        }
+        let chunk_end = cursor
+            .checked_add(size)
+            .and_then(|end| end.checked_add(2))
+            .ok_or(ParseError::BodyTooLarge {
+                limit: max_body_bytes,
+            })?;
+        if body.len().saturating_add(size) > max_body_bytes {
+            return Err(ParseError::BodyTooLarge {
+                limit: max_body_bytes,
+            });
+        }
+        if bytes.len() < chunk_end {
+            return Err(ParseError::Incomplete);
+        }
+        if &bytes[cursor + size..chunk_end] != b"\r\n" {
+            return Err(ParseError::InvalidHeader);
+        }
+        body.extend_from_slice(&bytes[cursor..cursor + size]);
+        cursor = chunk_end;
+    }
+}
+
+fn find_crlf(bytes: &[u8], start: usize) -> Option<usize> {
+    bytes[start..]
+        .windows(2)
+        .position(|window| window == b"\r\n")
+        .map(|offset| start + offset)
+}
+
+fn find_double_crlf(bytes: &[u8], start: usize) -> Option<usize> {
+    bytes[start..]
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|offset| start + offset)
 }
 
 fn find_header_end(bytes: &[u8]) -> Option<usize> {
@@ -243,6 +317,8 @@ pub struct ServerLimits {
     pub max_header_bytes: usize,
     pub max_body_bytes: usize,
     pub max_connections: usize,
+    pub read_timeout: Duration,
+    pub write_timeout: Duration,
 }
 
 impl Default for ServerLimits {
@@ -251,6 +327,8 @@ impl Default for ServerLimits {
             max_header_bytes: DEFAULT_MAX_HEADER_BYTES,
             max_body_bytes: 16 * 1024 * 1024,
             max_connections: 1024,
+            read_timeout: Duration::from_secs(30),
+            write_timeout: Duration::from_secs(30),
         }
     }
 }
@@ -323,6 +401,8 @@ impl Server {
             let permit_sender = permit_sender.clone();
             thread::spawn(move || {
                 let _permit = permit;
+                let _ = stream.set_read_timeout(Some(limits.read_timeout));
+                let _ = stream.set_write_timeout(Some(limits.write_timeout));
                 let result = serve_connection(&mut stream, limits, |request| handler(request));
                 if let Err(error) = result {
                     let _ = write_internal_error(&mut stream, &error);
@@ -337,50 +417,76 @@ impl Server {
 fn serve_connection(
     stream: &mut TcpStream,
     limits: ServerLimits,
-    handler: impl FnOnce(Request) -> Response,
+    handler: impl Fn(Request) -> Response,
 ) -> io::Result<()> {
     let mut bytes = Vec::with_capacity(4096);
     let mut chunk = [0_u8; 8192];
-    let (request, _) = loop {
-        match parse_request_with_header_limit(
-            &bytes,
-            limits.max_body_bytes,
-            limits.max_header_bytes,
-        ) {
-            Ok(request) => break request,
-            Err(ParseError::Incomplete) => {
-                let count = stream.read(&mut chunk)?;
-                if count == 0 {
-                    return Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        ParseError::Incomplete,
-                    ));
+    let mut handled_request = false;
+    loop {
+        let (request, consumed) = loop {
+            match parse_request_with_header_limit(
+                &bytes,
+                limits.max_body_bytes,
+                limits.max_header_bytes,
+            ) {
+                Ok(request) => break request,
+                Err(ParseError::Incomplete) => {
+                    let count = stream.read(&mut chunk)?;
+                    if count == 0 {
+                        if handled_request {
+                            return Ok(());
+                        }
+                        return Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            ParseError::Incomplete,
+                        ));
+                    }
+                    bytes.extend_from_slice(&chunk[..count]);
                 }
-                bytes.extend_from_slice(&chunk[..count]);
+                Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidData, error)),
             }
-            Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidData, error)),
-        }
-        if bytes.len()
-            > limits
-                .max_header_bytes
-                .saturating_add(limits.max_body_bytes)
-                .saturating_add(4)
+            if bytes.len()
+                > limits
+                    .max_header_bytes
+                    .saturating_add(limits.max_body_bytes)
+                    .saturating_add(4)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    ParseError::BodyTooLarge {
+                        limit: limits.max_body_bytes,
+                    },
+                ));
+            }
+        };
+        let keep_alive = request.http_version == "HTTP/1.1"
+            && !request
+                .header("connection")
+                .is_some_and(|value| value.eq_ignore_ascii_case("close"));
+        let mut response = handler(request);
+        if keep_alive
+            && !response
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("connection"))
         {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                ParseError::BodyTooLarge {
-                    limit: limits.max_body_bytes,
-                },
-            ));
+            response
+                .headers
+                .push(("Connection".into(), "keep-alive".into()));
         }
-    };
-    stream.write_all(&handler(request).serialize().map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("response serialization failed: {error:?}"),
-        )
-    })?)?;
-    stream.flush()
+        stream.write_all(&response.serialize().map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("response serialization failed: {error:?}"),
+            )
+        })?)?;
+        stream.flush()?;
+        handled_request = true;
+        bytes.drain(..consumed);
+        if !keep_alive {
+            return Ok(());
+        }
+    }
 }
 
 fn write_internal_error(stream: &mut TcpStream, error: &io::Error) -> io::Result<()> {
@@ -449,15 +555,19 @@ mod tests {
     }
 
     #[test]
-    fn rejects_ambiguous_lengths_and_chunked_requests() {
+    fn rejects_ambiguous_lengths_and_non_chunked_transfer_encoding() {
         let duplicate = b"POST / HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\na";
         assert_eq!(
             parse_request(duplicate, 8),
             Err(ParseError::InvalidContentLength)
         );
         let chunked = b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n1\r\na\r\n0\r\n\r\n";
+        let (request, consumed) = parse_request(chunked, 8).unwrap();
+        assert_eq!(consumed, chunked.len());
+        assert_eq!(request.body.as_bytes(), b"a");
+        let unsupported = b"POST / HTTP/1.1\r\nTransfer-Encoding: gzip\r\n\r\n";
         assert_eq!(
-            parse_request(chunked, 8),
+            parse_request(unsupported, 8),
             Err(ParseError::UnsupportedTransferEncoding)
         );
     }
@@ -488,7 +598,7 @@ mod tests {
 
         let mut client = TcpStream::connect(address).unwrap();
         client
-            .write_all(b"GET /native?q=1 HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .write_all(b"GET /native?q=1 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
             .unwrap();
         let mut response = Vec::new();
         client.read_to_end(&mut response).unwrap();

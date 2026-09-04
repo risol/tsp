@@ -10,7 +10,9 @@ param(
 
   [string]$PublicDirectory = "public",
 
-  [string]$ConfigFile = "tsp.config.json"
+  [string]$ConfigFile = "tsp.config.json",
+
+  [string]$WorkerBinary = ""
 )
 
 $serverPath = [System.IO.Path]::GetFullPath($ServerBinary)
@@ -27,6 +29,9 @@ if (!(Test-Path -LiteralPath $configPath -PathType Leaf)) {
 }
 if (!(Test-Path -LiteralPath $agentsPath -PathType Leaf)) {
   throw "user guide not found: $agentsPath"
+}
+if ($WorkerBinary -and !(Test-Path -LiteralPath ([System.IO.Path]::GetFullPath($WorkerBinary)) -PathType Leaf)) {
+  throw "worker binary not found: $WorkerBinary"
 }
 New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
 $serverTarget = Join-Path $outputPath $serverName
@@ -47,13 +52,13 @@ if ($configPath -ne [System.IO.Path]::GetFullPath($configTarget)) {
   Copy-Item -LiteralPath $configPath -Destination $configTarget -Force
 }
 Copy-Item -LiteralPath $agentsPath -Destination (Join-Path $outputPath "AGENTS.md") -Force
+if ($WorkerBinary) {
+  Copy-Item -LiteralPath ([System.IO.Path]::GetFullPath($WorkerBinary)) -Destination (Join-Path $outputPath "tsp-worker.exe") -Force
+}
 
-# embedded-worker distribution contract: the packaged directory must NOT
-# ship a standalone `bun.exe`. The master self-spawns the
-# same `tspserver.exe`; shipping a separate Bun would be a
-# regression of the single-binary contract. Pre-existing
-# standalone files are removed so a re-packaging against a
-# stale dist/tspserver stays clean.
+# Native process-worker distribution contract: the package contains the host
+# plus its TSP-owned worker executable, never a separate JavaScript runtime.
+# Pre-existing legacy runtime files are removed so re-packaging stays clean.
 $staleBun = Join-Path $outputPath "bun.exe"
 if (Test-Path -LiteralPath $staleBun -PathType Leaf) {
   Write-Warning "removing stale standalone bun.exe from $outputPath (embedded-worker ships a single binary)"
