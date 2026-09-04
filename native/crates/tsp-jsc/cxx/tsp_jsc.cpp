@@ -135,6 +135,16 @@ extern "C" TSP_JSC_EXPORT TspJscVm* tsp_jsc_vm_create(void)
         return nullptr;
     }
     trace("vm-create.context-ready");
+
+    // The public context factory creates the VM and global object, but the
+    // embedder still has to publish heap access before using JSC's C++ API.
+    // This is the order used by Bun's VM setup: acquire heap access first,
+    // then take the API lock. Skipping it makes JSLockHolder touch an
+    // unavailable heap state on Linux and can crash before the lock is held.
+    auto* globalObject = toJSGlobalObject(vm->context);
+    auto& jscVm = JSC::getVM(globalObject);
+    jscVm.heap.acquireAccess();
+    trace("vm-create.heap-ready");
     return vm;
 }
 
