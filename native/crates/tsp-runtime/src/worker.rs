@@ -1,8 +1,8 @@
-//! TSP-owned worker pool.
+//! TSP-owned worker pool and route execution orchestration.
 //!
-//! A worker owns its JavaScript engine and is never used from another thread.
-//! The master sends complete request jobs over channels and receives an HTTP
-//! response. Socket threads therefore never hold JSC values or engine locks.
+//! A worker owns an injected JavaScript runtime and is never used from
+//! another thread. The host sends complete request jobs over bounded
+//! channels; HTTP socket threads never hold JavaScript values or locks.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -11,9 +11,8 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::{self, JoinHandle};
 
 use crate::{Request, Response, RouteSpec};
-use tsp_js::JsRuntime;
-
 use serde_json::json;
+use tsp_js::JsRuntime;
 
 pub trait WorkerExecutor: 'static {
     fn execute(
@@ -41,134 +40,11 @@ impl std::fmt::Display for WorkerError {
 
 impl std::error::Error for WorkerError {}
 
-const RUNTIME_PRELUDE: &str = r#"
-(function () {
-  "use strict";
-  class TspSearchParams {
-    constructor(value) {
-      this.values = new Map();
-      for (const part of String(value || "").replace(/^\?/, "").split("&")) {
-        if (!part) continue;
-        const [key, ...rest] = part.split("=");
-        this.values.set(decodeURIComponent(key), decodeURIComponent(rest.join("=") || ""));
-      }
-    }
-    get(name) { return this.values.has(name) ? this.values.get(name) : null; }
-    has(name) { return this.values.has(name); }
-  }
-  class TspUrl {
-    constructor(target) {
-      const value = String(target || "/");
-      const queryIndex = value.indexOf("?");
-      this.pathname = queryIndex < 0 ? value : value.slice(0, queryIndex);
-      this.search = queryIndex < 0 ? "" : value.slice(queryIndex);
-      this.searchParams = new TspSearchParams(this.search);
-      this.href = value;
-    }
-  }
-  class TspResponse {
-    constructor(body = "", init = {}) {
-      this.status = Number(init.status || 200);
-      this.headers = Object.entries(init.headers || {});
-      this.body = body == null ? "" : String(body);
-    }
-    toJSON() { return { status: this.status, headers: this.headers, body: this.body }; }
-  }
-  function escapeHtml(value) {
-    return String(value).replace(/[&<>\"']/g, (character) => ({
-      "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
-    })[character]);
-  }
-  function renderChild(value) {
-    if (value == null || value === false) return "";
-    if (Array.isArray(value)) return value.map(renderChild).join("");
-    return escapeHtml(value);
-  }
-  globalThis.__tsp_jsx = function (type, props, ...children) {
-    if (typeof type === "function") return type({ ...(props || {}), children });
-    const attributes = Object.entries(props || {})
-      .filter(([key, value]) => key !== "children" && value != null && value !== false)
-      .map(([key, value]) => ` ${key}="${escapeHtml(value)}"`).join("");
-    return `<${type}${attributes}>${children.map(renderChild).join("")}</${type}>`;
-  };
-  globalThis.__tsp_fragment = (_props, ...children) => children.map(renderChild).join("");
-  globalThis.Response = TspResponse;
-  globalThis.process = { env: Object.create(null) };
-  globalThis.__tsp_make_context = function (raw) {
-    const request = raw.request || {};
-    const body = String(request.body || "");
-    raw.url = new TspUrl(raw.target);
-    raw.query = raw.url.searchParams;
-    raw.path = raw.url.pathname;
-    const cookieValues = new Map();
-    const setCookies = [];
-    const cookieHeader = (raw.request.headers || {}).cookie || "";
-    for (const pair of cookieHeader.split(";")) {
-      const separator = pair.indexOf("=");
-      if (separator > 0) cookieValues.set(pair.slice(0, separator).trim(), pair.slice(separator + 1).trim());
-    }
-    raw.cookies = {
-      get: (name) => cookieValues.get(name),
-      has: (name) => cookieValues.has(name),
-      set: (name, value, options = {}) => {
-        cookieValues.set(name, String(value));
-        let line = `${name}=${encodeURIComponent(String(value))}`;
-        if (options.path) line += `; Path=${options.path}`;
-        if (options.maxAge != null) line += `; Max-Age=${Number(options.maxAge)}`;
-        if (options.httpOnly) line += "; HttpOnly";
-        if (options.secure) line += "; Secure";
-        setCookies.push(line);
-      },
-      delete: (name) => {
-        cookieValues.delete(name);
-        setCookies.push(`${name}=; Max-Age=0; Path=/`);
-      },
-    };
-    raw.__tsp_set_cookies = setCookies;
-    raw.services = raw.services || Object.create(null);
-    raw.signal = { aborted: false, addEventListener: () => {} };
-    raw.session = raw.session || {
-      id: "native-session",
-      get: () => undefined,
-      set: () => {},
-      delete: () => {},
-      regenerate: async () => {},
-      destroy: async () => {},
-    };
-    raw.fragment = () => "";
-    raw.request = {
-      method: request.method,
-      headers: request.headers || {},
-      text: async () => body,
-      json: async () => JSON.parse(body),
-    };
-    return raw;
-  };
-  globalThis.__tsp_builtin_modules = {
-    "tsp:server": {
-      Response: TspResponse,
-      json: (value, status = 200, headers = {}) => new TspResponse(JSON.stringify(value), {
-        status, headers: { "content-type": "application/json", ...headers }
-      }),
-      text: (value, status = 200, headers = {}) => new TspResponse(value, { status, headers }),
-      html: (value, status = 200, headers = {}) => new TspResponse(value, {
-        status, headers: { "content-type": "text/html; charset=utf-8", ...headers }
-      }),
-      redirect: (location, status = 302) => new TspResponse("", {
-        status, headers: { location }
-      }),
-      notFound: (message = "Not Found") => new TspResponse(message, { status: 404 }),
-      fragment: (handler) => handler,
-      nanoid: () => "native-nanoid",
-    },
-    "tsp:html": { escapeHtml },
-  };
-})();
-"#;
+const RUNTIME_PRELUDE: &str = include_str!("../../../runtime-js/src/bootstrap.js");
 
-/// A route executor that loads one compiler bundle into one owner-thread JSC VM.
-/// Request values cross the boundary as JSON; no JSC value is shared with the
-/// HTTP socket thread or another worker.
+/// Executes a compiled route bundle through an injected JavaScript runtime.
+/// The host runtime does not know whether the implementation is JSC, a test
+/// double, or a future engine adapter.
 pub struct RouteExecutor<J> {
     engine: J,
 }
@@ -176,7 +52,7 @@ pub struct RouteExecutor<J> {
 impl<J: JsRuntime> RouteExecutor<J> {
     pub fn new(mut engine: J, bundle: &str, filename: &str) -> Result<Self, WorkerError> {
         engine
-            .evaluate(RUNTIME_PRELUDE, "tsp-runtime-prelude.js")
+            .evaluate(RUNTIME_PRELUDE, "tsp-runtime.js")
             .map_err(|error| WorkerError::Execution(error.to_string()))?;
         engine
             .evaluate(bundle, filename)
@@ -187,7 +63,7 @@ impl<J: JsRuntime> RouteExecutor<J> {
     fn dispatch_source(
         request: &Request,
         route: &RouteSpec,
-        params: &std::collections::HashMap<String, String>,
+        params: &HashMap<String, String>,
     ) -> Result<String, WorkerError> {
         let context = json!({
             "method": request.method,
@@ -195,7 +71,7 @@ impl<J: JsRuntime> RouteExecutor<J> {
             "params": params,
             "request": {
                 "method": request.method,
-                "headers": request.headers.iter().cloned().collect::<std::collections::HashMap<_, _>>(),
+                "headers": request.headers.iter().cloned().collect::<HashMap<_, _>>(),
                 "body": String::from_utf8_lossy(&request.body),
             },
         });
@@ -247,7 +123,7 @@ impl<J: JsRuntime + 'static> WorkerExecutor for RouteExecutor<J> {
         &mut self,
         request: Request,
         route: RouteSpec,
-        params: std::collections::HashMap<String, String>,
+        params: HashMap<String, String>,
     ) -> Result<Response, WorkerError> {
         let source = Self::dispatch_source(&request, &route, &params)?;
         self.engine
@@ -317,8 +193,8 @@ impl WorkerPool {
             ));
         }
 
-        let factory = std::sync::Arc::new(factory);
         const WORKER_QUEUE_CAPACITY: usize = 64;
+        let factory = std::sync::Arc::new(factory);
         let mut senders: Vec<SyncSender<Command>> = Vec::with_capacity(count);
         let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
         for worker_id in 0..count {
@@ -483,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn zero_workers_is_rejected_before_threads_are_created() {
+    fn zero_workers_are_rejected_before_threads_are_created() {
         let result = WorkerPool::new(0, |_| EchoExecutor { worker_id: 0 });
         assert!(matches!(
             result,

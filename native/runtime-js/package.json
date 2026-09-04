@@ -1,0 +1,8 @@
+{
+  "name": "tsp-runtime-js",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/bootstrap.test.mjs"
+  }
+}
