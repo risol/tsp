@@ -1,0 +1,8 @@
+# TSP only needs the pinned allocator sources and public headers.
+/*
+!/.gitignore
+!/LICENSE
+!/include/
+!/include/**
+!/src/
+!/src/**

@@ -158,8 +158,9 @@ jobs:
           TSP_JSC_TRACE: '1'
         run: |
           $env:CXX = 'clang-cl.exe'
-          $env:CFLAGS = '/MD'
-          $env:CXXFLAGS = '/MD'
+          # The pinned WebKit static archives use the static CRT.
+          $env:CFLAGS = '/MT'
+          $env:CXXFLAGS = '/MT'
           node scripts/native-e2e.mjs
 
       - name: Build standalone release package (Unix)
@@ -175,8 +176,8 @@ jobs:
           TSP_JSC_SDK_ROOT: ${{ runner.temp }}\tsp-jsc-sdk
         run: |
           $env:CXX = 'clang-cl.exe'
-          $env:CFLAGS = '/MD'
-          $env:CXXFLAGS = '/MD'
+          $env:CFLAGS = '/MT'
+          $env:CXXFLAGS = '/MT'
           cargo build --manifest-path native/Cargo.toml --release -p tsp-cli -p tsp-worker
 
   native-linux:

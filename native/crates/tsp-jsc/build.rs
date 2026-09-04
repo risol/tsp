@@ -1,6 +1,7 @@
 fn main() {
     println!("cargo:rerun-if-env-changed=TSP_JSC_SDK_ROOT");
     println!("cargo:rerun-if-changed=cxx/tsp_jsc.cpp");
+    println!("cargo:rerun-if-changed=cxx/tsp_mimalloc.cpp");
     println!("cargo:rerun-if-changed=include/tsp_jsc.h");
 
     if std::env::var_os("CARGO_FEATURE_NATIVE_FFI").is_none() {
@@ -40,9 +41,16 @@ fn main() {
     build
         .cpp(true)
         .file("cxx/tsp_jsc.cpp")
+        // The pinned WebKit archive is built against mimalloc 3.2.8.
+        // Compile the pinned unity translation unit into the bridge so its
+        // allocator symbols and process-lifecycle options match the archive.
+        // It is deliberately not installed as Rust's global
+        // allocator; Rust and JSC retain separate ownership domains.
+        .file("cxx/tsp_mimalloc.cpp")
         .file("cxx/tsp_bun_compat.cpp")
         .include(&include)
         .include("include")
+        .include("../../vendor/mimalloc/include")
         .define("STATICALLY_LINKED_WITH_JavaScriptCore", None)
         .define("STATICALLY_LINKED_WITH_WTF", None)
         .define("STATICALLY_LINKED_WITH_bmalloc", None)
@@ -92,18 +100,13 @@ fn main() {
     println!("cargo:rustc-link-lib=static=JavaScriptCore");
     println!("cargo:rustc-link-lib=static=WTF");
     println!("cargo:rustc-link-lib=static=bmalloc");
-    {
-        let library = "mimalloc";
-        let static_library = if cfg!(windows) {
-            lib.join(format!("{library}.lib"))
-        } else {
-            lib.join(format!("lib{library}.a"))
-        };
-        if static_library.is_file() {
-            println!("cargo:rustc-link-lib=static={library}");
-        }
-    }
     if cfg!(windows) {
+        // Bun's mimalloc build uses the Windows token APIs while expanding a
+        // thread-local heap. Keep those platform dependencies explicit in
+        // the standalone bridge instead of relying on a host executable to
+        // provide them.
+        println!("cargo:rustc-link-lib=dylib=advapi32");
+        println!("cargo:rustc-link-lib=dylib=shell32");
         for library in ["sicudt", "sicuin", "sicuuc"] {
             println!("cargo:rustc-link-lib=static={library}");
         }

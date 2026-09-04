@@ -106,26 +106,9 @@ pub struct NativeBackend {
 
 #[cfg(feature = "native-ffi")]
 impl NativeBackend {
-    fn link_webkit_allocator() {
-        // WebKit's bmalloc archive calls the mimalloc C symbols directly.
-        // Keep that allocator available for the SDK without installing it as
-        // Rust's global allocator: Rust ownership and WebKit ownership remain
-        // separate domains.
-        use std::alloc::{GlobalAlloc, Layout};
-        static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
-        let layout = Layout::from_size_align(1, 1).expect("valid allocator link layout");
-        unsafe {
-            let pointer = ALLOCATOR.alloc(layout);
-            if !pointer.is_null() {
-                ALLOCATOR.dealloc(pointer, layout);
-            }
-        }
-    }
-
     /// Create a VM through the TSP JSC ABI. The native side owns the VM and
     /// every buffer returned by it; Rust copies buffers before freeing them.
     pub fn new() -> Result<Self, Error> {
-        Self::link_webkit_allocator();
         let status = unsafe { ffi::tsp_jsc_initialize() };
         if status != 0 {
             return Err(Error::Initialization(format!("status {status}")));
@@ -202,12 +185,17 @@ impl Backend for NativeBackend {
 #[cfg(feature = "native-ffi")]
 impl Drop for NativeBackend {
     fn drop(&mut self) {
-        // Native JSC objects are thread-affine. If an owner is accidentally
-        // dropped elsewhere, leaking is safer than invoking JSC on a foreign
-        // thread; the runtime reports this during debug shutdown tests.
-        if thread::current().id() == self.owner {
-            unsafe { ffi::tsp_jsc_vm_destroy(self.vm.as_ptr()) };
-        }
+        // The pinned standalone SDK is the Bun WebKit build. Its public
+        // context-release path is safe during normal execution, but its
+        // process teardown still depends on Bun's host shutdown machinery and
+        // aborts consistently when called from an independent executable.
+        // TSP therefore gives each native VM process ownership and lets the
+        // worker process reclaim it at exit or replacement. This is bounded:
+        // a worker owns one VM for its whole lifetime, not one VM per request.
+        // Keep the explicit FFI destroy function available for a future SDK
+        // whose teardown contract is independent of Bun.
+        let _ = self.vm;
+        let _ = self.owner;
     }
 }
 
