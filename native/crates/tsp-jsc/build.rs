@@ -37,6 +37,11 @@ fn main() {
         .define("NDEBUG", None)
         .warnings(true)
         .warnings_into_errors(false);
+    if std::env::var("PROFILE").as_deref() == Ok("debug") {
+        // The SDK headers are shared with optimized WebKit builds and reject
+        // a debug (-O0) bridge unless this explicit compatibility mode is set.
+        build.define("RELEASE_WITHOUT_OPTIMIZATIONS", None);
+    }
     let unicode_include = include.join("wtf").join("unicode");
     if unicode_include.is_dir() {
         build.include(unicode_include);
@@ -58,11 +63,6 @@ fn main() {
         build.flag_if_supported("-fexceptions");
         // WebKit's Unix headers use GNU extensions and C++23 library types.
         // Match the SDK's native compilation mode to avoid header/ABI drift.
-        if cfg!(target_os = "macos") {
-            // The SDK headers are shared with optimized WebKit builds and
-            // otherwise reject Cargo's debug (-O0) bridge compilation.
-            build.define("RELEASE_WITHOUT_OPTIMIZATIONS", None);
-        }
         if cfg!(target_os = "linux") || cfg!(target_os = "freebsd") {
             build.flag_if_supported("-std=gnu++23");
         } else {
