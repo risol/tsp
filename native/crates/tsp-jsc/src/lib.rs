@@ -9,10 +9,6 @@
 use std::fmt;
 use std::thread::{self, ThreadId};
 
-#[cfg(feature = "native-ffi")]
-#[global_allocator]
-static TSP_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
 pub mod ffi {
     use std::ffi::c_void;
 

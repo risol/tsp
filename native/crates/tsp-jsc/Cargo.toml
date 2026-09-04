@@ -12,12 +12,7 @@ tsp-js = { path = "../tsp-js" }
 [features]
 default = ["mock"]
 mock = []
-native-ffi = ["dep:mimalloc"]
-
-[dependencies.mimalloc]
-version = "0.1.52"
-optional = true
-default-features = false
+native-ffi = []
 
 [build-dependencies]
 cc = "1"
