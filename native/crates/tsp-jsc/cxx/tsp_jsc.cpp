@@ -132,16 +132,10 @@ extern "C" TSP_JSC_EXPORT TspJscVm* tsp_jsc_vm_create(void)
         return nullptr;
     }
     trace("vm-create.context-ready");
-
-    // The public context factory creates the VM and global object, but the
-    // embedder still has to publish heap access before using JSC's C++ API.
-    // Acquire heap access first,
-    // then take the API lock. Skipping it makes JSLockHolder touch an
-    // unavailable heap state on Linux and can crash before the lock is held.
-    auto* globalObject = toJSGlobalObject(vm->context);
-    auto& jscVm = JSC::getVM(globalObject);
-    jscVm.heap.acquireAccess();
-    trace("vm-create.heap-ready");
+    // The public C API and each explicit JSLockHolder acquire and release
+    // heap access for their scope. Do not retain an extra access lease here:
+    // JSGlobalContextRelease must be able to acquire the lease it needs for
+    // synchronous VM destruction.
     return vm;
 }
 
@@ -150,21 +144,8 @@ extern "C" TSP_JSC_EXPORT void tsp_jsc_vm_destroy(TspJscVm* vm)
     if (!vm)
         return;
     trace("vm-destroy.begin");
-    if (vm->context) {
-        // VM creation publishes heap access for the lifetime of this native
-        // handle. Release that access before dropping the API context. The
-        // context-release path takes the API lock and may destroy the VM
-        // synchronously; leaving the embedder-owned heap access published
-        // makes that destruction path abort in WebKit's heap invariants.
-        auto* globalObject = toJSGlobalObject(vm->context);
-        auto& jscVm = JSC::getVM(globalObject);
-        {
-            JSC::JSLockHolder lock(jscVm);
-            jscVm.heap.releaseAccess();
-        }
-        trace("vm-destroy.heap-released");
+    if (vm->context)
         JSGlobalContextRelease(vm->context);
-    }
     trace("vm-destroy.context-released");
     std::free(vm);
     trace("vm-destroy.done");
