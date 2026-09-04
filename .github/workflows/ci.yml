@@ -97,6 +97,10 @@ jobs:
         with:
           node-version: 22
 
+      - name: Install compiler dependencies
+        working-directory: tools
+        run: npm ci
+
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
 
