@@ -17,6 +17,7 @@ bun/target/
 native/target/
 native/fixtures/build/
 .tsp-build-native-check/
+.tsp-build/
 bun/vendor/
 bun/node_modules/
 .bun-bootstrap/

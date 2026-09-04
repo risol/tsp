@@ -46,6 +46,34 @@ resolve_host() {
     die "host not found; run './tsp.sh build:host'"
 }
 
+resolve_native_cli() {
+  resolve_file "$ROOT_DIR/native/target/release/tsp-cli.exe" "$ROOT_DIR/native/target/release/tsp-cli" "$ROOT_DIR/native/target/debug/tsp-cli.exe" "$ROOT_DIR/native/target/debug/tsp-cli" ||
+    die "native TSP CLI not found; run './tsp.sh build:native'"
+}
+
+build_native() {
+  require_command node
+  require_command cargo
+  [[ -n "${TSP_WEBKIT_ROOT:-}" ]] || die "TSP_WEBKIT_ROOT must point to the target WebKit/JSC build"
+  node "$ROOT_DIR/tools/tspc.mjs" compile --root "${TSP_ROUTES_DIR:-$ROOT_DIR/pages}" --out "${TSP_BUILD_DIR:-$ROOT_DIR/.tsp-build}"
+  cargo build --manifest-path "$ROOT_DIR/native/Cargo.toml" -p tsp-cli --release
+}
+
+run_native() {
+  local cli
+  cli="$(resolve_native_cli)"
+  TSP_PORT="${TSP_PORT:-9000}" "$cli" --manifest "${TSP_BUILD_DIR:-$ROOT_DIR/.tsp-build}/manifest.json" --listen "${TSP_LISTEN:-127.0.0.1:${TSP_PORT:-9000}}" --workers "${TSP_WORKER_COUNT:-2}" "$@"
+}
+
+test_native() {
+  require_command cargo
+  require_command node
+  [[ -n "${TSP_WEBKIT_ROOT:-}" ]] || die "TSP_WEBKIT_ROOT must point to the target WebKit/JSC build"
+  (cd "$ROOT_DIR/tools" && npm test)
+  cargo test --manifest-path "$ROOT_DIR/native/Cargo.toml" --workspace
+  TSP_NATIVE_E2E_ROOT="${TSP_NATIVE_E2E_ROOT:-pages}" node "$ROOT_DIR/scripts/native-e2e.mjs"
+}
+
 build_worker() {
   local bun_bin
   bun_bin="$(resolve_bun)"
@@ -149,12 +177,15 @@ case "${1:-help}" in
   build|build:tspserver|build:tspserver:rel) build_runtime ;;
   build:fast) build_runtime_fast ;;
   build:host) build_host ;;
+  build:native) build_native ;;
   build:worker) build_worker ;;
   build:worker:fast) build_worker_fast ;;
   start|dev) shift; run_host "$@" ;;
+  start:native) shift; run_native "$@" ;;
   test) run_tests; run_smoke ;;
   test:rust) run_tests ;;
   test:smoke) run_smoke ;;
+  test:native) test_native ;;
   check) run_check ;;
   check:app) run_check_app ;;
   routes) run_routes ;;
@@ -169,13 +200,16 @@ Usage: ./tsp.sh <command>
   build                  Build the single-file runtime and package
   build:fast             Build and package the fast optimized runtime
   build:host             Copy the built runtime into dist/tspserver
+  build:native            Compile pages and build the standalone native runtime
   build:worker           Build the single-file runtime
   build:worker:fast      Build the fast optimized runtime
   start                  Run the server with self-created workers
+  start:native            Run the standalone native runtime
   dev                    Run the server (route hot reload is always enabled)
   test                   Run Rust tests and the embedded-worker smoke test
   test:rust              Run Rust unit and Worker IPC tests
   test:smoke             Run the hot-reload smoke test
+  test:native             Run compiler, native unit, and native application E2E tests
   check                  Run cargo check for the bundled runtime
   check:app              Run tsp check for the application routes
   routes                 List the application routes (tspserver routes)
@@ -189,6 +223,7 @@ Usage: ./tsp.sh <command>
 
 Environment:
   TSP_PORT, TSP_ROUTES_DIR, TSP_PUBLIC_DIR, TSP_CONFIG, TSP_BUN_BIN
+  TSP_WEBKIT_ROOT         WebKit/JSC root for the standalone native runtime
   TSP_TYPINGS_DIR        default --out target for the `typings` command
 EOF
     ;;

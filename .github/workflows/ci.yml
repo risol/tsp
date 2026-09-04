@@ -216,6 +216,10 @@ jobs:
         working-directory: bun
         run: bun install --frozen-lockfile
 
+      - name: Install TSP compiler dependencies
+        working-directory: tools
+        run: npm ci
+
       - name: Build single-file TSP runtime
         working-directory: bun
         run: bun run build:release
@@ -287,6 +291,10 @@ jobs:
       - name: Install Bun fork dependencies
         working-directory: bun
         run: bun install --frozen-lockfile
+
+      - name: Install TSP compiler dependencies
+        working-directory: tools
+        run: npm ci
 
       - name: Build single-file TSP runtime
         working-directory: bun
@@ -371,6 +379,10 @@ jobs:
       - name: Install Bun fork dependencies
         working-directory: bun
         run: bun install --frozen-lockfile
+
+      - name: Install TSP compiler dependencies
+        working-directory: tools
+        run: npm ci
 
       - name: Build single-file TSP runtime
         working-directory: bun
