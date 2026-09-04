@@ -4,10 +4,10 @@
 //! `tsp-js`. This crate owns worker scheduling and request lifecycle only.
 
 pub use tsp_core::{
-    BodyEnvelope, CompiledManifest, Effects, GenerationId, ModuleSpec, PROTOCOL_VERSION,
-    RUNTIME_ABI_VERSION, Request, RequestEnvelope, Response, ResponseEnvelope, RouteError,
-    RouteMatch, RouteSpec, RouteTable, SessionEffect, WORKER_PROTOCOL_VERSION, WorkerCommand,
-    WorkerEvent,
+    BodyEnvelope, CompiledManifest, Effects, ErrorEnvelope, GenerationId, ModuleSpec,
+    PROTOCOL_VERSION, RUNTIME_ABI_VERSION, Request, RequestEnvelope, Response, ResponseEnvelope,
+    RouteError, RouteMatch, RouteSpec, RouteTable, SessionEffect, WORKER_PROTOCOL_VERSION,
+    WorkerCommand, WorkerEvent,
 };
 
 pub mod worker;
