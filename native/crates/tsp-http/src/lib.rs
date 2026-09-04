@@ -8,11 +8,13 @@ use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
-pub use tsp_core::{Request, Response};
+pub use tsp_core::{BodyEnvelope, PROTOCOL_VERSION, Request, Response};
 
 const DEFAULT_MAX_HEADER_BYTES: usize = 64 * 1024;
+static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
@@ -147,11 +149,13 @@ pub fn parse_request_with_header_limit(
 
     Ok((
         Request {
+            version: PROTOCOL_VERSION,
+            request_id: format!("http-{}", REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)),
             method: method.to_owned(),
             target: target.to_owned(),
-            version: version.to_owned(),
+            http_version: version.to_owned(),
             headers,
-            body: bytes[body_start..request_end].to_vec(),
+            body: BodyEnvelope::from(bytes[body_start..request_end].to_vec()),
         },
         request_end,
     ))
@@ -194,6 +198,7 @@ impl ResponseSerializeExt for Response {
         if !(100..=999).contains(&self.status) {
             return Err(ResponseError::InvalidStatus);
         }
+        let body = self.body.as_bytes();
         let mut output = format!(
             "HTTP/1.1 {} {}\r\n",
             self.status,
@@ -214,13 +219,13 @@ impl ResponseSerializeExt for Response {
             output.extend_from_slice(b"\r\n");
         }
         if !has_content_length {
-            output.extend_from_slice(format!("Content-Length: {}\r\n", self.body.len()).as_bytes());
+            output.extend_from_slice(format!("Content-Length: {}\r\n", body.len()).as_bytes());
         }
         if !has_connection {
             output.extend_from_slice(b"Connection: close\r\n");
         }
         output.extend_from_slice(b"\r\n");
-        output.extend_from_slice(&self.body);
+        output.extend_from_slice(body);
         Ok(output)
     }
 }
@@ -384,7 +389,9 @@ mod tests {
         assert_eq!(request.method, "POST");
         assert_eq!(request.target, "/upload");
         assert_eq!(request.header("host"), Some("example.test"));
-        assert_eq!(request.body, [0, 1, 2]);
+        assert_eq!(request.body.as_bytes(), [0, 1, 2]);
+        assert_eq!(request.version, PROTOCOL_VERSION);
+        assert!(request.request_id.starts_with("http-"));
     }
 
     #[test]

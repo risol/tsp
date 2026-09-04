@@ -72,7 +72,7 @@ impl<J: JsRuntime> RouteExecutor<J> {
             "request": {
                 "method": request.method,
                 "headers": request.headers.iter().cloned().collect::<HashMap<_, _>>(),
-                "body": String::from_utf8_lossy(&request.body),
+                "body": String::from_utf8_lossy(request.body.as_bytes()),
             },
         });
         let context = serde_json::to_string(&context).map_err(|error| {
@@ -340,11 +340,13 @@ mod tests {
         let response = pool
             .dispatch(
                 Request {
+                    version: crate::PROTOCOL_VERSION,
+                    request_id: "test-1".into(),
                     method: "GET".into(),
                     target: "/users/42".into(),
-                    version: "HTTP/1.1".into(),
+                    http_version: "HTTP/1.1".into(),
                     headers: Vec::new(),
-                    body: Vec::new(),
+                    body: crate::BodyEnvelope::Empty,
                 },
                 &route(),
                 params,
@@ -352,7 +354,7 @@ mod tests {
             .unwrap();
         assert_eq!(response.status, 200);
         assert!(
-            String::from_utf8(response.body)
+            String::from_utf8(response.body.into_bytes())
                 .unwrap()
                 .contains("/users/:id")
         );

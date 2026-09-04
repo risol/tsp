@@ -11,6 +11,7 @@ pub const PROTOCOL_VERSION: u16 = 1;
 pub const RUNTIME_ABI_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data")]
 pub enum BodyEnvelope {
     Empty,
     Text(String),
@@ -62,70 +63,23 @@ impl From<&str> for BodyEnvelope {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Request {
+pub struct RequestEnvelope {
+    pub version: u16,
+    pub request_id: String,
     pub method: String,
     pub target: String,
-    pub version: String,
+    pub http_version: String,
     pub headers: Vec<(String, String)>,
-    pub body: Vec<u8>,
+    pub body: BodyEnvelope,
 }
 
-impl Request {
+impl RequestEnvelope {
     pub fn header(&self, name: &str) -> Option<&str> {
         self.headers
             .iter()
             .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
             .map(|(_, value)| value.as_str())
     }
-
-    pub fn envelope(&self, request_id: impl Into<String>) -> RequestEnvelope {
-        RequestEnvelope {
-            version: PROTOCOL_VERSION,
-            request_id: request_id.into(),
-            method: self.method.clone(),
-            target: self.target.clone(),
-            headers: self.headers.clone(),
-            body: self.body.clone().into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Response {
-    pub status: u16,
-    pub headers: Vec<(String, String)>,
-    pub body: Vec<u8>,
-}
-
-impl Response {
-    pub fn new(status: u16, body: impl Into<Vec<u8>>) -> Self {
-        Self {
-            status,
-            headers: Vec::new(),
-            body: body.into(),
-        }
-    }
-
-    pub fn envelope(&self, request_id: impl Into<String>) -> ResponseEnvelope {
-        ResponseEnvelope {
-            version: PROTOCOL_VERSION,
-            request_id: request_id.into(),
-            status: self.status,
-            headers: self.headers.clone(),
-            body: self.body.clone().into(),
-            effects: Effects::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RequestEnvelope {
-    pub version: u16,
-    pub request_id: String,
-    pub method: String,
-    pub target: String,
-    pub headers: Vec<(String, String)>,
-    pub body: BodyEnvelope,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,6 +91,22 @@ pub struct ResponseEnvelope {
     pub body: BodyEnvelope,
     pub effects: Effects,
 }
+
+impl ResponseEnvelope {
+    pub fn new(status: u16, body: impl Into<BodyEnvelope>) -> Self {
+        Self {
+            version: PROTOCOL_VERSION,
+            request_id: String::new(),
+            status,
+            headers: Vec::new(),
+            body: body.into(),
+            effects: Effects::default(),
+        }
+    }
+}
+
+pub type Request = RequestEnvelope;
+pub type Response = ResponseEnvelope;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Effects {
@@ -392,15 +362,18 @@ mod tests {
     #[test]
     fn envelopes_are_versioned_and_preserve_binary_bodies() {
         let request = Request {
+            version: PROTOCOL_VERSION,
+            request_id: "r-1".into(),
             method: "POST".into(),
             target: "/upload".into(),
-            version: "HTTP/1.1".into(),
+            http_version: "HTTP/1.1".into(),
             headers: vec![("content-type".into(), "application/octet-stream".into())],
-            body: vec![0, 1, 2],
+            body: BodyEnvelope::Bytes(vec![0, 1, 2]),
         };
-        let envelope = request.envelope("r-1");
-        assert_eq!(envelope.version, PROTOCOL_VERSION);
-        assert_eq!(envelope.body, BodyEnvelope::Bytes(vec![0, 1, 2]));
-        assert_eq!(envelope.request_id, "r-1");
+        let serialized = serde_json::to_string(&request).unwrap();
+        let decoded: RequestEnvelope = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(decoded.version, PROTOCOL_VERSION);
+        assert_eq!(decoded.body, BodyEnvelope::Bytes(vec![0, 1, 2]));
+        assert_eq!(decoded.request_id, "r-1");
     }
 }
