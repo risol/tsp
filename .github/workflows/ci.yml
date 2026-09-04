@@ -320,6 +320,10 @@ jobs:
           $env:TSP_NATIVE_E2E_ROOT = 'pages'
           $env:TSP_REQUIRE_E2E = '1'
           $env:TSP_JSC_TRACE = '1'
+          # WebKit's public headers use Clang attributes. The MSVC target is
+          # still retained for Rust ABI compatibility, but the C++ bridge
+          # must be compiled by clang-cl rather than cl.exe.
+          $env:CXX = 'clang-cl.exe'
           node scripts/native-e2e.mjs
 
       - name: Package single-file TSP runtime
