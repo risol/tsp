@@ -40,6 +40,7 @@ fn main() {
     build
         .cpp(true)
         .file("cxx/tsp_jsc.cpp")
+        .file("cxx/tsp_bun_compat.cpp")
         .include(&include)
         .include("include")
         // The standalone bridge links the release WebKit archive. Match its
