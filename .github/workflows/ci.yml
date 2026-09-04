@@ -158,6 +158,8 @@ jobs:
           TSP_JSC_TRACE: '1'
         run: |
           $env:CXX = 'clang-cl.exe'
+          $env:CFLAGS = '/MD'
+          $env:CXXFLAGS = '/MD'
           node scripts/native-e2e.mjs
 
       - name: Build standalone release package (Unix)
@@ -173,6 +175,8 @@ jobs:
           TSP_JSC_SDK_ROOT: ${{ runner.temp }}\tsp-jsc-sdk
         run: |
           $env:CXX = 'clang-cl.exe'
+          $env:CFLAGS = '/MD'
+          $env:CXXFLAGS = '/MD'
           cargo build --manifest-path native/Cargo.toml --release -p tsp-cli -p tsp-worker
 
   native-linux:
@@ -420,6 +424,8 @@ jobs:
           # still retained for Rust ABI compatibility, but the C++ bridge
           # must be compiled by clang-cl rather than cl.exe.
           $env:CXX = 'clang-cl.exe'
+          $env:CFLAGS = '/MD'
+          $env:CXXFLAGS = '/MD'
           node scripts/native-e2e.mjs
 
       - name: Package single-file TSP runtime

@@ -43,6 +43,9 @@ fn main() {
         .file("cxx/tsp_bun_compat.cpp")
         .include(&include)
         .include("include")
+        .define("STATICALLY_LINKED_WITH_JavaScriptCore", None)
+        .define("STATICALLY_LINKED_WITH_WTF", None)
+        .define("STATICALLY_LINKED_WITH_bmalloc", None)
         // The standalone bridge links the release WebKit archive. Match its
         // header configuration even when Cargo is compiling a debug profile;
         // otherwise HeapInlines enables debug-only DFG validation references
