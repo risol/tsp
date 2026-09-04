@@ -72,6 +72,112 @@ pub fn rewrite_local_imports_for_generation(
     rewrite_local_imports_at_generation(source, importer_dir, Some(generation))
 }
 
+/// Prepare a temporary copy of the local TypeScript module graph for the
+/// standard Bun CLI path. Embedded workers have a native loader hook for
+/// `tsp:server`; the CLI does not, so every copied dependency gets the same
+/// request-scoped bridge rewrite as the route entry point.
+pub fn prepare_cli_module_graph(
+    source: &str,
+    importer_dir: &std::path::Path,
+    generation: u64,
+) -> Result<(String, std::path::PathBuf), JsxError> {
+    let root = std::env::temp_dir().join(format!(
+        "tsp-cli-graph-{}-{}",
+        std::process::id(),
+        generation
+    ));
+    let copied_root = root.join("pages");
+    std::fs::create_dir_all(&copied_root).map_err(|_| JsxError::UnsupportedShape {
+        line: 0,
+        reason: "could not create the CLI module graph directory",
+    })?;
+    copy_cli_graph(importer_dir, importer_dir, &copied_root)?;
+
+    let mut rewritten = rewrite_local_imports_for_generation(source, importer_dir, generation)?;
+    for entry in walk_cli_graph(importer_dir)? {
+        let relative = entry.strip_prefix(importer_dir).map_err(|_| JsxError::UnsupportedShape {
+            line: 0,
+            reason: "could not map a CLI module graph path",
+        })?;
+        let copied = copied_root.join(relative);
+        let old_url = file_url(&entry, Some(generation));
+        let new_url = file_url(&copied, Some(generation));
+        rewritten = rewritten.replace(&old_url, &new_url);
+    }
+    Ok((rewritten, root))
+}
+
+fn walk_cli_graph(root: &std::path::Path) -> Result<Vec<std::path::PathBuf>, JsxError> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(root).map_err(|_| JsxError::UnsupportedShape {
+        line: 0,
+        reason: "could not read the CLI module graph",
+    })? {
+        let entry = entry.map_err(|_| JsxError::UnsupportedShape {
+            line: 0,
+            reason: "could not read a CLI module graph entry",
+        })?;
+        let path = entry.path();
+        if entry.file_type().map_err(|_| JsxError::UnsupportedShape {
+            line: 0,
+            reason: "could not inspect a CLI module graph entry",
+        })?.is_dir() {
+            files.extend(walk_cli_graph(&path)?);
+        } else if path.extension().is_some_and(|extension| {
+            extension == "ts" || extension == "tsx" || extension == "js" || extension == "jsx"
+        }) {
+            files.push(path);
+        }
+    }
+    Ok(files)
+}
+
+fn copy_cli_graph(
+    original_root: &std::path::Path,
+    current: &std::path::Path,
+    copied_root: &std::path::Path,
+) -> Result<(), JsxError> {
+    for entry in std::fs::read_dir(current).map_err(|_| JsxError::UnsupportedShape {
+        line: 0,
+        reason: "could not read the CLI module graph",
+    })? {
+        let entry = entry.map_err(|_| JsxError::UnsupportedShape {
+            line: 0,
+            reason: "could not read a CLI module graph entry",
+        })?;
+        let source_path = entry.path();
+        let relative = source_path.strip_prefix(original_root).map_err(|_| JsxError::UnsupportedShape {
+            line: 0,
+            reason: "could not map a CLI module graph entry",
+        })?;
+        let destination = copied_root.join(relative);
+        if entry.file_type().map_err(|_| JsxError::UnsupportedShape {
+            line: 0,
+            reason: "could not inspect a CLI module graph entry",
+        })?.is_dir() {
+            std::fs::create_dir_all(&destination).map_err(|_| JsxError::UnsupportedShape {
+                line: 0,
+                reason: "could not create a CLI module graph directory",
+            })?;
+            copy_cli_graph(original_root, &source_path, copied_root)?;
+        } else if source_path.extension().is_some_and(|extension| {
+            extension == "ts" || extension == "tsx" || extension == "js" || extension == "jsx"
+        }) {
+            let content = std::fs::read_to_string(&source_path).map_err(|_| JsxError::UnsupportedShape {
+                line: 0,
+                reason: "a CLI module graph file was not valid UTF-8",
+            })?;
+            let content = rewrite_tsp_server_imports(&content)?
+                .replace("__tspServer", "globalThis[Symbol.for('tsp.server.bridge')]");
+            std::fs::write(destination, content).map_err(|_| JsxError::UnsupportedShape {
+                line: 0,
+                reason: "could not write a CLI module graph file",
+            })?;
+        }
+    }
+    Ok(())
+}
+
 fn rewrite_local_imports_at_generation(
     source: &str,
     importer_dir: &std::path::Path,

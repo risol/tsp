@@ -321,11 +321,20 @@ fn execute_inner(
     // `bun run tempfile` fallback - the wrapper runs inside the worker's
     // embedded Bun VM and returns through the master<->worker IPC channel
     // (see `worker/manager.rs::WorkerManager::spawn`).
-    let source = match source_dir {
-        Some(dir) => jsx::rewrite_local_imports_for_generation(source, dir, execution_generation())
-            .map_err(JscError::Jsx)?,
-        None => source.to_string(),
+    let graph_temp = match source_dir {
+        Some(dir) if cfg!(windows) => {
+            let (source, temp) = jsx::prepare_cli_module_graph(source, dir, execution_generation())
+                .map_err(JscError::Jsx)?;
+            (source, Some(temp))
+        }
+        Some(dir) => (
+            jsx::rewrite_local_imports_for_generation(source, dir, execution_generation())
+                .map_err(JscError::Jsx)?,
+            None,
+        ),
+        None => (source.to_string(), None),
     };
+    let source = graph_temp.0;
     let js_body = jsx::tsx_to_js(&source).map_err(JscError::Jsx)?;
     // Windows uses the persistent worker as a protocol supervisor and runs
     // each generated module through Bun's normal CLI lifecycle. The custom
@@ -376,6 +385,9 @@ fn execute_inner(
         context_json: ctx_json.unwrap_or_default().to_string(),
     };
     let result = pool.execute(request, timeout_ms).map_err(map_pool_error)?;
+    if let Some(temp) = graph_temp.1 {
+        let _ = std::fs::remove_dir_all(temp);
+    }
     if cancellation.is_cancelled() {
         return Err(JscError::Cancelled);
     }

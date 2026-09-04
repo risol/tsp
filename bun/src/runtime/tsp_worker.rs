@@ -220,7 +220,7 @@ fn execute_windows_cli(request: &protocol::ExecuteRequest) -> Result<String, Str
     use std::process::{Command, Stdio};
 
     let path = std::env::temp_dir().join(format!(
-        "tsp-worker-request-{}-{}.tsx",
+        "tsp-embedded-worker-{}-{}.tsx",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
