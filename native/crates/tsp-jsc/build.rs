@@ -64,6 +64,11 @@ fn main() {
         build.flag_if_supported("-fexceptions");
         // WebKit's Unix headers use GNU extensions and C++23 library types.
         // Match the SDK's native compilation mode to avoid header/ABI drift.
+        if cfg!(target_os = "macos") {
+            // The SDK headers are shared with optimized WebKit builds and
+            // otherwise reject Cargo's debug (-O0) bridge compilation.
+            build.define("RELEASE_WITHOUT_OPTIMIZATIONS", None);
+        }
         if cfg!(target_os = "linux") || cfg!(target_os = "freebsd") {
             build.flag_if_supported("-std=gnu++23");
         } else {

@@ -15,13 +15,6 @@
 
 #ifdef __OBJC__
 #import <Foundation/Foundation.h>
-#else
-// The standalone bridge is compiled as C++, while the WebKit header also
-// supports Objective-C++. Keep an opaque C++ identity type so the trait is
-// false for ordinary C++ and Core Foundation pointers without importing
-// Objective-C declarations into a C++ translation unit.
-struct TspObjectiveCObject;
-using id = TspObjectiveCObject*;
 #endif
 
 #if !defined(__OBJC__) && USE(CF)
