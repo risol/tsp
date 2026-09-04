@@ -1,0 +1,12 @@
+{
+  "name": "tsp-build-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "tspc": "node tspc.mjs",
+    "test": "node --test tspc.test.mjs"
+  },
+  "dependencies": {
+    "typescript": "5.9.3"
+  }
+}

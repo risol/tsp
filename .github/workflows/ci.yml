@@ -20,6 +20,37 @@ env:
   RUSTUP_TOOLCHAIN: nightly-2026-07-20
 
 jobs:
+  compiler:
+    name: TSP compiler (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/package-lock.json
+
+      - name: Install compiler dependencies
+        working-directory: tools
+        run: npm ci
+
+      - name: Run compiler tests
+        working-directory: tools
+        run: npm test
+
+      - name: Validate application routes
+        working-directory: tools
+        run: npm run tspc -- check --root ../pages --out .tsp-build-ci
+
   native-linux:
     name: Native runtime (Linux)
     runs-on: ubuntu-latest
