@@ -14,6 +14,7 @@ public/*
 # Bun/Rust build output is also ignored by bun/.gitignore.
 bun/build/
 bun/target/
+native/target/
 bun/vendor/
 bun/node_modules/
 .bun-bootstrap/
@@ -54,4 +55,3 @@ fix_services.py
 # for file-loaded scripts. Safe to delete.
 .bun-smoke.ts
 .smoke.ts
-
