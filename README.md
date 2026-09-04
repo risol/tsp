@@ -19,10 +19,14 @@
 [![Latest release](https://img.shields.io/github/v/release/risol/tsp?display_name=tag)](https://github.com/risol/tsp/releases/latest)
 
 TSP is a self-contained server runtime for building dynamic websites and HTTP
-services with TypeScript. A Rust host handles HTTP, routing, request context,
-and process management, while embedded Bun workers execute `.tsp` route
-modules. The result is one native `tspserver` binary with a familiar
-page-oriented development model and modern TypeScript APIs.
+services with TypeScript. The native migration keeps JavaScriptCore as the
+engine boundary while TSP owns the compiler pipeline, HTTP server, routing,
+request context, worker pool, and response protocol.
+
+The repository still contains the earlier Bun-packaged runtime while the
+standalone runtime is being promoted. The new path is exercised with
+`cargo test --manifest-path native/Cargo.toml --workspace` and
+`scripts/native-e2e.mjs`.
 
 ## Download
 
@@ -73,6 +77,13 @@ Rust owns HTTP, routing, request scheduling, deadlines, process management, and
 long-lived services. Bun workers execute TypeScript and JSX in isolated,
 persistent processes. This keeps native resources out of disposable page code
 and gives the release package a single self-contained `tspserver` binary.
+
+### Standalone native runtime
+
+The replacement runtime is under `native/`. It reuses only the minimal
+JavaScriptCore binding needed to create an owner-thread VM, evaluate compiled
+JavaScript, and drain microtasks. TSP's compiler emits a CommonJS-style bundle
+and manifest, and TSP's own HTTP server dispatches requests to its workers.
 
 ### `.tsp` is standard TSX
 
