@@ -50,3 +50,14 @@ test("dispatch is a cached function that accepts structured request data", () =>
   assert.equal(result.result.body.data, "hello world");
   assert.equal(result.result.request_id, "test-1");
 });
+
+test("dispatch exposes an explicit cancellation boundary", () => {
+  const context = { console };
+  vm.runInNewContext(source, context, { filename: "tsp-runtime.js" });
+  vm.runInNewContext(dispatchSource, context, { filename: "tsp-dispatch.js" });
+  context.__tsp_pending = true;
+  context.__tsp_cancel();
+  const result = JSON.parse(context.__tsp_read_response_json());
+  assert.equal(result.pending, false);
+  assert.equal(result.error, "request cancelled");
+});

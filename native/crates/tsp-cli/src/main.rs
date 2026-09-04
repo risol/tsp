@@ -56,6 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match pool.dispatch(request, matched.route, matched.params) {
             Ok(response) => response,
             Err(WorkerError::QueueClosed) => Response::new(503, "worker queue closed"),
+            Err(WorkerError::Timeout) => Response::new(504, "request execution timed out"),
             Err(WorkerError::Execution(error)) => Response::new(500, error),
         }
     };

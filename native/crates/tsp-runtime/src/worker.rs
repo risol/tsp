@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use crate::{Request, Response, RouteSpec};
 use serde_json::json;
@@ -26,6 +27,7 @@ pub trait WorkerExecutor: 'static {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkerError {
     QueueClosed,
+    Timeout,
     Execution(String),
 }
 
@@ -33,6 +35,7 @@ impl std::fmt::Display for WorkerError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::QueueClosed => formatter.write_str("worker queue is closed"),
+            Self::Timeout => formatter.write_str("request execution timed out"),
             Self::Execution(message) => formatter.write_str(message),
         }
     }
@@ -43,11 +46,27 @@ impl std::error::Error for WorkerError {}
 const RUNTIME_PRELUDE: &str = include_str!("../../../runtime-js/src/bootstrap.js");
 const DISPATCH_RUNTIME: &str = include_str!("../../../runtime-js/src/dispatch.js");
 
+#[derive(Debug, Clone, Copy)]
+pub struct ExecutionConfig {
+    pub timeout: Duration,
+    pub poll_interval: Duration,
+}
+
+impl Default for ExecutionConfig {
+    fn default() -> Self {
+        Self {
+            timeout: Duration::from_secs(30),
+            poll_interval: Duration::from_millis(1),
+        }
+    }
+}
+
 /// Executes a compiled route bundle through an injected JavaScript runtime.
 /// The host runtime does not know whether the implementation is JSC, a test
 /// double, or a future engine adapter.
 pub struct RouteExecutor<J> {
     engine: J,
+    config: ExecutionConfig,
 }
 
 impl<J: JsRuntime> RouteExecutor<J> {
@@ -61,7 +80,15 @@ impl<J: JsRuntime> RouteExecutor<J> {
         engine
             .evaluate(DISPATCH_RUNTIME, "tsp-dispatch.js")
             .map_err(|error| WorkerError::Execution(error.to_string()))?;
-        Ok(Self { engine })
+        Ok(Self {
+            engine,
+            config: ExecutionConfig::default(),
+        })
+    }
+
+    pub fn with_config(mut self, config: ExecutionConfig) -> Self {
+        self.config = config;
+        self
     }
 }
 
@@ -100,26 +127,32 @@ impl<J: JsRuntime + 'static> WorkerExecutor for RouteExecutor<J> {
         self.engine
             .call_json("__tsp_dispatch_json", &payload)
             .map_err(|error| WorkerError::Execution(error.to_string()))?;
-        self.engine
-            .drain_microtasks()
-            .map_err(|error| WorkerError::Execution(error.to_string()))?;
-        let state = self
-            .engine
-            .call_json("__tsp_read_response_json", "null")
-            .map_err(|error| WorkerError::Execution(error.to_string()))?;
-        let state: serde_json::Value = serde_json::from_str(&state).map_err(|error| {
-            WorkerError::Execution(format!("response JSON is invalid: {error}"))
-        })?;
-        if state["pending"].as_bool().unwrap_or(false) {
-            return Err(WorkerError::Execution(
-                "async handler did not settle at the microtask checkpoint".into(),
-            ));
+        let deadline = Instant::now() + self.config.timeout;
+        loop {
+            self.engine
+                .drain_microtasks()
+                .map_err(|error| WorkerError::Execution(error.to_string()))?;
+            let state = self
+                .engine
+                .call_json("__tsp_read_response_json", "null")
+                .map_err(|error| WorkerError::Execution(error.to_string()))?;
+            let state: serde_json::Value = serde_json::from_str(&state).map_err(|error| {
+                WorkerError::Execution(format!("response JSON is invalid: {error}"))
+            })?;
+            if !state["pending"].as_bool().unwrap_or(false) {
+                if let Some(error) = state["error"].as_str() {
+                    return Err(WorkerError::Execution(error.to_owned()));
+                }
+                return serde_json::from_value(state["result"].clone()).map_err(|error| {
+                    WorkerError::Execution(format!("route response is invalid: {error}"))
+                });
+            }
+            if Instant::now() >= deadline {
+                let _ = self.engine.call_json("__tsp_cancel", "null");
+                return Err(WorkerError::Timeout);
+            }
+            thread::sleep(self.config.poll_interval);
         }
-        if let Some(error) = state["error"].as_str() {
-            return Err(WorkerError::Execution(error.to_owned()));
-        }
-        serde_json::from_value(state["result"].clone())
-            .map_err(|error| WorkerError::Execution(format!("route response is invalid: {error}")))
     }
 }
 

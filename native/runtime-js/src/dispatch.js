@@ -69,4 +69,11 @@
       } : null,
     });
   };
+
+  globalThis.__tsp_cancel = function () {
+    globalThis.__tsp_pending = false;
+    globalThis.__tsp_result = undefined;
+    globalThis.__tsp_error = "request cancelled";
+    return "cancelled";
+  };
 })();
