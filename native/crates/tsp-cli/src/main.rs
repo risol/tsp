@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tsp_core::{CompiledManifest, Request, Response, RouteTable};
+use tsp_core::{CompiledManifest, ErrorEnvelope, Request, Response, RouteTable};
 use tsp_http::{Server, ServerLimits};
 use tsp_runtime::{GenerationRegistry, ProcessWorkerManager, WorkerError};
 
@@ -57,9 +57,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         match workers.dispatch(request, matched.route, matched.params) {
             Ok(response) => response,
-            Err(WorkerError::QueueClosed) => Response::new(503, "worker queue closed"),
-            Err(WorkerError::Timeout) => Response::new(504, "request execution timed out"),
-            Err(WorkerError::Execution(error)) => Response::new(500, error),
+            Err(WorkerError::QueueClosed) => error_response(503, "worker queue closed", "TSP3001"),
+            Err(WorkerError::Timeout) => {
+                error_response(504, "request execution timed out", "TSP3002")
+            }
+            Err(WorkerError::Execution(_)) => {
+                error_response(500, "internal server error", "TSP3000")
+            }
         }
     };
     let server = Server::bind(&options.listen, ServerLimits::default())?;
@@ -67,6 +71,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::io::stdout().flush()?;
     server.run(handler)?;
     Ok(())
+}
+
+fn error_response(status: u16, message: &str, code: &str) -> Response {
+    let mut response = Response::new(status, message);
+    response.error = Some(ErrorEnvelope {
+        code: code.into(),
+        kind: "RuntimeError".into(),
+        message: message.into(),
+    });
+    response
 }
 
 fn default_worker_path() -> PathBuf {
