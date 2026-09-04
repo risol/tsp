@@ -46,6 +46,9 @@ use bun_core::StackCheck;
 use bun_core::output;
 
 fn is_tspserver_executable() -> bool {
+    if std::env::var_os("TSP_CLI_WORKER").is_some() {
+        return false;
+    }
     std::env::current_exe()
         .ok()
         .and_then(|path| {

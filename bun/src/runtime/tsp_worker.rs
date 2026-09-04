@@ -211,10 +211,9 @@ where
 /// Execute a generated route through the packaged Bun CLI on Windows.
 ///
 /// The long-lived worker remains the protocol, timeout, and recycling
-/// boundary. The request child is the standard Bun CLI, so Bun initializes its
-/// normal process-main event loop before running async route code. The CLI is
-/// resolved from `TSP_BUN_BIN` or PATH; the packaged `tspserver.exe` is a
-/// server-only binary and must not be used as a script runner.
+/// boundary. The request child enters the standard Bun CLI lifecycle inside
+/// this same packaged executable, so Bun initializes its normal process-main
+/// event loop before running async route code.
 #[cfg(windows)]
 fn execute_windows_cli(request: &protocol::ExecuteRequest) -> Result<String, String> {
     use std::process::{Command, Stdio};
@@ -229,10 +228,10 @@ fn execute_windows_cli(request: &protocol::ExecuteRequest) -> Result<String, Str
     ));
     std::fs::write(&path, &request.script)
         .map_err(|error| format!("failed to materialize Windows route module: {error}"))?;
-    let executable = std::env::var_os("TSP_BUN_BIN")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("bun"));
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("failed to locate the packaged TSP executable: {error}"))?;
     let output = Command::new(executable)
+        .env("TSP_CLI_WORKER", "1")
         .arg(&path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
