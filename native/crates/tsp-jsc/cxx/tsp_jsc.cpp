@@ -19,6 +19,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 
 struct TspJscVm {
     JSGlobalContextRef context;
@@ -57,8 +58,11 @@ static TspJscBuffer copyValueAsString(JSContextRef context, JSValueRef value)
 {
     JSValueRef conversionException = nullptr;
     JSStringRef string = JSValueToStringCopy(context, value, &conversionException);
-    if (!string)
-        return {};
+    if (!string || conversionException) {
+        if (string)
+            JSStringRelease(string);
+        return copyLiteral("JavaScript value could not be converted to a string");
+    }
     TspJscBuffer result = copyString(string);
     JSStringRelease(string);
     return result;
@@ -67,6 +71,7 @@ static TspJscBuffer copyValueAsString(JSContextRef context, JSValueRef value)
 static JSStringRef createString(TspJscBuffer input)
 {
     if ((!input.ptr && input.len != 0)
+        || input.len == std::numeric_limits<size_t>::max()
         || (input.len != 0 && std::memchr(input.ptr, 0, input.len)))
         return nullptr;
     auto* bytes = static_cast<char*>(std::malloc(input.len + 1));
@@ -116,7 +121,9 @@ extern "C" TSP_JSC_EXPORT TspJscResult tsp_jsc_evaluate(
     TspJscBuffer filename)
 {
     TspJscResult result {};
-    if (!vm || !vm->context || (!source.ptr && source.len != 0)) {
+    if (!vm || !vm->context
+        || (!source.ptr && source.len != 0)
+        || (!filename.ptr && filename.len != 0)) {
         result.error = copyLiteral("invalid JSC evaluation input");
         return result;
     }

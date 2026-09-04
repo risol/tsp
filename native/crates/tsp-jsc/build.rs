@@ -22,6 +22,11 @@ fn main() {
     if !include.is_dir() || !lib.is_dir() {
         panic!("TSP_WEBKIT_ROOT must contain include and lib directories");
     }
+    if cfg!(windows) && !include.join("wtf").join("PlatformEnableWin.h").is_file() {
+        panic!(
+            "TSP_WEBKIT_ROOT is not a Windows WebKit build: include/wtf/PlatformEnableWin.h is missing"
+        );
+    }
 
     let mut build = cc::Build::new();
     build
