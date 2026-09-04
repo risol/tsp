@@ -67,7 +67,13 @@
         status: response.status,
         headers: response.headers,
         body: { kind: "Text", data: response.body },
-        effects: { cookies: [], session: [] },
+        effects: {
+          cookies: response.headers
+            .filter(([name]) => name.toLowerCase() === "set-cookie")
+            .map(([, value]) => value),
+          session: [],
+        },
+        error: null,
       } : null,
     });
   };

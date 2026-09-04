@@ -89,6 +89,13 @@ impl RequestEnvelope {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ErrorEnvelope {
+    pub code: String,
+    pub kind: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResponseEnvelope {
     pub version: u16,
     pub request_id: String,
@@ -97,6 +104,7 @@ pub struct ResponseEnvelope {
     pub headers: Vec<(String, String)>,
     pub body: BodyEnvelope,
     pub effects: Effects,
+    pub error: Option<ErrorEnvelope>,
 }
 
 impl ResponseEnvelope {
@@ -109,6 +117,7 @@ impl ResponseEnvelope {
             headers: Vec::new(),
             body: body.into(),
             effects: Effects::default(),
+            error: None,
         }
     }
 }

@@ -9,6 +9,7 @@ use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
 
 pub use tsp_core::{BodyEnvelope, PROTOCOL_VERSION, Request, Response};
@@ -241,6 +242,7 @@ pub enum ResponseError {
 pub struct ServerLimits {
     pub max_header_bytes: usize,
     pub max_body_bytes: usize,
+    pub max_connections: usize,
 }
 
 impl Default for ServerLimits {
@@ -248,6 +250,7 @@ impl Default for ServerLimits {
         Self {
             max_header_bytes: DEFAULT_MAX_HEADER_BYTES,
             max_body_bytes: 16 * 1024 * 1024,
+            max_connections: 1024,
         }
     }
 }
@@ -277,15 +280,54 @@ impl Server {
         H: Fn(Request) -> Response + Send + Sync + 'static,
     {
         let handler = Arc::new(handler);
+        if self.limits.max_connections == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "max_connections must be greater than zero",
+            ));
+        }
+        let (permit_sender, permit_receiver) = mpsc::sync_channel(self.limits.max_connections);
+        for _ in 0..self.limits.max_connections {
+            permit_sender.send(()).map_err(|_| {
+                io::Error::new(io::ErrorKind::BrokenPipe, "connection permits closed")
+            })?;
+        }
+        let permit_receiver = Arc::new(std::sync::Mutex::new(permit_receiver));
         for stream in self.listener.incoming() {
             let mut stream = stream?;
+            let permit = match permit_receiver
+                .lock()
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::Other, "connection permit lock poisoned")
+                })?
+                .try_recv()
+            {
+                Ok(permit) => permit,
+                Err(TryRecvError::Empty) => {
+                    let _ = stream.write_all(
+                        &Response::new(503, "connection limit reached")
+                            .serialize()
+                            .unwrap_or_default(),
+                    );
+                    continue;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "connection permits closed",
+                    ));
+                }
+            };
             let handler = Arc::clone(&handler);
             let limits = self.limits;
+            let permit_sender = permit_sender.clone();
             thread::spawn(move || {
+                let _permit = permit;
                 let result = serve_connection(&mut stream, limits, |request| handler(request));
                 if let Err(error) = result {
                     let _ = write_internal_error(&mut stream, &error);
                 }
+                let _ = permit_sender.send(_permit);
             });
         }
         Ok(())
