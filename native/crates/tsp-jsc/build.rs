@@ -88,7 +88,8 @@ fn main() {
     println!("cargo:rustc-link-lib=static=JavaScriptCore");
     println!("cargo:rustc-link-lib=static=WTF");
     println!("cargo:rustc-link-lib=static=bmalloc");
-    for library in ["mimalloc"] {
+    {
+        let library = "mimalloc";
         let static_library = if cfg!(windows) {
             lib.join(format!("{library}.lib"))
         } else {
