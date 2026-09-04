@@ -16,47 +16,58 @@ if (!jscSdkRoot) {
 }
 process.env.TSP_JSC_SDK_ROOT = jscSdkRoot;
 
-const output = mkdtempSync(path.join(os.tmpdir(), "tsp-native-e2e-"));
+const packagedManifest = process.env.TSP_NATIVE_E2E_MANIFEST;
+const output = packagedManifest
+  ? path.dirname(packagedManifest)
+  : mkdtempSync(path.join(os.tmpdir(), "tsp-native-e2e-"));
 const applicationRoot = process.env.TSP_NATIVE_E2E_ROOT ?? "native/fixtures/pages";
-const compiler = spawnSync(
-  process.platform === "win32" ? "node.exe" : "node",
-  ["tools/tspc.mjs", "compile", "--root", applicationRoot, "--out", output],
-  { cwd: repository, encoding: "utf8", stdio: "inherit" },
-);
-if (compiler.status !== 0) process.exit(compiler.status ?? 1);
+if (!packagedManifest) {
+  const compiler = spawnSync(
+    process.platform === "win32" ? "node.exe" : "node",
+    ["tools/tspc.mjs", "compile", "--root", applicationRoot, "--out", output],
+    { cwd: repository, encoding: "utf8", stdio: "inherit" },
+  );
+  if (compiler.status !== 0) process.exit(compiler.status ?? 1);
+}
 
-const binary = path.join(
-  repository,
-  "native",
-  "target",
-  "debug",
-  process.platform === "win32" ? "tsp-cli.exe" : "tsp-cli",
-);
-const build = spawnSync(
-  process.platform === "win32" ? "cargo.exe" : "cargo",
-  ["build", "--manifest-path", "native/Cargo.toml", "-p", "tsp-cli", "-p", "tsp-worker"],
-  { cwd: repository, env: process.env, encoding: "utf8", stdio: "inherit" },
-);
-if (build.status !== 0) process.exit(build.status ?? 1);
+const binary = process.env.TSP_NATIVE_E2E_BINARY
+  ? path.resolve(process.env.TSP_NATIVE_E2E_BINARY)
+  : path.join(
+      repository,
+      "native",
+      "target",
+      "debug",
+      process.platform === "win32" ? "tsp-cli.exe" : "tsp-cli",
+    );
+if (!process.env.TSP_NATIVE_E2E_SKIP_BUILD) {
+  const build = spawnSync(
+    process.platform === "win32" ? "cargo.exe" : "cargo",
+    ["build", "--manifest-path", "native/Cargo.toml", "-p", "tsp-cli", "-p", "tsp-worker"],
+    { cwd: repository, env: process.env, encoding: "utf8", stdio: "inherit" },
+  );
+  if (build.status !== 0) process.exit(build.status ?? 1);
+}
 
-const nativeTests = spawnSync(
-  process.platform === "win32" ? "cargo.exe" : "cargo",
-  [
-    "test",
-    "--manifest-path",
-    "native/Cargo.toml",
-    "-p",
-    "tsp-jsc",
-    "--features",
-    "native-ffi",
-    "--",
-    "--test-threads=1",
-  ],
-  { cwd: repository, env: process.env, encoding: "utf8", stdio: "inherit" },
-);
-if (nativeTests.status !== 0) process.exit(nativeTests.status ?? 1);
+if (!process.env.TSP_NATIVE_E2E_SKIP_BUILD) {
+  const nativeTests = spawnSync(
+    process.platform === "win32" ? "cargo.exe" : "cargo",
+    [
+      "test",
+      "--manifest-path",
+      "native/Cargo.toml",
+      "-p",
+      "tsp-jsc",
+      "--features",
+      "native-ffi",
+      "--",
+      "--test-threads=1",
+    ],
+    { cwd: repository, env: process.env, encoding: "utf8", stdio: "inherit" },
+  );
+  if (nativeTests.status !== 0) process.exit(nativeTests.status ?? 1);
+}
 
-const server = spawn(binary, ["--manifest", path.join(output, "manifest.json"), "--listen", "127.0.0.1:0"], {
+const server = spawn(binary, ["--manifest", packagedManifest ?? path.join(output, "manifest.json"), "--listen", "127.0.0.1:0"], {
   cwd: repository,
   env: process.env,
   stdio: ["ignore", "pipe", "inherit"],
@@ -128,5 +139,5 @@ try {
   console.log("native application E2E passed: routing, request data, response effects, async, errors, 404, and 405");
 } finally {
   server.kill();
-  rmSync(output, { recursive: true, force: true });
+  if (!packagedManifest) rmSync(output, { recursive: true, force: true });
 }

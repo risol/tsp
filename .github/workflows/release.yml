@@ -12,9 +12,6 @@ concurrency:
   group: tspserver-release-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  RUSTUP_TOOLCHAIN: nightly-2026-07-20
-
 jobs:
   create-release:
     name: Create draft release
@@ -25,11 +22,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" \
-              --repo "$GITHUB_REPOSITORY" \
-              --draft \
-              --title "TSP $GITHUB_REF_NAME" \
-              --generate-notes
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft \
+              --title "TSP $GITHUB_REF_NAME" --generate-notes
           fi
 
   build-and-upload:
@@ -41,18 +35,12 @@ jobs:
         include:
           - os: ubuntu-latest
             target: linux-x64
-            runtime: bun/build/release/bun
-            server: release/tspserver-linux-x64/tspserver
             archive: tar.gz
           - os: windows-latest
             target: windows-x64
-            runtime: bun/build/release/bun.exe
-            server: release/tspserver-windows-x64/tspserver.exe
             archive: zip
           - os: macos-latest
-            target: macos
-            runtime: bun/build/release/bun
-            server: release/tspserver-macos/tspserver
+            target: macos-arm64
             archive: tar.gz
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
@@ -60,15 +48,17 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v5
 
-      - name: Set up bootstrap Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          bun-version: '1.3.14'
+          node-version: '22'
 
-      - name: Install pinned Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2026-07-20
+      - name: Install compiler dependencies
+        working-directory: tools
+        run: npm ci
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install pinned LLVM toolchain (Linux)
         if: matrix.os == 'ubuntu-latest'
@@ -91,118 +81,133 @@ jobs:
           $ProgressPreference = 'SilentlyContinue'
           $url = 'https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.0/LLVM-21.1.0-win64.exe'
           $installer = Join-Path $env:TEMP 'llvm-installer.exe'
-          Write-Host "Downloading $url"
           Invoke-WebRequest -Uri $url -OutFile $installer
-          Write-Host "Installing LLVM 21.1.0 silently (/S)..."
           $proc = Start-Process -FilePath $installer -ArgumentList '/S' -PassThru -Wait
           if ($proc.ExitCode -ne 0) { throw "LLVM installer exit code: $($proc.ExitCode)" }
           Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\LLVM\bin'
 
-      - name: Install Bun fork dependencies
-        working-directory: bun
-        run: bun install --frozen-lockfile
-
-      - name: Build single-file TSP runtime
-        working-directory: bun
-        env:
-          TSP_VERSION: ${{ github.ref_name }}
-        run: bun run build:release
-
-      - name: Package release asset
-        shell: bash
-        run: |
-          set -euo pipefail
-          package_dir="release/tspserver-${{ matrix.target }}"
-          bash scripts/package-tspserver.sh \
-            "${{ matrix.runtime }}" \
-            "$package_dir" \
-            pages \
-            public \
-            tsp.config.json
-          test -s "$package_dir/tsp.config.json"
-          test -s "$package_dir/AGENTS.md"
-          grep -q 'TSP User Guide for AI Assistants' "$package_dir/AGENTS.md"
-          grep -q '"port": 3000' "$package_dir/tsp.config.json"
-          grep -q '"publicDir": "./public"' "$package_dir/tsp.config.json"
-          grep -q '"publicPrefix": "/static"' "$package_dir/tsp.config.json"
-          grep -q '"count": 1' "$package_dir/tsp.config.json"
-          grep -q '"name": "main"' "$package_dir/tsp.config.json"
-          grep -q '"services": {}' "$package_dir/tsp.config.json"
-
-      - name: Run full native and application E2E tests (Linux/Windows)
-        if: matrix.os != 'macos-latest'
-        working-directory: bun
-        env:
-          TSP_REQUIRE_E2E: '1'
-          TSP_WORKER_STARTUP_TRACE: '1'
-          TSP_TEST_MASTER: ${{ github.workspace }}/${{ matrix.runtime }}
-        run: |
-          cargo test -p bun_runtime_tsp --lib --no-fail-fast --locked
-          cargo test -p bun_runtime_tsp --test worker_integration --no-fail-fast --locked -- --test-threads=1
-          cargo test -p bun_runtime_tsp --test process_model --no-fail-fast --locked -- --test-threads=1
-          cargo test -p bun_runtime_tsp --test start_order --no-fail-fast --locked -- --test-threads=1
-
-      - name: Run full native and application E2E tests (macOS)
-        if: matrix.os == 'macos-latest'
-        working-directory: bun
-        env:
-          # The release build needs LLVM 21, but these standalone Rust tests
-          # do not. Use Apple's linker instead of the generated lld flags:
-          # Homebrew clang rejects `-fuse-ld=lld` on the hosted macOS runner.
-          CC: /usr/bin/clang
-          CXX: /usr/bin/clang++
-          RUSTFLAGS: -C link-arg=-Qunused-arguments -A linker_messages
-          CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER: /usr/bin/clang++
-          CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER: /usr/bin/clang++
-          TSP_REQUIRE_E2E: '1'
-          TSP_TEST_MASTER: ${{ github.workspace }}/${{ matrix.runtime }}
-        run: |
-          cargo test -p bun_runtime_tsp --lib --no-fail-fast --locked
-          cargo test -p bun_runtime_tsp --test worker_integration --no-fail-fast --locked -- --test-threads=1
-          cargo test -p bun_runtime_tsp --test process_model --no-fail-fast --locked -- --test-threads=1
-          cargo test -p bun_runtime_tsp --test start_order --no-fail-fast --locked -- --test-threads=1
-
-      - name: Run smoke test
+      - name: Download pinned TSP JSC SDK (Unix)
         if: matrix.os != 'windows-latest'
-        run: bash scripts/smoke-tspserver.sh "${{ matrix.server }}"
+        run: node scripts/fetch-tsp-jsc-sdk.mjs --output "$RUNNER_TEMP/tsp-jsc-sdk"
 
-      - name: Run smoke test on Windows
+      - name: Download pinned TSP JSC SDK (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: node scripts/fetch-tsp-jsc-sdk.mjs --output "$env:RUNNER_TEMP\tsp-jsc-sdk"
+
+      - name: Compile application artifact (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          mkdir -p "release/routes-${{ matrix.target }}"
+          node tools/tspc.mjs compile --root pages --out "release/routes-${{ matrix.target }}"
+
+      - name: Compile application artifact (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $routes = 'release\routes-${{ matrix.target }}'
+          New-Item -ItemType Directory -Path $routes -Force | Out-Null
+          node tools/tspc.mjs compile --root pages --out $routes
+
+      - name: Build native host and worker (Unix)
+        if: matrix.os != 'windows-latest'
+        env:
+          TSP_JSC_SDK_ROOT: ${{ runner.temp }}/tsp-jsc-sdk
+        run: cargo build --manifest-path native/Cargo.toml --release -p tsp-cli -p tsp-worker
+
+      - name: Build native host and worker (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         env:
-          TSP_WORKER_STARTUP_TRACE: '1'
-        run: ./scripts/smoke-tspserver.ps1 -ServerBinary "${{ matrix.server }}"
-
-      - name: Archive release asset (Linux/macOS)
-        if: matrix.os != 'windows-latest'
-        shell: bash
+          TSP_JSC_SDK_ROOT: ${{ runner.temp }}\tsp-jsc-sdk
         run: |
-          archive="tspserver-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
-          package_dir="tspserver-${{ matrix.target }}"
-          tar -czf "$archive" -C release "$package_dir"
-          tar -tzf "$archive" | grep -Eq "(^|/)${package_dir}/AGENTS\\.md$"
+          $env:CXX = 'clang-cl.exe'
+          $env:CFLAGS = '/MT'
+          $env:CXXFLAGS = '/MT'
+          cargo build --manifest-path native/Cargo.toml --release -p tsp-cli -p tsp-worker
+
+      - name: Package native release (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          bash scripts/package-native-tspserver.sh \
+            native/target/release/tsp-cli \
+            native/target/release/tsp-worker \
+            "release/tspserver-${{ matrix.target }}" \
+            "release/routes-${{ matrix.target }}" \
+            public tsp.config.json
+
+      - name: Package native release (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          ./scripts/package-native-tspserver.ps1 `
+            -ServerBinary 'native\target\release\tsp-cli.exe' `
+            -WorkerBinary 'native\target\release\tsp-worker.exe' `
+            -OutputDirectory 'release\tspserver-windows-x64' `
+            -RoutesDirectory 'release\routes-windows-x64' `
+            -PublicDirectory 'public' -ConfigFile 'tsp.config.json'
+
+      - name: Verify native package contents (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          package="release/tspserver-${{ matrix.target }}"
+          test -x "$package/tspserver"
+          test -x "$package/tsp-worker"
+          test -s "$package/routes/manifest.json"
+          test -s "$package/routes/bundle.js"
+          test -s "$package/tsp.config.json"
+          test -s "$package/AGENTS.md"
+          if find "$package" -maxdepth 1 -type f -iname 'bun*' | grep -q .; then exit 1; fi
+
+      - name: Verify native package contents (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $package = 'release\tspserver-windows-x64'
+          foreach ($file in @('tspserver.exe', 'tsp-worker.exe', 'routes\manifest.json', 'routes\bundle.js', 'tsp.config.json', 'AGENTS.md')) {
+            if (!(Test-Path -LiteralPath (Join-Path $package $file) -PathType Leaf)) { throw "missing package file: $file" }
+          }
+
+      - name: Run packaged application E2E (Unix)
+        if: matrix.os != 'windows-latest'
+        env:
+          TSP_JSC_SDK_ROOT: ${{ runner.temp }}/tsp-jsc-sdk
+          TSP_NATIVE_E2E_ROOT: native/fixtures/pages
+          TSP_NATIVE_E2E_BINARY: ${{ github.workspace }}/release/tspserver-${{ matrix.target }}/tspserver
+          TSP_NATIVE_E2E_MANIFEST: ${{ github.workspace }}/release/tspserver-${{ matrix.target }}/routes/manifest.json
+          TSP_NATIVE_E2E_SKIP_BUILD: '1'
+          TSP_REQUIRE_E2E: '1'
+        run: node scripts/native-e2e.mjs
+
+      - name: Run packaged application E2E (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        env:
+          TSP_JSC_SDK_ROOT: ${{ runner.temp }}\tsp-jsc-sdk
+          TSP_NATIVE_E2E_ROOT: native/fixtures/pages
+          TSP_NATIVE_E2E_BINARY: ${{ github.workspace }}\release\tspserver-windows-x64\tspserver.exe
+          TSP_NATIVE_E2E_MANIFEST: ${{ github.workspace }}\release\tspserver-windows-x64\routes\manifest.json
+          TSP_NATIVE_E2E_SKIP_BUILD: '1'
+          TSP_REQUIRE_E2E: '1'
+        run: node scripts/native-e2e.mjs
+
+      - name: Archive release asset (Unix)
+        if: matrix.os != 'windows-latest'
+        run: tar -czf "tspserver-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz" -C release "tspserver-${{ matrix.target }}"
 
       - name: Archive release asset (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
-        run: |
-          $archive = "tspserver-${{ github.ref_name }}-${{ matrix.target }}.zip"
-          $packageDir = "tspserver-${{ matrix.target }}"
-          Compress-Archive -Path "release/$packageDir" -DestinationPath $archive -Force
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $archive).Path)
-          try {
-            $entry = $zip.Entries | Where-Object { $_.FullName -eq "$packageDir/AGENTS.md" }
-            if ($null -eq $entry) { throw "$archive does not contain $packageDir/AGENTS.md" }
-          } finally {
-            $zip.Dispose()
-          }
+        run: Compress-Archive -Path 'release\tspserver-windows-x64' -DestinationPath "tspserver-$env:GITHUB_REF_NAME-windows-x64.zip" -Force
 
       - name: Upload release asset
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
-        run: gh release upload "$GITHUB_REF_NAME" "tspserver-${GITHUB_REF_NAME}-${{ matrix.target }}.${{ matrix.archive }}" --repo "$GITHUB_REPOSITORY" --clobber
+        run: |
+          gh release upload "$GITHUB_REF_NAME" \
+            "tspserver-${GITHUB_REF_NAME}-${{ matrix.target }}.${{ matrix.archive }}" \
+            --repo "$GITHUB_REPOSITORY" --clobber
 
   publish-release:
     name: Publish release
