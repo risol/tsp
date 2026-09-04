@@ -24,12 +24,6 @@ fn main() {
     if !include.is_dir() || !lib.is_dir() {
         panic!("TSP_JSC_SDK_ROOT must contain include and lib directories");
     }
-    if cfg!(windows) && !include.join("wtf").join("PlatformEnableWin.h").is_file() {
-        panic!(
-            "TSP_JSC_SDK_ROOT is not a Windows JSC SDK: include/wtf/PlatformEnableWin.h is missing"
-        );
-    }
-
     let mut build = cc::Build::new();
     build
         .cpp(true)
