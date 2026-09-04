@@ -327,7 +327,17 @@ fn execute_inner(
         None => source.to_string(),
     };
     let js_body = jsx::tsx_to_js(&source).map_err(JscError::Jsx)?;
-    let mut wrapped = jsx::wrap_for_embedded_worker(&js_body, method.as_str(), ctx_json);
+    // Windows uses the persistent worker as a protocol supervisor and runs
+    // each generated module through Bun's normal CLI lifecycle. The custom
+    // embedded VM reaches JSC::VM::drainMicrotasks but crashes there for
+    // ordinary async handlers on hosted Windows runners. The CLI path uses
+    // the same packaged executable and JSC engine while preserving Bun's
+    // proven event-loop initialization for Promise jobs.
+    let mut wrapped = if cfg!(windows) {
+        jsx::wrap_for_bun_cli(&js_body, method.as_str(), ctx_json)
+    } else {
+        jsx::wrap_for_embedded_worker(&js_body, method.as_str(), ctx_json)
+    };
     if let Some(path) = source_path {
         let source_url = format!(
             "tsp://{}?generation={}",

@@ -5253,6 +5253,7 @@ unsafe fn transpile_virtual_module_with_type(
 /// the VM API lock and is about to synchronously evaluate the result, so
 /// calling the JS API here would re-enter JSC while JSC is executing another
 /// native evaluation callback. That re-entry is unsafe on Windows.
+#[cfg(not(windows))]
 pub(crate) fn transpile_embedded_source(
     global: *mut JSGlobalObject,
     specifier: &[u8],
@@ -5335,6 +5336,7 @@ pub(crate) fn transpile_embedded_source(
 /// shims can retain `import.meta` syntax even after the outer source is
 /// printed as CommonJS. Keep that syntax out of the plain-script boundary;
 /// the generated TSP wrapper does not rely on `import.meta` itself.
+#[cfg(not(windows))]
 fn normalize_plain_script_source(source: &[u8]) -> Vec<u8> {
     const IMPORT_META: &[u8] = b"import.meta";
     let mut normalized = Vec::with_capacity(source.len());
