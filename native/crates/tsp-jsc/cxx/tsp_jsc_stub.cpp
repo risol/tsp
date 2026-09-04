@@ -2,7 +2,7 @@
 
 /*
  * Link-only fallback for contract tests and metadata checks. A real
- * native-ffi build must provide TSP_WEBKIT_ROOT; this fallback never creates
+ * native-ffi build must provide TSP_JSC_SDK_ROOT; this fallback never creates
  * a VM and reports initialization failure instead of silently using another
  * JavaScript runtime.
  */

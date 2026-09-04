@@ -217,6 +217,7 @@ pub enum RouteError {
     EmptyPath,
     InvalidPath(String),
     DuplicatePath(String),
+    UnsupportedManifest { version: u32, runtime_abi: u16 },
 }
 
 impl std::fmt::Display for RouteError {
@@ -225,6 +226,13 @@ impl std::fmt::Display for RouteError {
             Self::EmptyPath => formatter.write_str("route path cannot be empty"),
             Self::InvalidPath(path) => write!(formatter, "invalid route path: {path}"),
             Self::DuplicatePath(path) => write!(formatter, "duplicate route path: {path}"),
+            Self::UnsupportedManifest {
+                version,
+                runtime_abi,
+            } => write!(
+                formatter,
+                "unsupported manifest version {version} and runtime ABI {runtime_abi}"
+            ),
         }
     }
 }
@@ -253,6 +261,12 @@ impl RouteTable {
     }
 
     pub fn from_manifest(manifest: &CompiledManifest) -> Result<Self, RouteError> {
+        if manifest.version != 1 || manifest.runtime_abi != RUNTIME_ABI_VERSION {
+            return Err(RouteError::UnsupportedManifest {
+                version: manifest.version,
+                runtime_abi: manifest.runtime_abi,
+            });
+        }
         Self::new(manifest.routes.clone())
     }
 

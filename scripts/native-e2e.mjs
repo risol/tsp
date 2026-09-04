@@ -5,11 +5,12 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const webkitRoot = process.env.TSP_WEBKIT_ROOT;
-if (!webkitRoot) {
-  console.log("native application E2E skipped: TSP_WEBKIT_ROOT is not configured");
+const jscSdkRoot = process.env.TSP_JSC_SDK_ROOT ?? process.env.TSP_WEBKIT_ROOT;
+if (!jscSdkRoot) {
+  console.log("native application E2E skipped: TSP_JSC_SDK_ROOT is not configured");
   process.exit(0);
 }
+process.env.TSP_JSC_SDK_ROOT = jscSdkRoot;
 
 const output = mkdtempSync(path.join(os.tmpdir(), "tsp-native-e2e-"));
 const applicationRoot = process.env.TSP_NATIVE_E2E_ROOT ?? "native/fixtures/pages";

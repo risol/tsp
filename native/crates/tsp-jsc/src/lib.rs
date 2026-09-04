@@ -9,6 +9,10 @@
 use std::fmt;
 use std::thread::{self, ThreadId};
 
+#[cfg(feature = "native-ffi")]
+#[global_allocator]
+static TSP_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 pub mod ffi {
     use std::ffi::c_void;
 
@@ -340,7 +344,7 @@ mod tests {
     #[cfg(feature = "native-ffi")]
     #[test]
     fn native_jsc_smoke_runs_when_a_webkit_root_is_configured() {
-        if std::env::var_os("TSP_WEBKIT_ROOT").is_none() {
+        if std::env::var_os("TSP_JSC_SDK_ROOT").is_none() {
             return;
         }
         let mut engine = Engine::new(NativeBackend::new().unwrap());
