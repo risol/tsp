@@ -13,6 +13,7 @@
 #include "../include/tsp_jsc.h"
 #include <JavaScriptCore/APICast.h>
 #include <JavaScriptCore/GetVM.h>
+#include <JavaScriptCore/InitializeThreading.h>
 #include <JavaScriptCore/JSLock.h>
 #include <JavaScriptCore/JavaScript.h>
 #include <JavaScriptCore/VM.h>
@@ -20,6 +21,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <mutex>
 
 struct TspJscVm {
     JSGlobalContextRef context;
@@ -87,9 +89,16 @@ static JSStringRef createString(TspJscBuffer input)
 
 extern "C" TSP_JSC_EXPORT int32_t tsp_jsc_initialize(void)
 {
-    // JSGlobalContextCreate performs JSC process initialization. Keeping this
-    // function explicit gives Rust a stable startup gate without importing
-    // Bun's global startup sequence.
+    // Standalone embedders must perform the same low-level initialization that
+    // Bun performs before creating a VM. JSGlobalContextCreate is not a
+    // replacement for initializing WTF's main-thread state and JSC's option
+    // table; omitting this can corrupt the VM when Promise microtasks are
+    // drained or when the context is released.
+    static std::once_flag initializeOnce;
+    std::call_once(initializeOnce, [] {
+        WTF::initializeMainThread();
+        JSC::initialize([] {});
+    });
     return 0;
 }
 
