@@ -1237,6 +1237,11 @@ fn wrap_for_bun_cli_inner(
         out.push_str(
         "(async () => {\n         \x20let __tspBody__, __tspStatus__, __tspHeaders__, __tspType__;\n         \x20const __tspResult__ = await __tspResultPromise__;\n         \x20__tspHeaders__ = [];\n         \x20if (__tspResult__ instanceof Response) {\n         \x20\x20__tspType__ = 'response';\n         \x20\x20__tspStatus__ = __tspResult__.status;\n         \x20\x20for (const [__k__, __v__] of __tspResult__.headers) __tspHeaders__.push([__k__, __v__]);\n         \x20\x20__tspBody__ = await __tspResult__.text();\n         \x20} else if (typeof __tspResult__ === 'string') {\n         \x20\x20__tspType__ = 'html';\n         \x20\x20__tspStatus__ = 200;\n         \x20\x20__tspBody__ = __tspResult__;\n         \x20} else {\n         \x20\x20// Spec §6.3 / plan §10.4: an\n         \x20\x20// invalid handler return value\n         \x20\x20// (object, number, boolean,\n         \x20\x20// etc.) is a contract violation.\n         \x20\x20// The typed `TSP3001` prefix is\n         \x20\x20// the application-facing error\n         \x20\x20// code (contract item 5 / plan\n         \x20\x20// §10.4); the inner catch wraps\n         \x20\x20// it in a 500 with a JSON body\n         \x20\x20// that the user can grep for.\n         \x20\x20// The type name is capitalized\n         \x20\x20// to match the plan's message\n         \x20\x20// (Object / Number / etc.).\n         \x20\x20const __tspType__ = (typeof __tspResult__);\n         \x20\x20const __tspTypeCap__ = __tspType__.charAt(0).toUpperCase() + __tspType__.slice(1);\n         \x20\x20throw new Error('TSP3001: handler returned unsupported value ' + __tspTypeCap__ + '. Expected HtmlNode or Response.');\n         \x20}\n         \x20// Merge runtime cookie writes into the outgoing headers\n         \x20// (spec sect.15: cookie writes MUST be reflected even when\n         \x20// the handler returns an HtmlNode). Each write becomes a\n         \x20// separate Set-Cookie line so multiple cookies on one\n         \x20// request don't collapse via the response's flatten loop.\n         \x20if (Array.isArray(__tspCookieWrites)) {\n         \x20\x20for (const __cookieLine__ of __tspCookieWrites) {\n         \x20\x20\x20__tspHeaders__.push(['Set-Cookie', __cookieLine__]);\n         \x20\x20}\n         \x20}\n         \x20const __tspEnvelope__ = JSON.stringify({type: __tspType__, status: __tspStatus__, headers: __tspHeaders__, body: __tspBody__, service_logs: __tspServiceLogs, session_writes: __tspSessionWrites});\n         \x20__tspConsoleLog('__TSP_OUT_V1__' + '\\n' + __tspEnvelope__);\n         process.exit(0);\n         })().catch((e) => { console.error(String(e && e.stack || e)); process.exit(1); });\n"
         );
+        // Let Bun finish the current microtask checkpoint before exiting.
+        // Calling process.exit() from this promise callback can tear down
+        // JSC while VM::drainMicrotasks() is still running on Windows.
+        out = out.replace("process.exit(0);", "process.exitCode = 0;");
+        out = out.replace("process.exit(1);", "process.exitCode = 1;");
         // Response bodies may contain arbitrary bytes (for example PNG or
         // WebP output). Keep the subprocess envelope text-safe by carrying
         // those bytes in a separate Base64 field; the host restores them
@@ -1598,6 +1603,8 @@ export async function GET() {
         );
         assert!(wrapped.contains("__tspHttpError__"), "got: {wrapped}");
         assert!(wrapped.contains("Promise.resolve().then"), "got: {wrapped}");
+        assert!(wrapped.contains("process.exitCode = 0;"), "got: {wrapped}");
+        assert!(!wrapped.contains("process.exit(0)"), "got: {wrapped}");
     }
 
     #[test]

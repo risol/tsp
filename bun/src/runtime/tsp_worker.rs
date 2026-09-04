@@ -232,6 +232,10 @@ fn execute_windows_cli(request: &protocol::ExecuteRequest) -> Result<String, Str
         .map_err(|error| format!("failed to locate the packaged TSP executable: {error}"))?;
     let output = Command::new(executable)
         .env("TSP_CLI_WORKER", "1")
+        // The startup trace belongs to the long-lived protocol supervisor.
+        // Keep the normal CLI child on Bun's ordinary process-main path.
+        .env_remove("TSP_WORKER_STARTUP_TRACE")
+        .env_remove("TSP_WORKER_STARTUP_TRACE_FILE")
         .arg(&path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
