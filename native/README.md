@@ -42,3 +42,12 @@ platform. The SDK's ABI-compatible allocator is supplied by the Rust
 dependency graph. Without the SDK, contract builds use link-only stubs and the
 executable fails before listening; it never silently falls back to another JS
 runtime.
+
+The reproducible CI/release SDK can be downloaded without checking out Bun:
+
+```text
+node scripts/fetch-tsp-jsc-sdk.mjs --output .cache/tsp-jsc-sdk
+```
+
+The downloader verifies the pinned WebKit release checksum and writes the
+target metadata next to the headers and libraries.

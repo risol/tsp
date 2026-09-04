@@ -1,0 +1,22 @@
+{
+  "sdkVersion": 1,
+  "runtimeAbi": 1,
+  "repository": "https://github.com/oven-sh/WebKit",
+  "releaseTag": "autobuild-b9a6abf2d59854e9004155d156b3b751b638d0ec",
+  "webkitRevision": "b9a6abf2d59854e9004155d156b3b751b638d0ec",
+  "allocator": "webkit-bmalloc",
+  "assets": {
+    "linux-x64": {
+      "name": "bun-webkit-linux-amd64.tar.gz",
+      "sha256": "3c2942bc18180101df5dd184dcac51c72dfe4c11276527e8439bbe04d41a4c4c"
+    },
+    "windows-x64": {
+      "name": "bun-webkit-windows-amd64.tar.gz",
+      "sha256": "494cbc4e9f02df981bf6bcd1259724dc1683d1ad6d3c126f440620f569646675"
+    },
+    "macos-arm64": {
+      "name": "bun-webkit-macos-arm64.tar.gz",
+      "sha256": "263ae1e24a5200aaeb00d4ea5598947092d42f5919775c9b170f3df700100adc"
+    }
+  }
+}

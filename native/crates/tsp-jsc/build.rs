@@ -24,6 +24,20 @@ fn main() {
     if !include.is_dir() || !lib.is_dir() {
         panic!("TSP_JSC_SDK_ROOT must contain include and lib directories");
     }
+    let metadata = webkit_root.join("metadata.json");
+    if metadata.is_file() {
+        let metadata = std::fs::read_to_string(&metadata)
+            .expect("TSP_JSC_SDK_ROOT metadata.json must be readable");
+        if !metadata.contains("\"sdkVersion\": 1")
+            || !metadata.contains("\"runtimeAbi\": 1")
+        {
+            panic!("TSP_JSC_SDK_ROOT metadata.json is incompatible with this runtime");
+        }
+    } else {
+        println!(
+            "cargo:warning=TSP_JSC_SDK_ROOT has no metadata.json; SDK provenance is unverified"
+        );
+    }
     let mut build = cc::Build::new();
     build
         .cpp(true)

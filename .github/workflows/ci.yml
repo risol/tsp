@@ -79,6 +79,96 @@ jobs:
       - name: Check native FFI feature
         run: cargo check --manifest-path native/Cargo.toml -p tsp-jsc --features native-ffi
 
+  standalone-native:
+    name: Standalone native E2E (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    needs: [compiler, native-contract]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install LLVM toolchain (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-21 main" | sudo tee /etc/apt/sources.list.d/llvm.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends clang-21
+
+      - name: Install LLVM toolchain (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install llvm@21
+          echo "$(brew --prefix llvm@21)/bin" >> "$GITHUB_PATH"
+
+      - name: Install LLVM toolchain (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $url = 'https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.0/LLVM-21.1.0-win64.exe'
+          $installer = Join-Path $env:TEMP 'llvm-installer.exe'
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          $proc = Start-Process -FilePath $installer -ArgumentList '/S' -PassThru -Wait
+          if ($proc.ExitCode -ne 0) { throw "LLVM installer exit code: $($proc.ExitCode)" }
+          Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\LLVM\bin'
+
+      - name: Download pinned TSP JSC SDK (Unix)
+        if: matrix.os != 'windows-latest'
+        run: node scripts/fetch-tsp-jsc-sdk.mjs --output "$RUNNER_TEMP/tsp-jsc-sdk"
+
+      - name: Download pinned TSP JSC SDK (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: node scripts/fetch-tsp-jsc-sdk.mjs --output "$env:RUNNER_TEMP\tsp-jsc-sdk"
+
+      - name: Run standalone application E2E (Unix)
+        if: matrix.os != 'windows-latest'
+        env:
+          TSP_JSC_SDK_ROOT: ${{ runner.temp }}/tsp-jsc-sdk
+          TSP_NATIVE_E2E_ROOT: native/fixtures/pages
+          TSP_REQUIRE_E2E: '1'
+        run: node scripts/native-e2e.mjs
+
+      - name: Run standalone application E2E (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        env:
+          TSP_JSC_SDK_ROOT: ${{ runner.temp }}\tsp-jsc-sdk
+          TSP_NATIVE_E2E_ROOT: native/fixtures/pages
+          TSP_REQUIRE_E2E: '1'
+        run: |
+          $env:CXX = 'clang-cl.exe'
+          node scripts/native-e2e.mjs
+
+      - name: Build standalone release package (Unix)
+        if: matrix.os != 'windows-latest'
+        env:
+          TSP_JSC_SDK_ROOT: ${{ runner.temp }}/tsp-jsc-sdk
+        run: cargo build --manifest-path native/Cargo.toml --release -p tsp-cli -p tsp-worker
+
+      - name: Build standalone release package (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        env:
+          TSP_JSC_SDK_ROOT: ${{ runner.temp }}\tsp-jsc-sdk
+        run: |
+          $env:CXX = 'clang-cl.exe'
+          cargo build --manifest-path native/Cargo.toml --release -p tsp-cli -p tsp-worker
+
   native-linux:
     name: Native runtime (Linux)
     runs-on: ubuntu-latest
