@@ -7,6 +7,10 @@ import { fileURLToPath } from "node:url";
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const jscSdkRoot = process.env.TSP_JSC_SDK_ROOT ?? process.env.TSP_WEBKIT_ROOT;
 if (!jscSdkRoot) {
+  if (process.env.TSP_REQUIRE_E2E === "1") {
+    console.error("native application E2E requires TSP_JSC_SDK_ROOT");
+    process.exit(1);
+  }
   console.log("native application E2E skipped: TSP_JSC_SDK_ROOT is not configured");
   process.exit(0);
 }

@@ -234,6 +234,7 @@ jobs:
           export TSP_WEBKIT_ROOT="$(find "$HOME/.bun/build-cache" -maxdepth 1 -type d -name 'webkit-*' -exec test -f '{}/include/JavaScriptCore/JavaScript.h' \; -exec test -f '{}/lib/libJavaScriptCore.a' \; -print -quit)"
           test -n "$TSP_WEBKIT_ROOT"
           export TSP_NATIVE_E2E_ROOT=pages
+          export TSP_REQUIRE_E2E=1
           export TSP_JSC_TRACE=1
           node scripts/native-e2e.mjs
 
@@ -314,6 +315,7 @@ jobs:
           if ($null -eq $root) { throw 'No Windows WebKit prebuilt with TSP JSC headers was found' }
           $env:TSP_WEBKIT_ROOT = $root.FullName
           $env:TSP_NATIVE_E2E_ROOT = 'pages'
+          $env:TSP_REQUIRE_E2E = '1'
           $env:TSP_JSC_TRACE = '1'
           node scripts/native-e2e.mjs
 
@@ -400,6 +402,7 @@ jobs:
           export TSP_WEBKIT_ROOT="$(find "$HOME/.bun/build-cache" -maxdepth 1 -type d -name 'webkit-*' -exec test -f '{}/include/JavaScriptCore/JavaScript.h' \; -exec test -f '{}/lib/libJavaScriptCore.a' \; -print -quit)"
           test -n "$TSP_WEBKIT_ROOT"
           export TSP_NATIVE_E2E_ROOT=pages
+          export TSP_REQUIRE_E2E=1
           export TSP_JSC_TRACE=1
           node scripts/native-e2e.mjs
 
