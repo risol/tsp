@@ -138,7 +138,7 @@ impl ProcessWorker {
     ) -> Result<Response, WorkerError> {
         let request_id = request.request_id.clone();
         self.send(WorkerCommand::Execute {
-            request,
+            request: Box::new(request),
             route,
             params,
         })?;

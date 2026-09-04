@@ -150,7 +150,7 @@ pub enum WorkerCommand {
         filename: String,
     },
     Execute {
-        request: RequestEnvelope,
+        request: Box<RequestEnvelope>,
         route: RouteSpec,
         params: HashMap<String, String>,
     },

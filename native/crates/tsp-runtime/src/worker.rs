@@ -165,7 +165,7 @@ struct Job {
 }
 
 enum Command {
-    Execute(Job),
+    Execute(Box<Job>),
     Shutdown,
 }
 
@@ -262,12 +262,12 @@ impl WorkerPool {
         let worker_index = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.senders.len();
         let (reply, response) = mpsc::sync_channel(1);
         self.senders[worker_index]
-            .send(Command::Execute(Job {
+            .send(Command::Execute(Box::new(Job {
                 request,
                 route: route.clone(),
                 params,
                 reply,
-            }))
+            })))
             .map_err(|_| WorkerError::QueueClosed)?;
         response.recv().map_err(|_| WorkerError::QueueClosed)?
     }

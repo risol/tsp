@@ -98,7 +98,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } => {
                 let request_id = Some(request.request_id.clone());
                 let event = match executor.as_mut() {
-                    Some(executor) => match executor.execute(request, route, params) {
+                    Some(executor) => match executor.execute(*request, route, params) {
                         Ok(response) => WorkerEvent::Result(response),
                         Err(error) => WorkerEvent::Error {
                             request_id,

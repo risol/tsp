@@ -121,10 +121,10 @@ pub fn parse_request_with_header_limit(
             let parsed = value
                 .parse::<usize>()
                 .map_err(|_| ParseError::InvalidContentLength)?;
-            if let Some(previous) = content_length {
-                if previous != parsed {
-                    return Err(ParseError::InvalidContentLength);
-                }
+            if let Some(previous) = content_length
+                && previous != parsed
+            {
+                return Err(ParseError::InvalidContentLength);
             }
             content_length = Some(parsed);
         }
@@ -373,14 +373,12 @@ impl Server {
         let permit_receiver = Arc::new(std::sync::Mutex::new(permit_receiver));
         for stream in self.listener.incoming() {
             let mut stream = stream?;
-            let permit = match permit_receiver
+            match permit_receiver
                 .lock()
-                .map_err(|_| {
-                    io::Error::new(io::ErrorKind::Other, "connection permit lock poisoned")
-                })?
+                .map_err(|_| io::Error::other("connection permit lock poisoned"))?
                 .try_recv()
             {
-                Ok(permit) => permit,
+                Ok(()) => {}
                 Err(TryRecvError::Empty) => {
                     let _ = stream.write_all(
                         &Response::new(503, "connection limit reached")
@@ -395,19 +393,18 @@ impl Server {
                         "connection permits closed",
                     ));
                 }
-            };
+            }
             let handler = Arc::clone(&handler);
             let limits = self.limits;
             let permit_sender = permit_sender.clone();
             thread::spawn(move || {
-                let _permit = permit;
                 let _ = stream.set_read_timeout(Some(limits.read_timeout));
                 let _ = stream.set_write_timeout(Some(limits.write_timeout));
                 let result = serve_connection(&mut stream, limits, |request| handler(request));
                 if let Err(error) = result {
                     let _ = write_internal_error(&mut stream, &error);
                 }
-                let _ = permit_sender.send(_permit);
+                let _ = permit_sender.send(());
             });
         }
         Ok(())

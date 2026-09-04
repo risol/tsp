@@ -73,6 +73,9 @@ jobs:
       - name: Run native contract tests
         run: cargo test --manifest-path native/Cargo.toml --workspace
 
+      - name: Run native clippy checks
+        run: cargo clippy --manifest-path native/Cargo.toml --workspace --all-targets -- -D warnings
+
       - name: Check native FFI feature
         run: cargo check --manifest-path native/Cargo.toml -p tsp-jsc --features native-ffi
 
