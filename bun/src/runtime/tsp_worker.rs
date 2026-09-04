@@ -211,11 +211,10 @@ where
 /// Execute a generated route through the packaged Bun CLI on Windows.
 ///
 /// The long-lived worker remains the protocol, timeout, and recycling
-/// boundary. A request child is the same single-file executable without the
-/// `--tsp-worker` dispatch flag, so Bun initializes its standard process-main
-/// event loop before running async route code. This avoids the hosted-runner
-/// JSC microtask crash at the custom embedding boundary without introducing a
-/// second runtime binary.
+/// boundary. The request child is the standard Bun CLI, so Bun initializes its
+/// normal process-main event loop before running async route code. The CLI is
+/// resolved from `TSP_BUN_BIN` or PATH; the packaged `tspserver.exe` is a
+/// server-only binary and must not be used as a script runner.
 #[cfg(windows)]
 fn execute_windows_cli(request: &protocol::ExecuteRequest) -> Result<String, String> {
     use std::process::{Command, Stdio};
@@ -230,10 +229,10 @@ fn execute_windows_cli(request: &protocol::ExecuteRequest) -> Result<String, Str
     ));
     std::fs::write(&path, &request.script)
         .map_err(|error| format!("failed to materialize Windows route module: {error}"))?;
-    let executable = std::env::current_exe()
-        .map_err(|error| format!("failed to locate packaged Bun executable: {error}"))?;
+    let executable = std::env::var_os("TSP_BUN_BIN")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("bun"));
     let output = Command::new(executable)
-        .arg("run")
         .arg(&path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
