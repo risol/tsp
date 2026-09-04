@@ -2,20 +2,25 @@
 
 This workspace is the replacement runtime for the Bun-backed prototype.
 
-The dependency direction is intentionally one-way:
+The dependency direction is intentionally layered:
 
 ```text
-tsp-cli -> tsp-runtime -> tsp-jsc -> JavaScriptCore/WebKit
+tsp-cli -> tsp-runtime -> tsp-js <- tsp-jsc -> JavaScriptCore/WebKit
+             │
+             └─────────────── tsp-core
 ```
 
-`tsp-jsc` is the only crate allowed to contain JavaScriptCore FFI. It owns VM
+`tsp-core` contains the engine- and transport-neutral domain model and
+versioned protocol types. `tsp-js` defines the JavaScript capability boundary.
+`tsp-jsc` is the only crate allowed to contain JavaScriptCore FFI; it owns VM
 thread affinity, native buffer ownership, evaluation errors, and microtask
 checkpoints. It must not expose Bun runtime types.
 
-`tsp-runtime` owns route matching, request/response contracts, the worker pool,
-and the request-to-JavaScript dispatch protocol. The compiler emits the
-manifest and bundle consumed here. `tsp-cli` loads that bundle into one JSC VM
-per worker and serves it over the TSP-owned HTTP/1.1 server.
+`tsp-runtime` owns route execution orchestration and the worker pool while
+depending only on `tsp-core` and `tsp-js`; it does not know JavaScriptCore or
+Bun. `tsp-http` adapts sockets to `tsp-core` values, and `tsp-cli` composes the
+JSC adapter, host runtime, and HTTP server. The compiler emits the manifest
+and bundle consumed here.
 
 Run the current boundary tests with:
 

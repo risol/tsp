@@ -4,9 +4,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tsp_http::{Request, Response, Server, ServerLimits};
-use tsp_runtime::worker::{NativeRouteExecutor, WorkerError};
-use tsp_runtime::{CompiledManifest, RouteTable, WorkerPool};
+use tsp_core::{CompiledManifest, Request, Response, RouteTable};
+use tsp_http::{Server, ServerLimits};
+use tsp_jsc::{Engine, NativeBackend};
+use tsp_runtime::WorkerPool;
+use tsp_runtime::worker::{RouteExecutor, WorkerError};
 
 #[derive(Debug)]
 struct Options {
@@ -31,7 +33,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let table = Arc::new(RouteTable::from_manifest(&manifest)?);
     let bundle_name = bundle_path.display().to_string();
     let pool = Arc::new(WorkerPool::try_new(options.workers, move |_| {
-        NativeRouteExecutor::new(&bundle, &bundle_name)
+        let backend =
+            NativeBackend::new().map_err(|error| WorkerError::Execution(error.to_string()))?;
+        RouteExecutor::new(Engine::new(backend), &bundle, &bundle_name)
     })?);
     let handler = move |request: Request| {
         let pathname = request

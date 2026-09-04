@@ -7,16 +7,13 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::{self, JoinHandle};
 
 use crate::{Request, Response, RouteSpec};
+use tsp_js::JsRuntime;
 
-#[cfg(feature = "native-ffi")]
 use serde_json::json;
-
-#[cfg(feature = "native-ffi")]
-use tsp_jsc::{Engine, NativeBackend};
 
 pub trait WorkerExecutor: 'static {
     fn execute(
@@ -44,7 +41,6 @@ impl std::fmt::Display for WorkerError {
 
 impl std::error::Error for WorkerError {}
 
-#[cfg(feature = "native-ffi")]
 const RUNTIME_PRELUDE: &str = r#"
 (function () {
   "use strict";
@@ -170,22 +166,21 @@ const RUNTIME_PRELUDE: &str = r#"
 })();
 "#;
 
-#[cfg(feature = "native-ffi")]
 /// A route executor that loads one compiler bundle into one owner-thread JSC VM.
 /// Request values cross the boundary as JSON; no JSC value is shared with the
 /// HTTP socket thread or another worker.
-pub struct NativeRouteExecutor {
-    engine: Engine<NativeBackend>,
+pub struct RouteExecutor<J> {
+    engine: J,
 }
 
-#[cfg(feature = "native-ffi")]
-impl NativeRouteExecutor {
-    pub fn new(bundle: &str, filename: &str) -> Result<Self, WorkerError> {
-        let mut engine = Engine::new(NativeBackend::new().map_err(native_error)?);
+impl<J: JsRuntime> RouteExecutor<J> {
+    pub fn new(mut engine: J, bundle: &str, filename: &str) -> Result<Self, WorkerError> {
         engine
             .evaluate(RUNTIME_PRELUDE, "tsp-runtime-prelude.js")
-            .map_err(native_error)?;
-        engine.evaluate(bundle, filename).map_err(native_error)?;
+            .map_err(|error| WorkerError::Execution(error.to_string()))?;
+        engine
+            .evaluate(bundle, filename)
+            .map_err(|error| WorkerError::Execution(error.to_string()))?;
         Ok(Self { engine })
     }
 
@@ -247,8 +242,7 @@ impl NativeRouteExecutor {
     }
 }
 
-#[cfg(feature = "native-ffi")]
-impl WorkerExecutor for NativeRouteExecutor {
+impl<J: JsRuntime + 'static> WorkerExecutor for RouteExecutor<J> {
     fn execute(
         &mut self,
         request: Request,
@@ -258,16 +252,18 @@ impl WorkerExecutor for NativeRouteExecutor {
         let source = Self::dispatch_source(&request, &route, &params)?;
         self.engine
             .evaluate(&source, "tsp-request.js")
-            .map_err(native_error)?;
-        self.engine.drain_microtasks().map_err(native_error)?;
+            .map_err(|error| WorkerError::Execution(error.to_string()))?;
+        self.engine
+            .drain_microtasks()
+            .map_err(|error| WorkerError::Execution(error.to_string()))?;
         let state = self
             .engine
             .evaluate(
                 "JSON.stringify({pending: !!globalThis.__tsp_pending, error: globalThis.__tsp_error || null, result: globalThis.__tsp_result || null})",
                 "tsp-response.js",
             )
-            .map_err(native_error)?;
-        let state: serde_json::Value = serde_json::from_str(&state.0).map_err(|error| {
+            .map_err(|error| WorkerError::Execution(error.to_string()))?;
+        let state: serde_json::Value = serde_json::from_str(&state).map_err(|error| {
             WorkerError::Execution(format!("response JSON is invalid: {error}"))
         })?;
         if state["pending"].as_bool().unwrap_or(false) {
@@ -283,11 +279,6 @@ impl WorkerExecutor for NativeRouteExecutor {
     }
 }
 
-#[cfg(feature = "native-ffi")]
-fn native_error(error: tsp_jsc::Error) -> WorkerError {
-    WorkerError::Execution(error.to_string())
-}
-
 struct Job {
     request: Request,
     route: RouteSpec,
@@ -301,7 +292,7 @@ enum Command {
 }
 
 pub struct WorkerPool {
-    senders: Vec<Sender<Command>>,
+    senders: Vec<SyncSender<Command>>,
     next_worker: AtomicUsize,
     handles: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -327,10 +318,11 @@ impl WorkerPool {
         }
 
         let factory = std::sync::Arc::new(factory);
-        let mut senders: Vec<Sender<Command>> = Vec::with_capacity(count);
+        const WORKER_QUEUE_CAPACITY: usize = 64;
+        let mut senders: Vec<SyncSender<Command>> = Vec::with_capacity(count);
         let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
         for worker_id in 0..count {
-            let (sender, receiver) = mpsc::channel();
+            let (sender, receiver) = mpsc::sync_channel(WORKER_QUEUE_CAPACITY);
             let factory = std::sync::Arc::clone(&factory);
             let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
             let handle = thread::Builder::new()

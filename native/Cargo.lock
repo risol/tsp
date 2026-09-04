@@ -113,8 +113,18 @@ name = "tsp-cli"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "tsp-core",
  "tsp-http",
+ "tsp-jsc",
  "tsp-runtime",
+]
+
+[[package]]
+name = "tsp-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -122,13 +132,19 @@ name = "tsp-http"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "tsp-core",
 ]
+
+[[package]]
+name = "tsp-js"
+version = "0.1.0"
 
 [[package]]
 name = "tsp-jsc"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "tsp-js",
 ]
 
 [[package]]
@@ -137,8 +153,8 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
- "tsp-http",
- "tsp-jsc",
+ "tsp-core",
+ "tsp-js",
 ]
 
 [[package]]

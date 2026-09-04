@@ -10,25 +10,9 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::thread;
 
+pub use tsp_core::{Request, Response};
+
 const DEFAULT_MAX_HEADER_BYTES: usize = 64 * 1024;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Request {
-    pub method: String,
-    pub target: String,
-    pub version: String,
-    pub headers: Vec<(String, String)>,
-    pub body: Vec<u8>,
-}
-
-impl Request {
-    pub fn header(&self, name: &str) -> Option<&str> {
-        self.headers
-            .iter()
-            .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
-            .map(|(_, value)| value.as_str())
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
@@ -201,23 +185,12 @@ fn is_token(value: &str) -> bool {
         })
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
-pub struct Response {
-    pub status: u16,
-    pub headers: Vec<(String, String)>,
-    pub body: Vec<u8>,
+pub trait ResponseSerializeExt {
+    fn serialize(&self) -> Result<Vec<u8>, ResponseError>;
 }
 
-impl Response {
-    pub fn new(status: u16, body: impl Into<Vec<u8>>) -> Self {
-        Self {
-            status,
-            headers: Vec::new(),
-            body: body.into(),
-        }
-    }
-
-    pub fn serialize(&self) -> Result<Vec<u8>, ResponseError> {
+impl ResponseSerializeExt for Response {
+    fn serialize(&self) -> Result<Vec<u8>, ResponseError> {
         if !(100..=999).contains(&self.status) {
             return Err(ResponseError::InvalidStatus);
         }

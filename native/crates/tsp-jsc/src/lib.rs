@@ -212,6 +212,18 @@ impl<B: Backend> Engine<B> {
     }
 }
 
+impl<B: Backend> tsp_js::JsRuntime for Engine<B> {
+    type Error = Error;
+
+    fn evaluate(&mut self, source: &str, filename: &str) -> Result<String, Self::Error> {
+        Engine::evaluate(self, source, filename).map(|value| value.0)
+    }
+
+    fn drain_microtasks(&mut self) -> Result<(), Self::Error> {
+        Engine::drain_microtasks(self)
+    }
+}
+
 #[cfg(feature = "mock")]
 #[derive(Debug, Default)]
 pub struct MockBackend {

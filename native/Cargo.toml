@@ -1,8 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
+  "crates/tsp-core",
   "crates/tsp-cli",
   "crates/tsp-jsc",
+  "crates/tsp-js",
   "crates/tsp-http",
   "crates/tsp-runtime",
 ]

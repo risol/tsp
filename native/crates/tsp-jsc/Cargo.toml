@@ -6,6 +6,9 @@ license.workspace = true
 description = "Small JavaScriptCore ownership boundary for TSP"
 build = "build.rs"
 
+[dependencies]
+tsp-js = { path = "../tsp-js" }
+
 [features]
 default = ["mock"]
 mock = []
