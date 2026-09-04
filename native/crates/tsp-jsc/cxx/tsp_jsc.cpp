@@ -237,7 +237,7 @@ extern "C" TSP_JSC_EXPORT TspJscResult tsp_jsc_call_json(
     JSValueRef exception = nullptr;
     JSValueRef functionValue = JSObjectGetProperty(
         vm->context,
-        globalObject,
+        reinterpret_cast<JSObjectRef>(globalObject),
         functionString,
         &exception);
     JSValueRef argumentValue = nullptr;
@@ -253,7 +253,7 @@ extern "C" TSP_JSC_EXPORT TspJscResult tsp_jsc_call_json(
         JSValueRef value = JSObjectCallAsFunction(
             vm->context,
             JSValueToObject(vm->context, functionValue, &exception),
-            globalObject,
+            reinterpret_cast<JSObjectRef>(globalObject),
             1,
             &argumentValue,
             &exception);
