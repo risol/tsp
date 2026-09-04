@@ -4,3 +4,6 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Small HTTP/1.1 parser and response writer for TSP"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }

@@ -15,6 +15,8 @@ public/*
 bun/build/
 bun/target/
 native/target/
+native/fixtures/build/
+.tsp-build-native-check/
 bun/vendor/
 bun/node_modules/
 .bun-bootstrap/

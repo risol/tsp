@@ -5,6 +5,9 @@ use std::collections::HashMap;
 
 pub use tsp_http::{Request, Response};
 
+pub mod worker;
+pub use worker::{WorkerError, WorkerExecutor, WorkerPool};
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct RouteSpec {
     pub path: String,
@@ -51,6 +54,18 @@ pub enum RouteError {
     InvalidPath(String),
     DuplicatePath(String),
 }
+
+impl std::fmt::Display for RouteError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyPath => formatter.write_str("route path cannot be empty"),
+            Self::InvalidPath(path) => write!(formatter, "invalid route path: {path}"),
+            Self::DuplicatePath(path) => write!(formatter, "duplicate route path: {path}"),
+        }
+    }
+}
+
+impl std::error::Error for RouteError {}
 
 #[derive(Debug, Default)]
 pub struct RouteTable {

@@ -201,7 +201,7 @@ fn is_token(value: &str) -> bool {
         })
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct Response {
     pub status: u16,
     pub headers: Vec<(String, String)>,
@@ -397,6 +397,10 @@ fn reason_phrase(status: u16) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::thread;
+
     use super::*;
 
     #[test]
@@ -445,5 +449,29 @@ mod tests {
         assert!(output.starts_with("HTTP/1.1 200 OK\r\n"));
         assert!(output.contains("Content-Length: 2\r\n"));
         assert!(output.ends_with("\r\nok"));
+    }
+
+    #[test]
+    fn serves_one_complete_application_request_over_tcp() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            serve_connection(&mut stream, ServerLimits::default(), |request| {
+                Response::new(200, format!("{} {}", request.method, request.target))
+            })
+            .unwrap();
+        });
+
+        let mut client = TcpStream::connect(address).unwrap();
+        client
+            .write_all(b"GET /native?q=1 HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .unwrap();
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).unwrap();
+        server.join().unwrap();
+        let response = String::from_utf8(response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(response.ends_with("\r\nGET /native?q=1"));
     }
 }

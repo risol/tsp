@@ -1,0 +1,172 @@
+/*
+ * TSP's minimal JavaScriptCore bridge.
+ *
+ * This file intentionally uses JavaScriptCore's public C API plus the small
+ * VM accessor needed to drain microtasks. It does not create Bun's global
+ * object and does not depend on Bun's runtime, event loop, module loader, or
+ * transpiler.
+ */
+#if defined(TSP_JSC_BUN_BUILD)
+#include "root.h"
+#endif
+
+#include "../include/tsp_jsc.h"
+#include <JavaScriptCore/APICast.h>
+#include <JavaScriptCore/GetVM.h>
+#include <JavaScriptCore/JSLock.h>
+#include <JavaScriptCore/JavaScript.h>
+#include <JavaScriptCore/VM.h>
+
+#include <cstdlib>
+#include <cstring>
+
+struct TspJscVm {
+    JSGlobalContextRef context;
+};
+
+static TspJscBuffer copyString(JSStringRef value)
+{
+    if (!value)
+        return {};
+    size_t capacity = JSStringGetMaximumUTF8CStringSize(value);
+    auto* bytes = static_cast<unsigned char*>(std::malloc(capacity));
+    if (!bytes)
+        return {};
+    size_t lengthWithTerminator = JSStringGetUTF8CString(
+        value,
+        reinterpret_cast<char*>(bytes),
+        capacity);
+    if (lengthWithTerminator == 0) {
+        std::free(bytes);
+        return {};
+    }
+    return { bytes, lengthWithTerminator - 1 };
+}
+
+static TspJscBuffer copyLiteral(const char* value)
+{
+    JSStringRef string = JSStringCreateWithUTF8CString(value);
+    if (!string)
+        return {};
+    TspJscBuffer result = copyString(string);
+    JSStringRelease(string);
+    return result;
+}
+
+static TspJscBuffer copyValueAsString(JSContextRef context, JSValueRef value)
+{
+    JSValueRef conversionException = nullptr;
+    JSStringRef string = JSValueToStringCopy(context, value, &conversionException);
+    if (!string)
+        return {};
+    TspJscBuffer result = copyString(string);
+    JSStringRelease(string);
+    return result;
+}
+
+static JSStringRef createString(TspJscBuffer input)
+{
+    if ((!input.ptr && input.len != 0)
+        || (input.len != 0 && std::memchr(input.ptr, 0, input.len)))
+        return nullptr;
+    auto* bytes = static_cast<char*>(std::malloc(input.len + 1));
+    if (!bytes)
+        return nullptr;
+    if (input.len)
+        std::memcpy(bytes, input.ptr, input.len);
+    bytes[input.len] = 0;
+    JSStringRef result = JSStringCreateWithUTF8CString(bytes);
+    std::free(bytes);
+    return result;
+}
+
+extern "C" TSP_JSC_EXPORT int32_t tsp_jsc_initialize(void)
+{
+    // JSGlobalContextCreate performs JSC process initialization. Keeping this
+    // function explicit gives Rust a stable startup gate without importing
+    // Bun's global startup sequence.
+    return 0;
+}
+
+extern "C" TSP_JSC_EXPORT TspJscVm* tsp_jsc_vm_create(void)
+{
+    auto* vm = static_cast<TspJscVm*>(std::calloc(1, sizeof(TspJscVm)));
+    if (!vm)
+        return nullptr;
+    vm->context = JSGlobalContextCreate(nullptr);
+    if (!vm->context) {
+        std::free(vm);
+        return nullptr;
+    }
+    return vm;
+}
+
+extern "C" TSP_JSC_EXPORT void tsp_jsc_vm_destroy(TspJscVm* vm)
+{
+    if (!vm)
+        return;
+    if (vm->context)
+        JSGlobalContextRelease(vm->context);
+    std::free(vm);
+}
+
+extern "C" TSP_JSC_EXPORT TspJscResult tsp_jsc_evaluate(
+    TspJscVm* vm,
+    TspJscBuffer source,
+    TspJscBuffer filename)
+{
+    TspJscResult result {};
+    if (!vm || !vm->context || (!source.ptr && source.len != 0)) {
+        result.error = copyLiteral("invalid JSC evaluation input");
+        return result;
+    }
+
+    JSStringRef sourceString = createString(source);
+    JSStringRef filenameString = filename.ptr ? createString(filename) : nullptr;
+    if (!sourceString || (filename.ptr && !filenameString)) {
+        if (sourceString)
+            JSStringRelease(sourceString);
+        if (filenameString)
+            JSStringRelease(filenameString);
+        result.error = copyLiteral("failed to allocate JSC source string");
+        return result;
+    }
+
+    JSValueRef exception = nullptr;
+    JSValueRef value = JSEvaluateScript(
+        vm->context,
+        sourceString,
+        nullptr,
+        filenameString,
+        1,
+        &exception);
+    if (exception) {
+        result.error = copyValueAsString(vm->context, exception);
+    } else if (value) {
+        result.ok = 1;
+        result.value = copyValueAsString(vm->context, value);
+    }
+
+    JSStringRelease(sourceString);
+    if (filenameString)
+        JSStringRelease(filenameString);
+    return result;
+}
+
+extern "C" TSP_JSC_EXPORT int32_t tsp_jsc_drain_microtasks(TspJscVm* vm)
+{
+    if (!vm || !vm->context)
+        return 1;
+    auto* globalObject = toJSGlobalObject(vm->context);
+    auto& jscVm = JSC::getVM(globalObject);
+    JSC::JSLockHolder lock(jscVm);
+    jscVm.drainMicrotasks();
+    return 0;
+}
+
+extern "C" TSP_JSC_EXPORT void tsp_jsc_buffer_free(TspJscBuffer buffer)
+{
+    // Every buffer returned by this file is malloc-owned. Never pass it to
+    // Rust, mimalloc, WebKit, or a C++ delete expression for deallocation.
+    std::free(const_cast<unsigned char*>(buffer.ptr));
+}

@@ -1,0 +1,11 @@
+[package]
+name = "tsp-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "TSP's standalone HTTP application host"
+
+[dependencies]
+tsp-http = { path = "../tsp-http" }
+tsp-runtime = { path = "../tsp-runtime", features = ["native-ffi"] }
+serde_json = "1"

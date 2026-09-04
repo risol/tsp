@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "TSP-owned route and request runtime"
 
+[features]
+default = []
+native-ffi = ["tsp-jsc/native-ffi"]
+
 [dependencies]
 tsp-jsc = { path = "../tsp-jsc" }
 tsp-http = { path = "../tsp-http" }

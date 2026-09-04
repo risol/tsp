@@ -4,8 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Small JavaScriptCore ownership boundary for TSP"
+build = "build.rs"
 
 [features]
 default = ["mock"]
 mock = []
 native-ffi = []
+
+[build-dependencies]
+cc = "1"

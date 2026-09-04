@@ -174,8 +174,8 @@ function compileSource(fileName, source) {
       jsx: ts.JsxEmit.React,
       jsxFactory: "__tsp_jsx",
       jsxFragmentFactory: "__tsp_fragment",
-      sourceMap: true,
-      inlineSources: true,
+      sourceMap: false,
+      inlineSources: false,
       importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove,
     },
   });
