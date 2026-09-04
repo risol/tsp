@@ -1,17 +1,15 @@
 //! JSC execution bridge for TSP PoC 1 slice 6.
 //!
-//! See `tsp-plan.md` sect.25.3 ("JSC 是执行引擎"). Slice 6
-//! intentionally does not pull in `bun_runtime` (cold compile 20-40
-//! min) nor wire `bun_jsc` directly (no standalone embeddable VM
-//! per slice 4's discovery). Instead, the host spawns the project's
-//! vendored `bun.exe` (1.4.0+) as a subprocess and asks it to
-//! evaluate a slice-6-prepared `.js` file. That keeps the
-//! "JavaScriptCore is the execution engine" promise while staying
-//! small enough to ship this session.
+//! See `tsp-plan.md` sect.25.3 ("JSC 是执行引擎"). The production bridge
+//! uses the Bun-linked worker pool: each worker owns one JSC VM and evaluates
+//! the generated wrapper through the native transpiler and request protocol.
+//! The packaged TSP executable is self-contained and does not resolve a
+//! second Bun binary from PATH.
 //!
-//! The actual `bun_runtime` integration (in-process JSC VM, native
-//! module loader, the `tsp:*` builtins) lands in slice 7+ when we
-//! have the time budget for the heavy cold compile.
+//! The production bridge uses the Bun-linked embedded worker pool. Each
+//! worker owns one JSC VM and evaluates the generated wrapper through the
+//! native transpiler and request protocol; no external JavaScript runtime is
+//! required.
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -65,8 +63,8 @@ fn restart_workers_after_reload(pool: &WorkerPool) -> Result<(), JscError> {
 }
 
 
-/// One-shot cancellation shared by the host connection and the Bun
-/// subprocess watchdog. A cancelled request must never write a response.
+/// One-shot cancellation shared by the host connection and the worker
+/// watchdog. A cancelled request must never write a response.
 #[derive(Clone, Debug, Default)]
 pub struct CancellationToken {
     cancelled: Arc<AtomicBool>,
@@ -92,7 +90,7 @@ pub enum JscError {
     /// set `TSP_BUN_BIN` or run `bun install` to populate
     /// `.bun-bootstrap/node_modules/bun/bin/bun.exe`.
     BunNotFound { tried: PathBuf },
-    /// Spawning the bun process failed (permission, etc.).
+    /// Starting or communicating with the worker failed (permission, etc.).
     Spawn(io::Error),
     /// bun exited non-zero. We surface the stderr tail (truncated to
     /// 1 KiB) so a JS error from `pages/index.tsp` shows up in the
@@ -106,10 +104,9 @@ pub enum JscError {
     /// The request deadline expired. The stderr tail preserves the
     /// page-side abort evidence when the handler cooperated.
     TimedOut { stderr_tail: String },
-    /// bun ran but produced no stdout. Either the page's `GET()`
-    /// returned `undefined` or it threw after writing to stderr.
+    /// A worker completed without producing a response envelope.
     EmptyStdout,
-    /// I/O error from writing the prepared JS to a temp file.
+    /// I/O error from materializing a worker request.
     WriteTemp(io::Error),
     /// The TSX -> JS transform rejected the page source. This is
     /// the only `JscError` a `.tsp` author can fix by editing their
@@ -151,8 +148,7 @@ impl JscError {
     /// The TSP-NNNN code for this JSC bridge failure
     /// (spec sect.6.3 / slice 16h). The host threads
     /// this into the 500 body so the dev can grep for
-    /// the failure phase (jsx transform / subprocess
-    /// / empty stdout).
+    /// the failure phase (jsx transform / worker / empty response).
     pub fn code(&self) -> &'static str {
         match self {
             Self::BunNotFound { .. } => "TSP3010",
@@ -172,8 +168,8 @@ impl JscError {
     pub fn describe(&self) -> &'static str {
         match self {
             Self::BunNotFound { .. } => "bun binary not found",
-            Self::Spawn(_) => "bun subprocess spawn failed",
-            Self::BunFailed { .. } => "bun subprocess exited non-zero",
+            Self::Spawn(_) => "embedded worker failed",
+            Self::BunFailed { .. } => "embedded worker execution failed",
             Self::Cancelled => "request cancelled",
             Self::TimedOut { .. } => "request timed out",
             Self::EmptyStdout => "bun produced no stdout",
@@ -185,19 +181,13 @@ impl JscError {
 
 
 
-/// Execute the page's `method` handler. Reads the .tsp source
-/// (already prepared in slice 5 as `page::PageSource`), transforms
-/// it via `jsx::tsx_to_js`, writes the result to a temp `.js` file,
-/// spawns `bun run <tempfile>`, and returns the captured stdout.
+/// Execute the page's `method` handler. Reads the .tsp source, transforms it
+/// through TSP's TSX pipeline, and sends the generated wrapper to an embedded
+/// Bun worker over the native protocol.
 ///
 /// `timeout_ms` is the request timeout (spec sect.13.7).
-/// `0` disables the watchdog. When the watchdog fires
-/// (a) the host writes the abort marker to the bun
-/// subprocess's stdin, which the wrap preamble's
-/// listener turns into `__tspAbortCtrl.abort()`, and
-/// (b) the host kills the subprocess after a short
-/// grace period so a runaway page cannot hold the
-/// worker thread indefinitely.
+/// `0` disables the watchdog. The worker pool owns the hard deadline and
+/// recycles a worker when a route does not finish.
 /// `cancellation` is also triggered by a client disconnect;
 /// that path uses the same marker and grace period but returns
 /// `Cancelled` instead of a timeout error.
@@ -316,11 +306,10 @@ fn execute_inner(
     request_headers: Option<&[(String, String)]>,
     request_body: Option<&[u8]>,
 ) -> Result<String, JscError> {
-    // embedded-worker self-spawn only: every request goes through the WorkerPool
-    // backed by self-spawned `tspserver[.exe]` workers. There is no
-    // `bun run tempfile` fallback - the wrapper runs inside the worker's
-    // embedded Bun VM and returns through the master<->worker IPC channel
-    // (see `worker/manager.rs::WorkerManager::spawn`).
+    // Every request goes through the WorkerPool backed by self-spawned
+    // `tspserver[.exe]` workers. The wrapper runs inside the worker's embedded
+    // Bun VM and returns through the master-to-worker IPC channel (see
+    // `worker/manager.rs::WorkerManager::spawn`).
     let graph_temp = match source_dir {
         Some(dir) if cfg!(windows) => {
             let (source, temp) = jsx::prepare_cli_module_graph(source, dir, execution_generation())
@@ -336,17 +325,7 @@ fn execute_inner(
     };
     let source = graph_temp.0;
     let js_body = jsx::tsx_to_js(&source).map_err(JscError::Jsx)?;
-    // Windows uses the persistent worker as a protocol supervisor and runs
-    // each generated module through Bun's normal CLI lifecycle. The custom
-    // embedded VM reaches JSC::VM::drainMicrotasks but crashes there for
-    // ordinary async handlers on hosted Windows runners. The CLI path uses
-    // the same packaged executable and JSC engine while preserving Bun's
-    // proven event-loop initialization for Promise jobs.
-    let mut wrapped = if cfg!(windows) {
-        jsx::wrap_for_bun_cli(&js_body, method.as_str(), ctx_json)
-    } else {
-        jsx::wrap_for_embedded_worker(&js_body, method.as_str(), ctx_json)
-    };
+    let mut wrapped = jsx::wrap_for_embedded_worker(&js_body, method.as_str(), ctx_json);
     if let Some(path) = source_path {
         let source_url = format!(
             "tsp://{}?generation={}",

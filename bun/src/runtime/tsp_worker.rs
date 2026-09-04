@@ -9,7 +9,6 @@
 mod protocol;
 
 use protocol::{ExecuteResponse, Message, ProtocolError};
-#[cfg(not(windows))]
 use crate::jsc::JSValue;
 
 #[cfg(unix)]
@@ -18,7 +17,6 @@ use std::os::unix::net::UnixStream;
 use std::net::TcpStream;
 use std::io::{Read, Write};
 
-#[cfg(not(windows))]
 unsafe extern "C" {
     fn Bun__REPL__setupGlobalRequire(
         global_object: *const crate::jsc::JSGlobalObject,
@@ -114,9 +112,7 @@ fn serve_stream<S>(mut stream: S) -> i32
 where
     S: Read + Write,
 {
-    #[cfg(not(windows))]
     startup_trace("vm-init:begin");
-    #[cfg(not(windows))]
     let mut vm = match EmbeddedVm::initialize() {
         Ok(vm) => vm,
         Err(error) => {
@@ -124,10 +120,7 @@ where
             return 2;
         }
     };
-    #[cfg(not(windows))]
     startup_trace("vm-init:end");
-    #[cfg(windows)]
-    startup_trace("windows-cli-supervisor:ready");
 
     startup_trace("handshake:read-hello");
     match Message::read_from(&mut stream) {
@@ -165,9 +158,6 @@ where
         };
         match message {
             Message::Execute { id, request } => {
-                #[cfg(windows)]
-                let result = execute_windows_cli(&request);
-                #[cfg(not(windows))]
                 let result = vm.execute_request(&request);
                 let response = match result {
                     Ok(body) => Message::Response {
@@ -208,77 +198,6 @@ where
     }
 }
 
-/// Execute a generated route through the packaged Bun CLI on Windows.
-///
-/// The long-lived worker remains the protocol, timeout, and recycling
-/// boundary. The request child enters the standard Bun CLI lifecycle inside
-/// this same packaged executable, so Bun initializes its normal process-main
-/// event loop before running async route code.
-#[cfg(windows)]
-fn execute_windows_cli(request: &protocol::ExecuteRequest) -> Result<String, String> {
-    use std::process::{Command, Stdio};
-
-    let path = std::env::temp_dir().join(format!(
-        "tsp-embedded-worker-{}-{}.tsx",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|error| format!("worker clock failed: {error}"))?
-            .as_nanos()
-    ));
-    std::fs::write(&path, &request.script)
-        .map_err(|error| format!("failed to materialize Windows route module: {error}"))?;
-    let executable = std::env::current_exe()
-        .map_err(|error| format!("failed to locate the packaged TSP executable: {error}"))?;
-    // Keep the request child self-contained, but do not launch the packaged
-    // file under its `tspserver.exe` name. Bun's CLI path uses the executable
-    // name as part of its process-mode detection on Windows; a hard link keeps
-    // the exact same bytes and does not depend on PATH or a second runtime.
-    let cli_executable = executable
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join(format!(
-            "tsp-bun-cli-{}-{}.exe",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|error| format!("worker clock failed: {error}"))?
-                .as_nanos()
-        ));
-    std::fs::hard_link(&executable, &cli_executable)
-        .map_err(|error| format!("failed to link the packaged Bun CLI: {error}"))?;
-    let output = Command::new(&cli_executable)
-        .env("TSP_CLI_WORKER", "1")
-        // The startup trace belongs to the long-lived protocol supervisor.
-        // Keep the normal CLI child on Bun's ordinary process-main path.
-        .env_remove("TSP_WORKER_STARTUP_TRACE")
-        .env_remove("TSP_WORKER_STARTUP_TRACE_FILE")
-        .arg(&path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output();
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(&cli_executable);
-    let output = output.map_err(|error| format!("failed to start packaged Bun CLI: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "packaged Bun CLI exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let stdout = String::from_utf8(output.stdout)
-        .map_err(|_| "packaged Bun CLI response was not UTF-8".to_string())?;
-    let marker = "__TSP_OUT_V1__\n";
-    let envelope = stdout
-        .split_once(marker)
-        .map(|(_, value)| value.trim_end())
-        .ok_or_else(|| "packaged Bun CLI produced no TSP response envelope".to_string())?;
-    Ok(envelope.to_string())
-}
-
-#[cfg(not(windows))]
 struct EmbeddedVm {
     vm: &'static mut crate::jsc::VirtualMachineRef,
     _log: &'static mut bun_ast::Log,
@@ -289,11 +208,10 @@ struct EmbeddedVm {
     entry_path: Vec<u8>,
 }
 
-#[cfg(not(windows))]
 impl EmbeddedVm {
     fn initialize() -> Result<Self, String> {
         startup_trace("jsc-initialize:begin");
-        crate::jsc::initialize(false);
+        crate::jsc::initialize_for_tsp_worker(false);
         startup_trace("jsc-initialize:end");
         // This process evaluates a fresh generated top-level program for every
         // request. Disable JSC's VM-scoped script caches before the first VM is
