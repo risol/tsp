@@ -3,6 +3,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use tsp_core::{CompiledManifest, ErrorEnvelope, Request, Response, RouteTable};
 use tsp_http::{Server, ServerLimits};
@@ -14,6 +15,7 @@ struct Options {
     bundle: Option<PathBuf>,
     listen: String,
     workers: usize,
+    request_timeout: Duration,
     worker: Option<PathBuf>,
 }
 
@@ -33,7 +35,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let registry = Arc::new(GenerationRegistry::new());
     let generation = registry.publish(bundle, bundle_path.display().to_string())?;
     let worker_path = options.worker.unwrap_or_else(default_worker_path);
-    let workers = Arc::new(ProcessWorkerManager::new(worker_path, options.workers)?);
+    let workers = Arc::new(ProcessWorkerManager::with_timeout(
+        worker_path,
+        options.workers,
+        options.request_timeout,
+    )?);
     workers.load_generation(generation.id, &generation.bundle, &generation.filename)?;
     let handler = move |request: Request| {
         let pathname = request
@@ -99,6 +105,7 @@ impl Options {
         let mut bundle = None;
         let mut listen = "127.0.0.1:3000".to_owned();
         let mut workers = 1;
+        let mut request_timeout = Duration::from_secs(35);
         let mut worker = None;
         while let Some(argument) = args.next() {
             match argument.as_str() {
@@ -116,6 +123,17 @@ impl Options {
                         .parse()
                         .map_err(|_| "--workers must be a positive number")?
                 }
+                "--request-timeout-ms" => {
+                    let milliseconds = args
+                        .next()
+                        .ok_or("--request-timeout-ms needs a number")?
+                        .parse::<u64>()
+                        .map_err(|_| "--request-timeout-ms must be a positive number")?;
+                    if milliseconds == 0 {
+                        return Err("--request-timeout-ms must be a positive number".into());
+                    }
+                    request_timeout = Duration::from_millis(milliseconds);
+                }
                 "--worker" => {
                     worker = Some(PathBuf::from(args.next().ok_or("--worker needs a path")?))
                 }
@@ -128,18 +146,20 @@ impl Options {
             bundle,
             listen,
             workers,
+            request_timeout,
             worker,
         })
     }
 
     fn usage() -> String {
-        "usage: tsp-cli --manifest DIR/manifest.json [--bundle DIR/bundle.js] [--listen HOST:PORT] [--workers N] [--worker PATH]".to_owned()
+        "usage: tsp-cli --manifest DIR/manifest.json [--bundle DIR/bundle.js] [--listen HOST:PORT] [--workers N] [--request-timeout-ms N] [--worker PATH]".to_owned()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::time::Duration;
 
     use super::Options;
 
@@ -154,6 +174,7 @@ mod tests {
         assert_eq!(options.manifest, Path::new("manifest.json"));
         assert_eq!(options.listen, "127.0.0.1:3000");
         assert_eq!(options.workers, 1);
+        assert_eq!(options.request_timeout, Duration::from_secs(35));
         assert!(options.bundle.is_none());
     }
 
@@ -161,5 +182,16 @@ mod tests {
     fn rejects_unknown_arguments() {
         let error = Options::parse(["--nope"].into_iter().map(String::from)).unwrap_err();
         assert!(error.contains("unknown argument"));
+    }
+
+    #[test]
+    fn parses_request_timeout() {
+        let options = Options::parse(
+            ["--manifest", "manifest.json", "--request-timeout-ms", "250"]
+                .into_iter()
+                .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(options.request_timeout, Duration::from_millis(250));
     }
 }

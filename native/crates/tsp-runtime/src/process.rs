@@ -10,16 +10,19 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use crate::{Request, Response, RouteSpec, WorkerError};
 use tsp_core::{GenerationId, WORKER_PROTOCOL_VERSION, WorkerCommand, WorkerEvent};
 
 const MAX_FRAME_BYTES: u32 = 16 * 1024 * 1024;
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(35);
 
 struct ProcessWorker {
     child: Child,
     input: BufWriter<ChildStdin>,
-    output: BufReader<ChildStdout>,
+    output: Option<BufReader<ChildStdout>>,
     generation: Option<(GenerationId, String, String)>,
 }
 
@@ -42,7 +45,7 @@ impl ProcessWorker {
         let mut worker = Self {
             child,
             input: BufWriter::new(input),
-            output: BufReader::new(output),
+            output: Some(BufReader::new(output)),
             generation: None,
         };
         match worker.receive()? {
@@ -84,29 +87,103 @@ impl ProcessWorker {
     }
 
     fn receive(&mut self) -> Result<WorkerEvent, WorkerError> {
-        let mut length_bytes = [0; 4];
-        self.output.read_exact(&mut length_bytes).map_err(|error| {
-            WorkerError::Execution(format!("worker response read failed: {error}"))
-        })?;
-        let length = u32::from_be_bytes(length_bytes);
-        if !(1..=MAX_FRAME_BYTES).contains(&length) {
-            return Err(WorkerError::Execution(
-                "worker response length is invalid".into(),
-            ));
-        }
-        let mut bytes = vec![0; length as usize];
-        self.output.read_exact(&mut bytes).map_err(|error| {
-            WorkerError::Execution(format!("worker response read failed: {error}"))
-        })?;
-        if bytes[0] != 2 {
-            return Err(WorkerError::Execution(
-                "worker response kind is invalid".into(),
-            ));
-        }
-        serde_json::from_slice(&bytes[1..])
-            .map_err(|error| WorkerError::Execution(format!("worker response is invalid: {error}")))
+        let mut output = self
+            .output
+            .take()
+            .ok_or_else(|| WorkerError::Execution("worker output is unavailable".into()))?;
+        let result = receive_from(&mut output);
+        self.output = Some(output);
+        result
     }
 
+    fn receive_timeout(&mut self, timeout: Duration) -> Result<WorkerEvent, WorkerError> {
+        let mut output = self
+            .output
+            .take()
+            .ok_or_else(|| WorkerError::Execution("worker output is unavailable".into()))?;
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let reader = std::thread::spawn(move || {
+            let result = receive_from(&mut output);
+            let _ = sender.send((result, output));
+        });
+        match receiver.recv_timeout(timeout) {
+            Ok((result, output)) => {
+                self.output = Some(output);
+                let _ = reader.join();
+                result
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                let _ = reader.join();
+                self.output = None;
+                Err(WorkerError::Timeout)
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = reader.join();
+                self.output = None;
+                Err(WorkerError::Execution(
+                    "worker response reader stopped".into(),
+                ))
+            }
+        }
+    }
+
+    fn execute(
+        &mut self,
+        request: Request,
+        route: RouteSpec,
+        params: HashMap<String, String>,
+        timeout: Duration,
+    ) -> Result<Response, WorkerError> {
+        let request_id = request.request_id.clone();
+        self.send(WorkerCommand::Execute {
+            request: Box::new(request),
+            route,
+            params,
+        })?;
+        match self.receive_timeout(timeout)? {
+            WorkerEvent::Result(response) => Ok(response),
+            WorkerEvent::Error { message, .. } if message == "request execution timed out" => {
+                Err(WorkerError::Timeout)
+            }
+            WorkerEvent::Error { message, .. } => Err(WorkerError::Execution(message)),
+            event => Err(WorkerError::Execution(format!(
+                "worker did not return result for {request_id}: {event:?}"
+            ))),
+        }
+    }
+
+    fn is_alive(&mut self) -> bool {
+        self.child.try_wait().ok().flatten().is_none()
+    }
+}
+
+fn receive_from(output: &mut BufReader<ChildStdout>) -> Result<WorkerEvent, WorkerError> {
+    let mut length_bytes = [0; 4];
+    output
+        .read_exact(&mut length_bytes)
+        .map_err(|error| WorkerError::Execution(format!("worker response read failed: {error}")))?;
+    let length = u32::from_be_bytes(length_bytes);
+    if !(1..=MAX_FRAME_BYTES).contains(&length) {
+        return Err(WorkerError::Execution(
+            "worker response length is invalid".into(),
+        ));
+    }
+    let mut bytes = vec![0; length as usize];
+    output
+        .read_exact(&mut bytes)
+        .map_err(|error| WorkerError::Execution(format!("worker response read failed: {error}")))?;
+    if bytes[0] != 2 {
+        return Err(WorkerError::Execution(
+            "worker response kind is invalid".into(),
+        ));
+    }
+    serde_json::from_slice(&bytes[1..])
+        .map_err(|error| WorkerError::Execution(format!("worker response is invalid: {error}")))
+}
+
+impl ProcessWorker {
     fn load_generation(
         &mut self,
         generation: GenerationId,
@@ -129,31 +206,6 @@ impl ProcessWorker {
             ))),
         }
     }
-
-    fn execute(
-        &mut self,
-        request: Request,
-        route: RouteSpec,
-        params: HashMap<String, String>,
-    ) -> Result<Response, WorkerError> {
-        let request_id = request.request_id.clone();
-        self.send(WorkerCommand::Execute {
-            request: Box::new(request),
-            route,
-            params,
-        })?;
-        match self.receive()? {
-            WorkerEvent::Result(response) => Ok(response),
-            WorkerEvent::Error { message, .. } => Err(WorkerError::Execution(message)),
-            event => Err(WorkerError::Execution(format!(
-                "worker did not return result for {request_id}: {event:?}"
-            ))),
-        }
-    }
-
-    fn is_alive(&mut self) -> bool {
-        self.child.try_wait().ok().flatten().is_none()
-    }
 }
 
 impl Drop for ProcessWorker {
@@ -167,12 +219,21 @@ impl Drop for ProcessWorker {
 pub struct ProcessWorkerManager {
     executable: PathBuf,
     workers: Vec<Mutex<ProcessWorker>>,
-    next_worker: AtomicUsize,
+    loads: Vec<AtomicUsize>,
     generation: Mutex<Option<(GenerationId, String, String)>>,
+    request_timeout: Duration,
 }
 
 impl ProcessWorkerManager {
     pub fn new(executable: impl AsRef<Path>, count: usize) -> Result<Self, WorkerError> {
+        Self::with_timeout(executable, count, DEFAULT_REQUEST_TIMEOUT)
+    }
+
+    pub fn with_timeout(
+        executable: impl AsRef<Path>,
+        count: usize,
+        request_timeout: Duration,
+    ) -> Result<Self, WorkerError> {
         if count == 0 {
             return Err(WorkerError::Execution(
                 "worker count must be greater than zero".into(),
@@ -186,8 +247,9 @@ impl ProcessWorkerManager {
         Ok(Self {
             executable,
             workers,
-            next_worker: AtomicUsize::new(0),
+            loads: (0..count).map(|_| AtomicUsize::new(0)).collect(),
             generation: Mutex::new(None),
+            request_timeout,
         })
     }
 
@@ -217,28 +279,49 @@ impl ProcessWorkerManager {
         route: &RouteSpec,
         params: HashMap<String, String>,
     ) -> Result<Response, WorkerError> {
-        let worker_index = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.workers.len();
+        let worker_index = self
+            .loads
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, load)| load.load(Ordering::Acquire))
+            .map(|(index, _)| index)
+            .expect("worker list is non-empty");
+        let _load = LoadGuard(&self.loads[worker_index]);
         let mut worker = self.workers[worker_index]
             .lock()
             .map_err(|_| WorkerError::Execution("worker lock poisoned".into()))?;
-        match worker.execute(request.clone(), route.clone(), params.clone()) {
+        if !worker.is_alive() {
+            self.replace_worker(&mut worker)?;
+        }
+        match worker.execute(request, route.clone(), params, self.request_timeout) {
             Ok(response) => Ok(response),
             Err(error) if !worker.is_alive() => {
-                let generation = self
-                    .generation
-                    .lock()
-                    .map_err(|_| WorkerError::Execution("generation lock poisoned".into()))?
-                    .clone();
-                *worker = ProcessWorker::spawn(&self.executable)?;
-                if let Some((id, bundle, filename)) = generation {
-                    worker.load_generation(id, &bundle, &filename)?;
-                    worker.execute(request, route.clone(), params)
-                } else {
-                    Err(error)
-                }
+                let _ = self.replace_worker(&mut worker);
+                Err(error)
             }
             Err(error) => Err(error),
         }
+    }
+
+    fn replace_worker(&self, worker: &mut ProcessWorker) -> Result<(), WorkerError> {
+        let generation = self
+            .generation
+            .lock()
+            .map_err(|_| WorkerError::Execution("generation lock poisoned".into()))?
+            .clone();
+        *worker = ProcessWorker::spawn(&self.executable)?;
+        if let Some((id, bundle, filename)) = generation {
+            worker.load_generation(id, &bundle, &filename)?;
+        }
+        Ok(())
+    }
+}
+
+struct LoadGuard<'a>(&'a AtomicUsize);
+
+impl Drop for LoadGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Release);
     }
 }
 
