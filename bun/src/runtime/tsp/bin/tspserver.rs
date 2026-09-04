@@ -30,17 +30,17 @@ use bun_runtime_tsp::host;
 use bun_runtime_tsp::jsc_bridge::BunRuntime;
 use bun_runtime_tsp::module_graph::ModuleGraph;
 use bun_runtime_tsp::router::{HttpMethod, RouteTable};
-use bun_runtime_tsp::services::{load_config_services, load_runtime_config, RuntimeConfig};
 use bun_runtime_tsp::services::SESSION_STORE_CAP_DEFAULT;
 use bun_runtime_tsp::services::ServiceRegistry;
+use bun_runtime_tsp::services::{RuntimeConfig, load_config_services, load_runtime_config};
 use bun_runtime_tsp::session_backend::{MemoryBackend, RedisBackend, SessionBackend};
 use bun_runtime_tsp::typings;
 use bun_runtime_tsp::watcher::{self, WatchConfig};
+use bun_runtime_tsp::worker::application::{Application, ApplicationRegistry, WorkerGroup};
+use bun_runtime_tsp::worker::lifecycle::RecyclePolicy;
 use bun_runtime_tsp::worker::manager::ImageLimits;
 use bun_runtime_tsp::worker::pool::WorkerPool;
-use bun_runtime_tsp::worker::lifecycle::RecyclePolicy;
 use bun_runtime_tsp::worker::sandbox::ResourceLimits;
-use bun_runtime_tsp::worker::application::{Application, ApplicationRegistry, WorkerGroup};
 
 /// Version string baked into the binary by `build.rs`.
 /// Release builds derive it from the current `v*` Git tag;
@@ -181,22 +181,24 @@ fn serve_main() -> ExitCode {
     let image_limits = ImageLimits {
         max_input_bytes: env_u64("TSP_IMAGE_MAX_INPUT_BYTES")
             .unwrap_or(file_config.image_max_input_bytes),
-        max_pixels: env_u64("TSP_IMAGE_MAX_PIXELS")
-            .unwrap_or(file_config.image_max_pixels),
+        max_pixels: env_u64("TSP_IMAGE_MAX_PIXELS").unwrap_or(file_config.image_max_pixels),
         max_concurrent_tasks: env_usize("TSP_IMAGE_MAX_CONCURRENT_TASKS")
             .unwrap_or(file_config.image_max_concurrent_tasks)
             .max(1),
     };
     eprintln!(
         "TSP: image limits = input {} bytes, {} pixels, {} concurrent task(s) per worker",
-        image_limits.max_input_bytes,
-        image_limits.max_pixels,
-        image_limits.max_concurrent_tasks
+        image_limits.max_input_bytes, image_limits.max_pixels, image_limits.max_concurrent_tasks
     );
-    let pool = WorkerPool::new(worker_binary.clone(), socket_dir, worker_count, max_in_flight)
-        .with_recycle_policy(recycle_policy)
-        .with_resource_limits(resource_limits)
-        .with_image_limits(image_limits);
+    let pool = WorkerPool::new(
+        worker_binary.clone(),
+        socket_dir,
+        worker_count,
+        max_in_flight,
+    )
+    .with_recycle_policy(recycle_policy)
+    .with_resource_limits(resource_limits)
+    .with_image_limits(image_limits);
     let pool = Arc::new(pool);
     let application_name = std::env::var("TSP_APPLICATION_NAME")
         .unwrap_or_else(|_| file_config.application_name.clone());
@@ -208,10 +210,7 @@ fn serve_main() -> ExitCode {
         eprintln!("TSP: embedded worker failed to start: {error}");
         return ExitCode::from(2);
     }
-    eprintln!(
-        "TSP: embedded worker enabled ({})",
-        worker_binary.display()
-    );
+    eprintln!("TSP: embedded worker enabled ({})", worker_binary.display());
     let bun: &'static BunRuntime = leak_bun(BunRuntime {
         bin: worker_binary,
         embedded_pool: Some(pool),
@@ -358,7 +357,11 @@ fn serve_main() -> ExitCode {
                     .expect("services write lock from config reload");
                 guard.apply_config_snapshot(fresh);
             }
-            Ok(format!("applied {} service(s): {}", names.len(), names.join(", ")))
+            Ok(format!(
+                "applied {} service(s): {}",
+                names.len(),
+                names.join(", ")
+            ))
         })
     };
     let watch_config = WatchConfig {
@@ -392,9 +395,10 @@ fn serve_main() -> ExitCode {
     let public_prefix = file_config.public_prefix.clone();
     eprintln!(
         "TSP: public directory = {} (prefix = {})",
-        public_root
-            .as_deref()
-            .map_or_else(|| "(disabled)".to_string(), |path| path.display().to_string()),
+        public_root.as_deref().map_or_else(
+            || "(disabled)".to_string(),
+            |path| path.display().to_string()
+        ),
         public_prefix.as_deref().unwrap_or("/")
     );
     let request_settings = host::RequestSettings {
@@ -584,8 +588,7 @@ fn run_routes() -> ExitCode {
                         println!(",");
                     }
                     first = false;
-                    let methods: Vec<&str> =
-                        page.methods.iter().map(|m| m.as_str()).collect();
+                    let methods: Vec<&str> = page.methods.iter().map(|m| m.as_str()).collect();
                     print!(
                         "  {{\"path\":{},\"source\":{},\"methods\":[{}]}}",
                         json_string(&route.path),
@@ -622,9 +625,15 @@ fn run_routes() -> ExitCode {
                     "{}\t{}\t{}",
                     route.path,
                     route.source.display(),
-                    page.methods.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(",")
+                    page.methods
+                        .iter()
+                        .map(|m| m.as_str())
+                        .collect::<Vec<_>>()
+                        .join(",")
                 ),
-                Err(error) => println!("{}\t{}\tERROR: {error}", route.path, route.source.display()),
+                Err(error) => {
+                    println!("{}\t{}\tERROR: {error}", route.path, route.source.display())
+                }
             }
         }
     }
@@ -733,10 +742,8 @@ fn run_check() -> ExitCode {
                     // compare (the field is a `Vec`, not
                     // a `HashSet`, so we collect twice).
                     use std::collections::HashSet;
-                    let actual: HashSet<HttpMethod> =
-                        page.methods.iter().copied().collect();
-                    let want: HashSet<HttpMethod> =
-                        declared.iter().copied().collect();
+                    let actual: HashSet<HttpMethod> = page.methods.iter().copied().collect();
+                    let want: HashSet<HttpMethod> = declared.iter().copied().collect();
                     if actual != want {
                         failed = true;
                         eprintln!(
@@ -806,7 +813,11 @@ fn run_check() -> ExitCode {
                 println!(
                     "OK {} [{}]",
                     route.path,
-                    page.methods.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(",")
+                    page.methods
+                        .iter()
+                        .map(|m| m.as_str())
+                        .collect::<Vec<_>>()
+                        .join(",")
                 );
             }
             Err(error) => {
@@ -831,7 +842,11 @@ fn run_check() -> ExitCode {
             }
         }
     }
-    if failed { ExitCode::from(1) } else { ExitCode::SUCCESS }
+    if failed {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 /// Phase 11 follow-up: real `tsc --noEmit` type-check pass
@@ -941,34 +956,33 @@ fn run_tsc_check(routes_root: &std::path::Path, no_color: bool) -> Result<(), St
         for name in &["tsp-server.d.ts", "tsp-html.d.ts", "tsp-runtime.d.ts"] {
             let src = tsp_types_src.join(name);
             let dst = temp_types.join(name);
-            std::fs::copy(&src, &dst)
-                .map_err(|e| format!("copy {src:?} -> {dst:?}: {e}"))?;
+            std::fs::copy(&src, &dst).map_err(|e| format!("copy {src:?} -> {dst:?}: {e}"))?;
         }
 
         // (4) Write the tsconfig.
         let tsconfig = temp.join("tsconfig.json");
-        std::fs::write(&tsconfig, TSC_TSCONFIG_JSON)
-            .map_err(|e| format!("write tsconfig: {e}"))?;
+        std::fs::write(&tsconfig, TSC_TSCONFIG_JSON).map_err(|e| format!("write tsconfig: {e}"))?;
 
         // (5) Locate tsc. CWD-relative node_modules wins
         // over PATH (a project pinned to tsc 5.9 should
         // not be overridden by a system tsc 4.x).
-        let tsc_bin = locate_tsc_binary().ok_or_else(|| {
+        let tsc = locate_tsc_invocation().ok_or_else(|| {
             "cannot locate tsc binary: looked for \
              ./node_modules/.bin/tsc, ./node_modules/.bin/tsc.cmd, and \
              `tsc` on PATH. Install TypeScript (`bun add -d typescript`) \
              to enable this check."
                 .to_string()
         })?;
-        println!("tsp check --tsc: using {}", tsc_bin.display());
+        println!("tsp check --tsc: using {}", tsc.display);
 
         // (6) Run tsc. We use the working directory of the
         // user (so the user's node_modules / package.json
         // are visible to tsc for any third-party imports
         // the route makes), and pass --project pointing at
         // our temp tsconfig.
-        let mut cmd = Command::new(&tsc_bin);
-        cmd.arg("--noEmit")
+        let mut cmd = Command::new(&tsc.program);
+        cmd.args(&tsc.prefix_args)
+            .arg("--noEmit")
             .arg("--project")
             .arg(&tsconfig);
         if no_color {
@@ -984,7 +998,7 @@ fn run_tsc_check(routes_root: &std::path::Path, no_color: bool) -> Result<(), St
         let output = cmd
             .current_dir(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
             .output()
-            .map_err(|e| format!("invoke {}: {e}", tsc_bin.display()))?;
+            .map_err(|e| format!("invoke {}: {e}", tsc.display))?;
         // tsc prints absolute paths in its diagnostics
         // (it sees the temp dir, not the routes root). For
         // the user, those paths are noise -- their source
@@ -1035,6 +1049,8 @@ fn rewrite_tsc_paths(text: &str, temp_routes: &std::path::Path, routes_root: &st
     let temp_fwd = temp_back.replace('\\', "/");
     let routes_back = routes_root.to_string_lossy().to_string();
     let routes_fwd = routes_back.replace('\\', "/");
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let normalized_temp = lexical_absolute(temp_routes, &cwd);
 
     for line in text.lines() {
         // Strip ANSI escape sequences (CSI SGR + others)
@@ -1088,7 +1104,16 @@ fn rewrite_tsc_paths(text: &str, temp_routes: &std::path::Path, routes_root: &st
             continue;
         }
         // `prefix` is the path. Try to rewrite it.
-        let rewritten_path = if prefix.starts_with(&temp_back) {
+        let relative_rewrite = {
+            let diagnostic_path = lexical_absolute(std::path::Path::new(prefix), &cwd);
+            diagnostic_path
+                .strip_prefix(&normalized_temp)
+                .ok()
+                .map(|relative| routes_root.join(relative).to_string_lossy().to_string())
+        };
+        let rewritten_path = if let Some(rewritten) = relative_rewrite {
+            rewritten
+        } else if prefix.starts_with(&temp_back) {
             let rel = prefix.strip_prefix(&temp_back).unwrap();
             let rel = rel.trim_start_matches('\\').trim_start_matches('/');
             let mut new_path = std::path::PathBuf::from(&routes_back);
@@ -1116,6 +1141,33 @@ fn rewrite_tsc_paths(text: &str, temp_routes: &std::path::Path, routes_root: &st
         let suffix = &stripped[path_end..];
         println!("{}{}", rewritten_path, suffix);
     }
+}
+
+/// Resolve a path without touching the filesystem. TypeScript may print a
+/// temp source path relative to the caller's working directory, while the
+/// temp root supplied by the checker is absolute. A lexical normalization is
+/// sufficient here and avoids allocator-sensitive canonicalization on Linux.
+fn lexical_absolute(path: &std::path::Path, cwd: &std::path::Path) -> PathBuf {
+    use std::path::Component;
+
+    let source = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in source.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
 }
 
 /// Strip ANSI CSI escape sequences from a string. Handles
@@ -1202,7 +1254,13 @@ fn copy_routes_recursive(
 ///   1. `./node_modules/.bin/tsc.cmd` (Windows)
 ///   2. `./node_modules/.bin/tsc`     (POSIX)
 ///   3. `tsc` on PATH
-fn locate_tsc_binary() -> Option<PathBuf> {
+struct TscInvocation {
+    program: PathBuf,
+    prefix_args: Vec<PathBuf>,
+    display: String,
+}
+
+fn locate_tsc_invocation() -> Option<TscInvocation> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut roots = vec![cwd.clone()];
     if cwd.join("bun").is_dir() {
@@ -1217,17 +1275,44 @@ fn locate_tsc_binary() -> Option<PathBuf> {
         let bin_dir = root.join("node_modules").join(".bin");
         let candidate_cmd = bin_dir.join("tsc.cmd");
         if candidate_cmd.is_file() {
-            return Some(candidate_cmd);
+            return Some(TscInvocation {
+                display: candidate_cmd.display().to_string(),
+                program: candidate_cmd,
+                prefix_args: Vec::new(),
+            });
         }
         let candidate = bin_dir.join("tsc");
         if candidate.is_file() {
-            return Some(candidate);
+            return Some(TscInvocation {
+                display: candidate.display().to_string(),
+                program: candidate,
+                prefix_args: Vec::new(),
+            });
+        }
+        // Bun's Windows install does not always materialize npm's `.bin`
+        // command shims. Invoke TypeScript's JavaScript entry point through
+        // the already-installed Bun executable in that case.
+        let script = root
+            .join("node_modules")
+            .join("typescript")
+            .join("bin")
+            .join("tsc");
+        if script.is_file() {
+            return Some(TscInvocation {
+                display: format!("bun {}", script.display()),
+                program: PathBuf::from("bun"),
+                prefix_args: vec![script],
+            });
         }
     }
     // Fall back to PATH: `Command::new("tsc")` resolves
     // through the standard PATH search on both Windows
     // and POSIX.
-    Some(PathBuf::from("tsc"))
+    Some(TscInvocation {
+        program: PathBuf::from("tsc"),
+        prefix_args: Vec::new(),
+        display: "tsc".to_string(),
+    })
 }
 
 /// The tsconfig the tsc check writes. Conservative: it
@@ -1313,8 +1398,7 @@ fn run_graph() -> ExitCode {
                 .iter()
                 .map(|id| id.as_path().to_string_lossy().into_owned())
                 .collect();
-            let imports_json: Vec<String> =
-                imports.iter().map(|i| json_string(i)).collect();
+            let imports_json: Vec<String> = imports.iter().map(|i| json_string(i)).collect();
             let prefix = if idx == 0 { "  " } else { ",\n  " };
             print!(
                 "{prefix}{{\"path\":{},\"imports\":[{}]}}",
@@ -1409,10 +1493,7 @@ fn run_typings() -> ExitCode {
     for (name, content) in &files {
         let target = out_path.join(name);
         if let Err(error) = std::fs::write(&target, content) {
-            eprintln!(
-                "tsp typings: cannot write {}: {error}",
-                target.display()
-            );
+            eprintln!("tsp typings: cannot write {}: {error}", target.display());
             return ExitCode::from(2);
         }
         println!("wrote {}", target.display());

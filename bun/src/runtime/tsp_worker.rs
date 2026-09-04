@@ -44,6 +44,13 @@ pub fn requested() -> bool {
 fn startup_trace(stage: &str) {
     if std::env::var_os("TSP_WORKER_STARTUP_TRACE").is_some() {
         eprintln!("TSP worker startup: {stage}");
+        if let Some(path) = std::env::var_os("TSP_WORKER_STARTUP_TRACE_FILE") {
+            use std::fs::OpenOptions;
+
+            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+                let _ = writeln!(file, "{} {stage}", std::process::id());
+            }
+        }
     }
 }
 

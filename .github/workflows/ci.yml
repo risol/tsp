@@ -256,8 +256,16 @@ jobs:
         env:
           TSP_REQUIRE_E2E: '1'
           TSP_WORKER_STARTUP_TRACE: '1'
+          TSP_WORKER_STARTUP_TRACE_FILE: ${{ runner.temp }}/tsp-worker-startup.log
           TSP_TEST_MASTER: ${{ github.workspace }}/dist/tspserver/tspserver.exe
         run: cargo test --manifest-path bun/Cargo.toml -p bun_runtime_tsp --test start_order --no-fail-fast --locked -- --test-threads=1
+
+      - name: Show worker startup trace after failure
+        if: failure()
+        shell: pwsh
+        run: |
+          $trace = '${{ runner.temp }}/tsp-worker-startup.log'
+          if (Test-Path -LiteralPath $trace) { Get-Content -LiteralPath $trace }
 
       - name: Run smoke test (Windows)
         shell: pwsh
