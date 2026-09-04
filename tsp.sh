@@ -100,7 +100,9 @@ case "${1:-help}" in
   start|start:native|dev)
     shift
     require_sdk
-    if [[ ! -f "$(resolve_native_cli)" || ! -s "$BUILD_DIR/manifest.json" ]]; then build_native; fi
+    if [[ ! -s "$BUILD_DIR/manifest.json" ]] || ! resolve_native_cli >/dev/null 2>&1; then
+      build_native
+    fi
     run_native "$@"
     ;;
   test|test:native)
